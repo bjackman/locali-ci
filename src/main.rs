@@ -57,10 +57,12 @@ fn do_main() -> Result<(), GitError> {
     let _head = repo.head().map_err(|e| GitError{
         kind: ErrorKind::GettingHead, repo_path: args.repo_path.to_string(), source: e,
     })?;
-    let obj = repo.revparse_single(&args.base).map_err(|e| GitError{
+    let (obj, reference) = repo.revparse_ext(&args.base).map_err(|e| GitError{
         kind: ErrorKind::ParsingBase(args.base), repo_path: args.repo_path.to_string(), source: e,
     })?;
-    println!("base: {:?}", obj.id());
+    println!("base: {:?}, {:?}", obj, reference.map_or("no ref".to_string(), |r| {
+            r.kind().map_or("no kind".to_string(), |kind| kind.to_string())
+    }));
     return Ok(());
 }
 
