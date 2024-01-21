@@ -28,7 +28,11 @@ fn do_main() -> Result<(), GitError> {
     let args = Args::parse();
 
     // TODO: Is there a nice way to make these error constructions more concise?
-    // Possibly by redesigning the error types?
+    // Possibly by redesigning the error types? I tried writing a local lambda
+    // that captures the repo_path and takes the desc as an argument, and
+    // produces another lambda that takes the source as an argument. But I ran
+    // into troubles with lifetimes, I think because the outer lambda took
+    // ownership of its args.
     let repo = git2::Repository::open(&args.repo_path).map_err(|e| GitError{
         desc: "opening repo", repo_path: args.repo_path.to_string(), source: e,
     })?;
