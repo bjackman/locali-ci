@@ -5,15 +5,30 @@ use git2;
 use std::fmt;
 
 #[derive(Debug)]
+enum ErrorKind {
+    OpeningRepo,
+    GettingHead, // https://www.youtube.com/watch?v=aS8O-F0ICxw
+}
+
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", match self {
+            ErrorKind::OpeningRepo => "opening repo",
+            ErrorKind::GettingHead => "getting head",
+        })
+    }
+}
+
+#[derive(Debug)]
 struct GitError {
-    desc: &'static str,
+    kind: ErrorKind,
     repo_path: String,
     source: git2::Error,
 }
 
 impl fmt::Display for GitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} for repo {}: {}", self.desc, self.repo_path, self.source)
+        write!(f, "{} for repo {}: {}", self.kind, self.repo_path, self.source)
     }
 }
 
@@ -34,10 +49,10 @@ fn do_main() -> Result<(), GitError> {
     // into troubles with lifetimes, I think because the outer lambda took
     // ownership of its args.
     let repo = git2::Repository::open(&args.repo_path).map_err(|e| GitError{
-        desc: "opening repo", repo_path: args.repo_path.to_string(), source: e,
+        kind: ErrorKind::OpeningRepo, repo_path: args.repo_path.to_string(), source: e,
     })?;
     let _head = repo.head().map_err(|e| GitError{
-        desc: "getting HEAD", repo_path: args.repo_path.to_string(), source: e,
+        kind: ErrorKind::GettingHead, repo_path: args.repo_path.to_string(), source: e,
     })?;
     return Ok(());
 }
