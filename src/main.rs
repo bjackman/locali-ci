@@ -1,3 +1,6 @@
+// TODO: I don't want to use clap::Parser, I only want to use Clap. But if I
+// don't bring the trait into scope then I can't call .parse on my Args type.
+use clap::Parser;
 use git2;
 use std::fmt;
 
@@ -29,7 +32,13 @@ impl fmt::Display for GitError {
     }
 }
 
+#[derive(Parser)]
+struct Args {
+}
+
 fn do_main() -> Result<(), GitError> {
+    let _args = Args::parse();
+
     let path = "/home/brendan/src/local-ci";
     // TODO: Is there a nice way to make these error constructions more concise?
     // Possibly by redesigning the error types?
