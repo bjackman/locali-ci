@@ -8,14 +8,16 @@ use std::fmt;
 enum ErrorKind {
     OpeningRepo,
     GettingHead, // https://www.youtube.com/watch?v=aS8O-F0ICxw
+    ParsingBase(String),
 }
 
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            ErrorKind::OpeningRepo => "opening repo",
-            ErrorKind::GettingHead => "getting head",
-        })
+        match self {
+            ErrorKind::OpeningRepo => write!(f, "opening repo"),
+            ErrorKind::GettingHead => write!(f, "getting head"),
+            ErrorKind::ParsingBase(revspec) => write!(f, "parsing base revision {:?}", revspec),
+        }
     }
 }
 
@@ -37,6 +39,7 @@ impl fmt::Display for GitError {
 struct Args {
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo_path: String,
+    base: String,
 }
 
 fn do_main() -> Result<(), GitError> {
@@ -54,6 +57,10 @@ fn do_main() -> Result<(), GitError> {
     let _head = repo.head().map_err(|e| GitError{
         kind: ErrorKind::GettingHead, repo_path: args.repo_path.to_string(), source: e,
     })?;
+    let obj = repo.revparse_single(&args.base).map_err(|e| GitError{
+        kind: ErrorKind::ParsingBase(args.base), repo_path: args.repo_path.to_string(), source: e,
+    })?;
+    println!("base: {:?}", obj.id());
     return Ok(());
 }
 
