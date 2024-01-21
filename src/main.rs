@@ -5,30 +5,15 @@ use git2;
 use std::fmt;
 
 #[derive(Debug)]
-enum ErrorKind {
-    OpeningRepo,
-    GettingHead, // https://www.youtube.com/watch?v=aS8O-F0ICxw
-}
-
-impl fmt::Display for ErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            ErrorKind::OpeningRepo => "opening repo",
-            ErrorKind::GettingHead => "getting head",
-        })
-    }
-}
-
-#[derive(Debug)]
 struct GitError {
-    kind: ErrorKind,
+    desc: &'static str,
     repo_path: String,
     source: git2::Error,
 }
 
 impl fmt::Display for GitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} for repo {}: {}", self.kind, self.repo_path, self.source)
+        write!(f, "{} for repo {}: {}", self.desc, self.repo_path, self.source)
     }
 }
 
@@ -45,10 +30,10 @@ fn do_main() -> Result<(), GitError> {
     // TODO: Is there a nice way to make these error constructions more concise?
     // Possibly by redesigning the error types?
     let repo = git2::Repository::open(&args.repo_path).map_err(|e| GitError{
-        kind: ErrorKind::OpeningRepo, repo_path: args.repo_path.to_string(), source: e,
+        desc: "opening repo", repo_path: args.repo_path.to_string(), source: e,
     })?;
     let _head = repo.head().map_err(|e| GitError{
-        kind: ErrorKind::GettingHead, repo_path: args.repo_path.to_string(), source: e,
+        desc: "getting HEAD", repo_path: args.repo_path.to_string(), source: e,
     })?;
     return Ok(());
 }
