@@ -33,20 +33,22 @@ impl fmt::Display for GitError {
 }
 
 #[derive(Parser)]
+#[command(author, version, about, long_about = None)]
 struct Args {
+    #[arg(short, long, default_value_t = {".".to_string()})]
+    repo_path: String,
 }
 
 fn do_main() -> Result<(), GitError> {
-    let _args = Args::parse();
+    let args = Args::parse();
 
-    let path = "/home/brendan/src/local-ci";
     // TODO: Is there a nice way to make these error constructions more concise?
     // Possibly by redesigning the error types?
-    let repo = git2::Repository::open(path).map_err(|e| GitError{
-        kind: ErrorKind::OpeningRepo, repo_path: path.to_string(), source: e,
+    let repo = git2::Repository::open(&args.repo_path).map_err(|e| GitError{
+        kind: ErrorKind::OpeningRepo, repo_path: args.repo_path.to_string(), source: e,
     })?;
     let _head = repo.head().map_err(|e| GitError{
-        kind: ErrorKind::GettingHead, repo_path: path.to_string(), source: e,
+        kind: ErrorKind::GettingHead, repo_path: args.repo_path.to_string(), source: e,
     })?;
     return Ok(());
 }
