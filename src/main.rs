@@ -30,7 +30,11 @@ struct GitError {
 
 impl fmt::Display for GitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} for repo {}: {}", self.kind, self.repo_path, self.source)
+        write!(
+            f,
+            "{} for repo {}: {}",
+            self.kind, self.repo_path, self.source
+        )
     }
 }
 
@@ -45,19 +49,29 @@ struct Args {
 fn do_main() -> Result<(), GitError> {
     let args = Args::parse();
 
-    let make_err = |kind| |err| GitError {
-        kind, repo_path: args.repo_path.to_string(), source: err,
+    let make_err = |kind| {
+        |err| GitError {
+            kind,
+            repo_path: args.repo_path.to_string(),
+            source: err,
+        }
     };
 
     let _ = git::parse_range("foo").unwrap();
 
     let repo = git2::Repository::open(&args.repo_path).map_err(make_err(ErrorKind::OpeningRepo))?;
     let _head = repo.head().map_err(make_err(ErrorKind::GettingHead))?;
-    let (obj, reference) = repo.revparse_ext(&args.base)
+    let (obj, reference) = repo
+        .revparse_ext(&args.base)
         .map_err(make_err(ErrorKind::ParsingBase(args.base)))?;
-    println!("base: {:?}, {:?}", obj, reference.map_or("no ref".to_string(), |r| {
-            r.kind().map_or("no kind".to_string(), |kind| kind.to_string())
-    }));
+    println!(
+        "base: {:?}, {:?}",
+        obj,
+        reference.map_or("no ref".to_string(), |r| {
+            r.kind()
+                .map_or("no kind".to_string(), |kind| kind.to_string())
+        })
+    );
     return Ok(());
 }
 
