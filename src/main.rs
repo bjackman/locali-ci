@@ -58,9 +58,6 @@ fn do_main() -> Result<(), GitError> {
 }
 
 fn main() {
-    // TODO: I found if I just return a Result from main, it doesn't use Display
-    // it just debug-prints the struct. So here I"m just manually printing the
-    // Display representation. Is there a smarter way to do this?
     match do_main() {
         Ok(()) => println!("OK!"),
         Err(e) => println!("{}", e),
