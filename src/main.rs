@@ -2,6 +2,8 @@ use clap::Parser as _;
 use git2;
 use std::fmt;
 
+mod git;
+
 #[derive(Debug)]
 enum ErrorKind {
     OpeningRepo,
@@ -46,6 +48,8 @@ fn do_main() -> Result<(), GitError> {
     let make_err = |kind| |err| GitError {
         kind, repo_path: args.repo_path.to_string(), source: err,
     };
+
+    let _ = git::parse_range("foo").unwrap();
 
     let repo = git2::Repository::open(&args.repo_path).map_err(make_err(ErrorKind::OpeningRepo))?;
     let _head = repo.head().map_err(make_err(ErrorKind::GettingHead))?;
