@@ -1,6 +1,4 @@
-// TODO: I don't want to use clap::Parser, I only want to use Clap. But if I
-// don't bring the trait into scope then I can't call .parse on my Args type.
-use clap::Parser;
+use clap::Parser as _;
 use git2;
 use std::fmt;
 
@@ -34,7 +32,7 @@ impl fmt::Display for GitError {
     }
 }
 
-#[derive(Parser)]
+#[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long, default_value_t = {".".to_string()})]
