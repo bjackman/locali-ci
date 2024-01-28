@@ -43,6 +43,9 @@ impl fmt::Display for GitError {
 struct Args {
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo_path: String,
+    /// Base of range to test. Will test commits between this (exclusive) and
+    /// HEAD (inclusive). Whenever HEAD changes, this string will be re-evaluated
+    /// to find the base of the range.
     base: String,
 }
 
