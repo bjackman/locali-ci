@@ -3,7 +3,6 @@ use clap::Parser as _;
 use git2;
 use std::{process, str};
 
-mod git;
 
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
@@ -21,8 +20,6 @@ struct Args {
 
 fn do_main() -> anyhow::Result<()> {
     let args = Args::parse();
-
-    let _ = git::parse_range("foo").unwrap();
 
     let repo = git2::Repository::open(&args.repo_path).context("opening repo")?;
     // https://www.youtube.com/watch?v=aS8O-F0ICxw
