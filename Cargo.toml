@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 git2 = "0.18.1"
 clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0.79"
