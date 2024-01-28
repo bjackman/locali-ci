@@ -1,6 +1,6 @@
 use clap::Parser as _;
 use git2;
-use std::fmt;
+use std::{fmt, str};
 
 mod git;
 
@@ -60,7 +60,8 @@ fn do_main() -> Result<(), GitError> {
     let _ = git::parse_range("foo").unwrap();
 
     let repo = git2::Repository::open(&args.repo_path).map_err(make_err(ErrorKind::OpeningRepo))?;
-    let _head = repo.head().map_err(make_err(ErrorKind::GettingHead))?;
+    let head = repo.head().map_err(make_err(ErrorKind::GettingHead))?;
+    println!("head: {}", str::from_utf8(head.name_bytes()).unwrap());
     let (obj, reference) = repo
         .revparse_ext(&args.base)
         .map_err(make_err(ErrorKind::ParsingBase(args.base)))?;
