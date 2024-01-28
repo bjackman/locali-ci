@@ -49,7 +49,7 @@ impl<'a> Manager<'a> {
             let threads = (1..self.num_threads).map(|i| {
                 // TODO: Here I want to move i, but not self. This seems to be exactly what happens.
                 // But why?
-                scope.spawn(move || self.run_thread(i, self.chan_rx.clone()))
+                scope.spawn(move || self.run_thread(i))
             });
             for t in threads {
                 // Thread::join returns an error only when the thread panicked. This is a weird and
@@ -74,8 +74,8 @@ impl<'a> Manager<'a> {
         }
     }
 
-    fn run_thread(&self, thread_id: u32, chan: crossbeam_channel::Receiver<Task>) -> anyhow::Result<()> {
-        for task in chan.iter() {
+    fn run_thread(&self, thread_id: u32) -> anyhow::Result<()> {
+        for task in self.chan_rx.clone() {
             process::Command::new(self.program)
                 .args(self.args)
                 .current_dir(self.current_dir)
