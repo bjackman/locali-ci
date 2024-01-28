@@ -1,14 +1,19 @@
 use anyhow::Context;
 use clap::Parser as _;
 use git2;
-use std::{process, str};
+use std::str;
 
+mod test;
 
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo_path: String,
+    /// Maximum number of tests to run concurrently. Each concurrent thread
+    /// requires creating a worktree, which is why we don't default to $nproc.
+    #[arg(short, long, default_value_t = 8)]
+    num_threads: u32,
     /// Base of range to test. Will test commits between this (exclusive) and
     /// HEAD (inclusive). Whenever HEAD changes, this string will be re-evaluated
     /// to find the base of the range.
@@ -37,13 +42,16 @@ fn do_main() -> anyhow::Result<()> {
         })
     );
 
-    let result = process::Command::new(&args.cmd[0])
-        .args(&args.cmd[1..])
-        .current_dir(&args.repo_path)
-        .spawn()
-        .with_context(|| format!("execing test executable {:?}", args.cmd[0]))?
-        .wait();
-    println!("result: {:?}", result);
+    let m = test::Manager {
+        num_threads: args.num_threads,
+        current_dir: &args.repo_path,
+        program: &args.cmd[0],
+        // TODO: How can I avoid this map/as_ref dance? I want to declare test::Manager::args in a
+        // way where it doesn't care about the details of the string vec (like how
+        // std::Process::Command::args works), but I had borrow checker nightmares.
+        args: &args.cmd[1..].iter().map(AsRef::as_ref).collect(),
+    };
+    println!("{}", m.run()?);
     return Ok(());
 }
 
