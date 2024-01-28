@@ -1,4 +1,5 @@
 use anyhow::Context;
+use std::panic;
 use std::process;
 use std::thread;
 
@@ -13,16 +14,21 @@ impl<'a> Manager<'a> {
     // TODO: implement cancellation.
     pub fn run(&self) -> anyhow::Result<()> {
         thread::scope(|scope| {
-            for i in 0..self.num_threads {
+            let threads = (1..self.num_threads).map(|i| {
                 // TODO: Here I want to move i, but not self. This seems to be exactly what happens.
                 // But why?
-                scope.spawn(move || self.run_thread(i));
+                scope.spawn(move || self.run_thread(i))
+            });
+            for t in threads {
+                // Thread::join returns an error only when the thread panicked. This is a weird and
+                // special error, it doesn't implement error::Error. In this case the Ok variant of
+                // the result is an _inner_ Result which is the value actually returned by the
+                // thread function. I dunno what to do with that right now, probably we don't want
+                // it, but for the moment I assign it to _.
+                let _ = t.join().unwrap_or_else(|e| panic::resume_unwind(e));
             }
         });
 
-        // // Thread::join returns an error only when the thread panicked. This is a weird and special
-        // // error, it doesn't implement error::Error.
-        // t.join().unwrap_or_else(|e| { panic::resume_unwind(e) });
         Ok(())
     }
 
