@@ -32,7 +32,7 @@ impl<'a> Manager<'a> {
         Ok(())
     }
 
-    pub fn run_thread(&self, thread_id: u32) -> anyhow::Result<()> {
+    fn run_thread(&self, thread_id: u32) -> anyhow::Result<()> {
         process::Command::new(self.program)
             .args(self.args)
             .current_dir(self.current_dir)
