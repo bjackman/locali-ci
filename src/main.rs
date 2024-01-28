@@ -1,6 +1,6 @@
 use clap::Parser as _;
 use git2;
-use std::{fmt, str};
+use std::{error, fmt, process, str};
 
 mod git;
 
@@ -38,6 +38,12 @@ impl fmt::Display for GitError {
     }
 }
 
+impl error::Error for GitError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -47,9 +53,12 @@ struct Args {
     /// HEAD (inclusive). Whenever HEAD changes, this string will be re-evaluated
     /// to find the base of the range.
     base: String,
+    /// Command to test. Note this is _not_ run via the shell.
+    #[arg(trailing_var_arg = true, required = true)]
+    cmd: Vec<String>,
 }
 
-fn do_main() -> Result<(), GitError> {
+fn do_main() -> Result<(), Box<dyn error::Error>> {
     let args = Args::parse();
 
     let make_err = |kind| {
@@ -76,6 +85,13 @@ fn do_main() -> Result<(), GitError> {
                 .map_or("no kind".to_string(), |kind| kind.to_string())
         })
     );
+
+    let result = process::Command::new(&args.cmd[0])
+        .args(&args.cmd[1..])
+        .current_dir(&args.repo_path)
+        .spawn()?
+        .wait();
+    println!("result: {:?}", result);
     return Ok(());
 }
 
