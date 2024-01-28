@@ -51,7 +51,7 @@ fn do_main() -> anyhow::Result<()> {
         // std::Process::Command::args works), but I had borrow checker nightmares.
         args: &args.cmd[1..].iter().map(AsRef::as_ref).collect(),
     };
-    println!("{}", m.run()?);
+    m.run()?;
     return Ok(());
 }
 
