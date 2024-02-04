@@ -124,10 +124,6 @@ struct Worker {
 }
 
 impl Worker {
-    fn start(self) -> thread::JoinHandle<()> {
-        thread::spawn(move || self.run())
-    }
-
     fn run_task(&self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
         let mut child;
         {
@@ -157,20 +153,23 @@ impl Worker {
         }
         result
     }
-    fn run(&self) {
-        for task in self.chan_rx.clone() {
-            let result = self.run_task(&task);
-            // TODO: Clean up this mess
-            println!(
-                "worker {} rev {} -> {:#}",
-                self.id,
-                task.rev,
-                match result {
-                    Ok(None) => "canceled".to_string(),
-                    Ok(Some(exit_status)) => format!("{}", exit_status),
-                    Err(e) => format!("err: {:#}", e),
-                }
-            );
-        }
+
+    fn start(self) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            for task in self.chan_rx.clone() {
+                let result = self.run_task(&task);
+                // TODO: Clean up this mess
+                println!(
+                    "worker {} rev {} -> {:#}",
+                    self.id,
+                    task.rev,
+                    match result {
+                        Ok(None) => "canceled".to_string(),
+                        Ok(Some(exit_status)) => format!("{}", exit_status),
+                        Err(e) => format!("err: {:#}", e),
+                    }
+                );
+            }
+        })
     }
 }
