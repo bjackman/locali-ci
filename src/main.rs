@@ -2,7 +2,6 @@ use anyhow::Context;
 use clap::Parser as _;
 use git2;
 use std::str;
-use std::thread;
 
 mod test;
 
@@ -48,11 +47,9 @@ fn do_main() -> anyhow::Result<()> {
     // std::Process::Command::args works), but I had borrow checker nightmares.
     // TODO: Also probably easier to just move the args into the Manager.
     let cmd_args = &args.cmd[1..].iter().map(AsRef::as_ref).collect();
-    let m = test::Manager::new(args.num_threads, &args.repo_path, &args.cmd[0], cmd_args);
-    thread::scope(|scope| {
-        scope.spawn(|| m.run());
-        m.set_revisions(vec!["HEAD^^".to_string(), "HEAD^".to_string()]);
-    });
+    let mut m = test::Manager::new(args.num_threads, &args.cmd[0], cmd_args);
+    m.set_revisions(vec!["HEAD^^".to_string(), "HEAD^".to_string()]);
+    m.close();
     return Ok(());
 }
 

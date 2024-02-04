@@ -1,16 +1,18 @@
 use anyhow::Context;
 use crossbeam_channel;
-use std::panic;
+use std::collections;
 use std::process;
+use std::panic;
+use std::sync::Arc;
 use std::thread;
 
 pub struct Manager<'a> {
-    pub num_threads: u32,
-    pub current_dir: &'a str,
     pub program: &'a str,
     pub args: &'a Vec<&'a str>,
-    chan_tx: crossbeam_channel::Sender<Task>,
-    chan_rx: crossbeam_channel::Receiver<Task>,
+    join_handles: Vec<thread::JoinHandle<()>>,
+    chan_tx: crossbeam_channel::Sender<Arc<Task>>,
+    // TODO: This is a map from Task::rev -> Task. How can I avoid duplicating the key value?
+    queued_tasks: collections::HashMap<String, Arc<Task>>,
 }
 
 struct Task {
@@ -25,66 +27,80 @@ struct Task {
 
 impl<'a> Manager<'a> {
     // TODO: Too many args for a language without keyword args!
-    pub fn new(
-        num_threads: u32,
-        current_dir: &'a str,
-        program: &'a str,
-        args: &'a Vec<&'a str>,
-    ) -> Self {
-        let (chan_tx, chan_rx) = crossbeam_channel::unbounded::<Task>();
+    pub fn new(num_threads: u32, program: &'a str, args: &'a Vec<&'a str>) -> Self {
+        let (chan_tx, chan_rx) = crossbeam_channel::unbounded();
+
+        let join_handles = (1..num_threads)
+            .map(|i| {
+                let worker = Worker {
+                    id: i,
+                    program: program.to_string(),
+                    args: args.iter().map(|a| a.to_string()).collect(),
+                    current_dir: "foo".to_string(),
+                    chan_rx: chan_rx.clone(),
+                };
+
+                worker.start()
+            })
+            .collect();
 
         Self {
-            num_threads,
-            current_dir,
+            join_handles,
             program,
             args,
             chan_tx,
-            chan_rx,
+            queued_tasks: collections::HashMap::new(),
         }
     }
 
-    // TODO: implement cancellation.
-    pub fn run(&self) {
-        thread::scope(|scope| {
-            let threads = (1..self.num_threads).map(|i| {
-                // TODO: Here I want to move i, but not self. This seems to be exactly what happens.
-                // But why?
-                scope.spawn(move || self.run_thread(i))
-            });
-            for t in threads {
-                // Thread::join returns an error only when the thread panicked. This is a weird and
-                // special error, it doesn't implement error::Error. We just wanna crash the program
-                // if we enounter one of those.
-                //
-                // TODO: In this case the Ok variant of the result is an _inner_ Result which is the
-                // value actually returned by the thread function. I dunno what to do with that
-                // right now, probably we don't want it, but for the moment I assign it to _.
-                let _ = t.join().unwrap_or_else(|e| panic::resume_unwind(e));
-            }
-        });
+    // TODO: How can I mandate that this is called? I guess I could just do it in Drop but it feels
+    // like a lot of work for an implicit call. I do note that nothing mandates you join threads.
+    pub fn close(self) {
+        for jh in self.join_handles {
+            jh.join().unwrap_or_else(|e| panic::resume_unwind(e));
+        }
     }
 
-    pub fn set_revisions(&self, revs: Vec<String>) {
+    pub fn set_revisions(&mut self, revs: Vec<String>) {
         // TODO: skip revs that are already running, cancel running revs that are not in @revs.
         for rev in revs {
+            let task = Arc::new(Task { rev: rev.clone() });
+            self.queued_tasks.insert(rev, task.clone());
             // At the moment I think this cannot fail because we never close the receiver. I guess
             // once the lifecycle of the manager is clearer perhaps we want to be able to return an
             // error here?
-            self.chan_tx.send(Task{rev}).unwrap();
+            self.chan_tx.send(task).unwrap();
         }
     }
+}
 
-    fn run_thread(&self, thread_id: u32) -> anyhow::Result<()> {
+struct Worker {
+    id: u32,
+    // TODO: Avoid duplicating program and args into each Worker object.
+    program: String,
+    args: Vec<String>,
+    current_dir: String,
+    chan_rx: crossbeam_channel::Receiver<Arc<Task>>,
+}
+
+impl Worker {
+    fn start(self) -> thread::JoinHandle<()> {
+        thread::spawn(move || self.run())
+    }
+
+    // TODO: Implement cancellation
+    fn run(&self) {
         for task in self.chan_rx.clone() {
-            process::Command::new(self.program)
-                .args(self.args)
-                .current_dir(self.current_dir)
+            process::Command::new(&self.program)
+                .args(&self.args)
+                .current_dir(&self.current_dir)
                 .spawn()
-                .with_context(|| format!("execing test executable {:?}", self.program))?
+                // TODO: remove unwrap
+                .with_context(|| format!("execing test executable {:?}", self.program)).unwrap()
                 .wait()
-                .context("awaiting test reuslt")?;
-            println!("thread {} OK for rev {}", thread_id, task.rev);
+                // TODO: remove unwrap
+                .context("awaiting test reuslt").unwrap();
+            println!("worker {} OK for rev {}", self.id, task.rev);
         }
-        Ok(())
     }
 }
