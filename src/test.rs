@@ -2,9 +2,12 @@ use anyhow::Context;
 use crossbeam_channel;
 use nix::errno::Errno;
 use nix::sys::signal;
-use nix::unistd::Pid;
+use nix::unistd::{mkdtemp, Pid};
 use std::collections;
+use std::env;
+use std::ffi::OsStr;
 use std::panic;
+use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,19 +24,21 @@ impl Manager {
     // Starts the workers. You must call close() before dropping it.
     //
     // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
-    pub fn new(num_threads: u32, repo_path: &str, program: String, args: Vec<String>) -> Self {
+    pub fn new(num_threads: u32, repo_path: String, program: String, args: Vec<String>) -> Self {
         let (chan_tx, chan_rx) = crossbeam_channel::unbounded();
 
         let program = Arc::new(program);
         let args = Arc::new(args);
+        let repo_path = Arc::new(repo_path);
         let join_handles = (1..num_threads)
             .map(|i| {
                 let worker = Worker {
                     id: i,
                     program: program.clone(),
                     args: args.clone(),
-                    current_dir: repo_path.to_string(),
+                    repo_path: repo_path.clone(),
                     chan_rx: chan_rx.clone(),
+                    worktree: None,
                 };
 
                 worker.start()
@@ -160,17 +165,35 @@ struct Worker {
     // TODO: Will actually need make these part of the Task.
     program: Arc<String>,
     args: Arc<Vec<String>>,
-    current_dir: String,
+    repo_path: Arc<String>,
+    worktree: Option<anyhow::Result<PathBuf>>, // Access via get_worktree.
     chan_rx: crossbeam_channel::Receiver<Arc<Task>>,
 }
 
-impl Worker {
-    fn run_task(&self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
+impl<'a> Worker {
+    fn get_worktree(&'a mut self, task: &Task) -> &'a anyhow::Result<PathBuf> {
+        return self.worktree.get_or_insert_with(|| {
+            let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
+                .context("mkdtemp for worktree")?;
+            // TODO: How can I avoid this crazy manual OsStr construction?
+            let args: Vec<&OsStr> = vec![
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                path.as_os_str(),
+                OsStr::new("task.rev"),
+            ];
+            task.run_cmd(process::Command::new("git").args(args))?;
+            Ok(path)
+        })
+    }
+
+    fn run_task(&mut self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
         // TODO: HOw do I get rid of the &* (to get &str from Arc<String) it looks stupid
+        let worktree = self.get_worktree(&task)?;
         task.run_cmd(
             process::Command::new(&*self.program)
                 .args(&*self.args)
-                .current_dir(&self.current_dir),
+                .current_dir(worktree),
         )
     }
 

@@ -46,7 +46,7 @@ fn do_main() -> anyhow::Result<()> {
     let mut cmd = collections::VecDeque::from(args.cmd);
     let mut m = test::Manager::new(
         args.num_threads,
-        &args.repo_path,
+        args.repo_path,
         cmd.pop_front().unwrap(),
         Vec::from(cmd),
     );
