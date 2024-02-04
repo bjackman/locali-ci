@@ -105,6 +105,26 @@ impl Task {
             }
         }
     }
+
+    fn run_cmd(&self, cmd: &mut process::Command) -> anyhow::Result<Option<process::ExitStatus>> {
+        let mut child;
+        {
+            let mut state = self.state.lock().unwrap();
+            match *state {
+                TaskState::Done => return Ok(None), // Already cancelled
+                TaskState::Started(_) => panic!("Task started multiple times"),
+                TaskState::NotStarted => (),
+            };
+            child = cmd.spawn().context("spawning child")?;
+            *state = TaskState::Started(Pid::from_raw(child.id() as i32));
+        }
+        let result = child.wait().context("awaiting child").map(|r| Some(r));
+        {
+            let mut state = self.state.lock().unwrap();
+            *state = TaskState::Done
+        }
+        result
+    }
 }
 
 enum TaskState {
@@ -125,33 +145,12 @@ struct Worker {
 
 impl Worker {
     fn run_task(&self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
-        let mut child;
-        {
-            let mut state = task.state.lock().unwrap();
-            match *state {
-                TaskState::Done => return Ok(None), // Already cancelled
-                TaskState::Started(_) => panic!("Multiple threads started same task"),
-                TaskState::NotStarted => (),
-            };
-            // TODO: HOw do I get rid of the &* (to get &str from Arc<String) it looks stupid
-            child = process::Command::new(&*self.program)
+        // TODO: HOw do I get rid of the &* (to get &str from Arc<String) it looks stupid
+        task.run_cmd(
+            process::Command::new(&*self.program)
                 .args(&*self.args)
-                .current_dir(&self.current_dir)
-                .spawn()
-                .with_context(|| {
-                    format!(
-                        "execing test executable {:?} in {:?}",
-                        self.program, self.current_dir
-                    )
-                })?;
-            *state = TaskState::Started(Pid::from_raw(child.id() as i32));
-        }
-        let result = child.wait().context("awaiting test child").map(|r| Some(r));
-        {
-            let mut state = task.state.lock().unwrap();
-            *state = TaskState::Done
-        }
-        result
+                .current_dir(&self.current_dir),
+        )
     }
 
     fn start(self) -> thread::JoinHandle<()> {
