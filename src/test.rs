@@ -1,9 +1,12 @@
 use anyhow::Context;
 use crossbeam_channel;
+use nix::errno::Errno;
+use nix::sys::signal;
+use nix::unistd::Pid;
 use std::collections;
-use std::process;
 use std::panic;
-use std::sync::Arc;
+use std::process;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub struct Manager {
@@ -11,16 +14,6 @@ pub struct Manager {
     chan_tx: crossbeam_channel::Sender<Arc<Task>>,
     // TODO: This is a map from Task::rev -> Task. How can I avoid duplicating the key value?
     queued_tasks: collections::HashMap<String, Arc<Task>>,
-}
-
-struct Task {
-    // We just denote the revision as a string and not a stronger type because revisions can
-    // disappear anyway.
-    //
-    // TODO: I made this a String instead of &str, because the lifetime of the str would need to be
-    // the lifetime of the task - but that lifetime is not really visible to the user of the
-    // Manager. Am I being silly here or is this just hte practical way?
-    rev: String,
 }
 
 impl Manager {
@@ -59,9 +52,19 @@ impl Manager {
     }
 
     pub fn set_revisions(&mut self, revs: Vec<String>) {
+        let rev_set: collections::HashSet<&str> = revs.iter().map(|s| s.as_str()).collect();
+        for (rev, task) in &self.queued_tasks {
+            if !rev_set.contains(rev.as_str()) {
+                task.cancel();
+            }
+        }
+
         // TODO: skip revs that are already running, cancel running revs that are not in @revs.
         for rev in revs {
-            let task = Arc::new(Task { rev: rev.clone() });
+            let task = Arc::new(Task {
+                rev: rev.clone(),
+                state: Mutex::new(TaskState::NotStarted),
+            });
             self.queued_tasks.insert(rev, task.clone());
             // At the moment I think this cannot fail because we never close the receiver. I guess
             // once the lifecycle of the manager is clearer perhaps we want to be able to return an
@@ -69,6 +72,45 @@ impl Manager {
             self.chan_tx.send(task).unwrap();
         }
     }
+}
+
+struct Task {
+    // We just denote the revision as a string and not a stronger type because revisions can
+    // disappear anyway.
+    //
+    // TODO: I made this a String instead of &str, because the lifetime of the str would need to be
+    // the lifetime of the task - but that lifetime is not really visible to the user of the
+    // Manager. Am I being silly here or is this just hte practical way?
+    rev: String,
+    state: Mutex<TaskState>,
+}
+
+impl Task {
+    fn cancel(&self) {
+        let mut state = self.state.lock().unwrap();
+        match *state {
+            TaskState::Done => return,
+            TaskState::NotStarted => {
+                *state = TaskState::Done;
+                return;
+            }
+            TaskState::Started(pid) => {
+                match signal::kill(pid, signal::SIGTERM) {
+                    Ok(_) => (),
+                    Err(Errno::ESRCH) => (), // The process probably just terminated.
+                    // TODO logging to a sensible place?
+                    Err(errno) => println!("Couldn't kill pid {}: {}", pid, errno.desc()),
+                }
+                *state = TaskState::Done;
+            }
+        }
+    }
+}
+
+enum TaskState {
+    NotStarted,
+    Started(Pid),
+    Done,
 }
 
 struct Worker {
@@ -86,19 +128,44 @@ impl Worker {
         thread::spawn(move || self.run())
     }
 
-    // TODO: Implement cancellation
-    fn run(&self) {
-        for task in self.chan_rx.clone() {
-            process::Command::new(&*self.program)
+    fn run_task(&self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
+        let mut child;
+        {
+            let mut state = task.state.lock().unwrap();
+            match *state {
+                TaskState::Done => return Ok(None), // Already cancelled
+                TaskState::Started(_) => panic!("Multiple threads started same task"),
+                TaskState::NotStarted => (),
+            };
+            // TODO: HOw do I get rid of the &* (to get &str from Arc<String) it looks stupid
+            child = process::Command::new(&*self.program)
                 .args(&*self.args)
                 .current_dir(&self.current_dir)
                 .spawn()
-                // TODO: remove unwrap
-                .with_context(|| format!("execing test executable {:?}", self.program)).unwrap()
-                .wait()
-                // TODO: remove unwrap
-                .context("awaiting test reuslt").unwrap();
-            println!("worker {} OK for rev {}", self.id, task.rev);
+                .with_context(|| format!("execing test executable {:?}", self.program))?;
+            *state = TaskState::Started(Pid::from_raw(child.id() as i32));
+        }
+        let result = child.wait().context("awaiting test child").map(|r| Some(r));
+        {
+            let mut state = task.state.lock().unwrap();
+            *state = TaskState::Done
+        }
+        result
+    }
+    fn run(&self) {
+        for task in self.chan_rx.clone() {
+            let result = self.run_task(&task);
+            // TODO: Clean up this mess
+            println!(
+                "worker {} rev {} -> {:#}",
+                self.id,
+                task.rev,
+                match result {
+                    Ok(None) => "canceled".to_string(),
+                    Ok(Some(exit_status)) => format!("{}", exit_status),
+                    Err(e) => format!("err: {:#}", e),
+                }
+            );
         }
     }
 }
