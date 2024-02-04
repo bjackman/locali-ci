@@ -6,9 +6,7 @@ use std::panic;
 use std::sync::Arc;
 use std::thread;
 
-pub struct Manager<'a> {
-    pub program: &'a str,
-    pub args: &'a Vec<&'a str>,
+pub struct Manager {
     join_handles: Vec<thread::JoinHandle<()>>,
     chan_tx: crossbeam_channel::Sender<Arc<Task>>,
     // TODO: This is a map from Task::rev -> Task. How can I avoid duplicating the key value?
@@ -25,17 +23,18 @@ struct Task {
     rev: String,
 }
 
-impl<'a> Manager<'a> {
-    // TODO: Too many args for a language without keyword args!
-    pub fn new(num_threads: u32, program: &'a str, args: &'a Vec<&'a str>) -> Self {
+impl Manager {
+    pub fn new(num_threads: u32, program: String, args: Vec<String>) -> Self {
         let (chan_tx, chan_rx) = crossbeam_channel::unbounded();
 
+        let program = Arc::new(program);
+        let args = Arc::new(args);
         let join_handles = (1..num_threads)
             .map(|i| {
                 let worker = Worker {
                     id: i,
-                    program: program.to_string(),
-                    args: args.iter().map(|a| a.to_string()).collect(),
+                    program: program.clone(),
+                    args: args.clone(),
                     current_dir: "foo".to_string(),
                     chan_rx: chan_rx.clone(),
                 };
@@ -46,8 +45,6 @@ impl<'a> Manager<'a> {
 
         Self {
             join_handles,
-            program,
-            args,
             chan_tx,
             queued_tasks: collections::HashMap::new(),
         }
@@ -76,9 +73,10 @@ impl<'a> Manager<'a> {
 
 struct Worker {
     id: u32,
-    // TODO: Avoid duplicating program and args into each Worker object.
-    program: String,
-    args: Vec<String>,
+    // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
+    // just make these references to a value owned by the Manager...
+    program: Arc<String>,
+    args: Arc<Vec<String>>,
     current_dir: String,
     chan_rx: crossbeam_channel::Receiver<Arc<Task>>,
 }
@@ -91,8 +89,8 @@ impl Worker {
     // TODO: Implement cancellation
     fn run(&self) {
         for task in self.chan_rx.clone() {
-            process::Command::new(&self.program)
-                .args(&self.args)
+            process::Command::new(&*self.program)
+                .args(&*self.args)
                 .current_dir(&self.current_dir)
                 .spawn()
                 // TODO: remove unwrap

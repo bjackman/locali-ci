@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::Parser as _;
 use git2;
+use std::collections;
 use std::str;
 
 mod test;
@@ -42,12 +43,8 @@ fn do_main() -> anyhow::Result<()> {
         })
     );
 
-    // TODO: How can I avoid this map/as_ref dance? I want to declare test::Manager::args in a
-    // way where it doesn't care about the details of the string vec (like how
-    // std::Process::Command::args works), but I had borrow checker nightmares.
-    // TODO: Also probably easier to just move the args into the Manager.
-    let cmd_args = &args.cmd[1..].iter().map(AsRef::as_ref).collect();
-    let mut m = test::Manager::new(args.num_threads, &args.cmd[0], cmd_args);
+    let mut cmd = collections::VecDeque::from(args.cmd);
+    let mut m = test::Manager::new(args.num_threads, cmd.pop_front().unwrap(), Vec::from(cmd));
     m.set_revisions(vec!["HEAD^^".to_string(), "HEAD^".to_string()]);
     m.close();
     return Ok(());
