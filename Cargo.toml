@@ -10,4 +10,10 @@ git2 = "0.18.1"
 clap = { version = "4.0", features = ["derive"] }
 anyhow = "1.0.79"
 crossbeam-channel = "0.5.11"
-nix = { version = "0.27.1" , features = ["process", "signal"] }
+# Need https://github.com/nix-rust/nix/pull/1297
+# TODO - https://github.com/nix-rust/nix/issues/2280 - switch back to crates.io.
+
+[dependencies.nix]
+git = "https://github.com/nix-rust/nix.git"
+rev = "172ca24"
+features = ["process", "signal", "fs", "feature"]
