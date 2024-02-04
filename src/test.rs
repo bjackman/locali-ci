@@ -17,7 +17,7 @@ pub struct Manager {
 }
 
 impl Manager {
-    pub fn new(num_threads: u32, program: String, args: Vec<String>) -> Self {
+    pub fn new(num_threads: u32, repo_path: &str, program: String, args: Vec<String>) -> Self {
         let (chan_tx, chan_rx) = crossbeam_channel::unbounded();
 
         let program = Arc::new(program);
@@ -28,7 +28,7 @@ impl Manager {
                     id: i,
                     program: program.clone(),
                     args: args.clone(),
-                    current_dir: "foo".to_string(),
+                    current_dir: repo_path.to_string(),
                     chan_rx: chan_rx.clone(),
                 };
 
@@ -142,7 +142,12 @@ impl Worker {
                 .args(&*self.args)
                 .current_dir(&self.current_dir)
                 .spawn()
-                .with_context(|| format!("execing test executable {:?}", self.program))?;
+                .with_context(|| {
+                    format!(
+                        "execing test executable {:?} in {:?}",
+                        self.program, self.current_dir
+                    )
+                })?;
             *state = TaskState::Started(Pid::from_raw(child.id() as i32));
         }
         let result = child.wait().context("awaiting test child").map(|r| Some(r));

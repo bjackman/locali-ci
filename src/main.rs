@@ -44,7 +44,12 @@ fn do_main() -> anyhow::Result<()> {
     );
 
     let mut cmd = collections::VecDeque::from(args.cmd);
-    let mut m = test::Manager::new(args.num_threads, cmd.pop_front().unwrap(), Vec::from(cmd));
+    let mut m = test::Manager::new(
+        args.num_threads,
+        &args.repo_path,
+        cmd.pop_front().unwrap(),
+        Vec::from(cmd),
+    );
     m.set_revisions(vec!["HEAD^^".to_string(), "HEAD^".to_string()]);
     m.close();
     return Ok(());
