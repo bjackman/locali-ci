@@ -54,6 +54,10 @@ impl Manager {
 
     // TODO: should I mandate that this gets called? I guess I could just do it in Drop but it feels
     // like a lot of work for an implicit call. I do note that nothing mandates you join threads.
+    //
+    // Oh:
+    // https://doc.rust-lang.org/book/ch20-03-graceful-shutdown-and-cleanup.html
+    // seems like doing it in Drop would be pretty standard.
     pub fn close(self) {
         for jh in self.join_handles {
             jh.join().unwrap_or_else(|e| panic::resume_unwind(e));
@@ -173,6 +177,16 @@ struct Worker {
 impl Worker {
     // TODO: Avoid copying path
     fn get_worktree(&mut self, task: &Task) -> anyhow::Result<PathBuf> {
+        // This is slow, so it should be done ondemand and it should be cancelable. How do we cancel
+        // git operations? libgit2 doesn't provide any such mechanism. Just run them via the
+        // commandline and use SIGTERM to cancel!
+        //
+        // TODO: Actually, we probably don't want to cancel worktree setup just because the
+        // individual task was canceled, only if we want to shut down the Manager.
+        //
+        // TODO: If it's canceled, we should also make sure we don't leak the worktree.
+        //
+        // TODO: (Actually we need to implement teardown in the first place).
         match &mut self.worktree {
             Some(path) => Ok(path.clone()),
             None => {
@@ -185,7 +199,11 @@ impl Worker {
                     path.as_os_str(),
                     OsStr::new("task.rev"),
                 ];
-                task.run_cmd(process::Command::new("git").args(args).current_dir(&*self.repo_path))?;
+                task.run_cmd(
+                    process::Command::new("git")
+                        .args(args)
+                        .current_dir(&*self.repo_path),
+                )?;
                 Ok(self.worktree.get_or_insert(path).clone())
             }
         }
