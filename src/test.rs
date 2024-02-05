@@ -166,25 +166,29 @@ struct Worker {
     program: Arc<String>,
     args: Arc<Vec<String>>,
     repo_path: Arc<String>,
-    worktree: Option<anyhow::Result<PathBuf>>, // Access via get_worktree.
+    worktree: Option<PathBuf>, // Access via get_worktree.
     chan_rx: crossbeam_channel::Receiver<Arc<Task>>,
 }
 
-impl<'a> Worker {
-    fn get_worktree(&'a mut self, task: &Task) -> &'a anyhow::Result<PathBuf> {
-        return self.worktree.get_or_insert_with(|| {
-            let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
-                .context("mkdtemp for worktree")?;
-            // TODO: How can I avoid this crazy manual OsStr construction?
-            let args: Vec<&OsStr> = vec![
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                path.as_os_str(),
-                OsStr::new("task.rev"),
-            ];
-            task.run_cmd(process::Command::new("git").args(args))?;
-            Ok(path)
-        })
+impl Worker {
+    // TODO: Avoid copying path
+    fn get_worktree(&mut self, task: &Task) -> anyhow::Result<PathBuf> {
+        match &mut self.worktree {
+            Some(path) => Ok(path.clone()),
+            None => {
+                let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
+                    .context("mkdtemp for worktree")?;
+                // TODO: How can I avoid this crazy manual OsStr construction?
+                let args: Vec<&OsStr> = vec![
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    path.as_os_str(),
+                    OsStr::new("task.rev"),
+                ];
+                task.run_cmd(process::Command::new("git").args(args).current_dir(&*self.repo_path))?;
+                Ok(self.worktree.get_or_insert(path).clone())
+            }
+        }
     }
 
     fn run_task(&mut self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
@@ -197,7 +201,7 @@ impl<'a> Worker {
         )
     }
 
-    fn start(self) -> thread::JoinHandle<()> {
+    fn start(mut self) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             for task in self.chan_rx.clone() {
                 let result = self.run_task(&task);
