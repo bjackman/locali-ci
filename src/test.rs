@@ -9,6 +9,7 @@ use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+// Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     join_handles: Vec<thread::JoinHandle<()>>,
     chan_tx: crossbeam_channel::Sender<Arc<Task>>,
@@ -17,6 +18,9 @@ pub struct Manager {
 }
 
 impl Manager {
+    // Starts the workers. You must call close() before dropping it.
+    //
+    // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
     pub fn new(num_threads: u32, repo_path: &str, program: String, args: Vec<String>) -> Self {
         let (chan_tx, chan_rx) = crossbeam_channel::unbounded();
 
@@ -43,7 +47,7 @@ impl Manager {
         }
     }
 
-    // TODO: How can I mandate that this is called? I guess I could just do it in Drop but it feels
+    // TODO: should I mandate that this gets called? I guess I could just do it in Drop but it feels
     // like a lot of work for an implicit call. I do note that nothing mandates you join threads.
     pub fn close(self) {
         for jh in self.join_handles {
@@ -51,6 +55,8 @@ impl Manager {
         }
     }
 
+    // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
+    // not already tested or being tested.
     pub fn set_revisions(&mut self, revs: Vec<String>) {
         let rev_set: collections::HashSet<&str> = revs.iter().map(|s| s.as_str()).collect();
         for (rev, task) in &self.queued_tasks {
@@ -59,7 +65,7 @@ impl Manager {
             }
         }
 
-        // TODO: skip revs that are already running, cancel running revs that are not in @revs.
+        // TODO: skip revs that are already running.
         for rev in revs {
             let task = Arc::new(Task {
                 rev: rev.clone(),
@@ -74,6 +80,8 @@ impl Manager {
     }
 }
 
+// Work item to test a specific revision, that can be cancelled. This is unfornately coupled with
+// the assumption that the task is actually a subprocess, which sucks.
 struct Task {
     // We just denote the revision as a string and not a stronger type because revisions can
     // disappear anyway.
@@ -85,8 +93,16 @@ struct Task {
     state: Mutex<TaskState>,
 }
 
+enum TaskState {
+    NotStarted,
+    Started(Pid),
+    Done,
+}
+
 impl Task {
+    // Attempt to interrupt the task if it is running. If it doesn't work, shrug.
     fn cancel(&self) {
+        // TODO: instead of unwrap, do I want to use the thing that continues a prior stacktrace?
         let mut state = self.state.lock().unwrap();
         match *state {
             TaskState::Done => return,
@@ -106,6 +122,13 @@ impl Task {
         }
     }
 
+    // Run a command. it will be SIGTERMed if the task is cancelled. It's a bug to call this from
+    // two threads at once.
+    //
+    // TODO: This hard-codes the exact mechanism of spawning and waiting on children. That's no
+    // good, because we want to use this for different things (worktree setup, actual tests).
+    //
+    // TODO: Use the type system to enforce that only one thread can call run_cmd.
     fn run_cmd(&self, cmd: &mut process::Command) -> anyhow::Result<Option<process::ExitStatus>> {
         let mut child;
         {
@@ -127,16 +150,14 @@ impl Task {
     }
 }
 
-enum TaskState {
-    NotStarted,
-    Started(Pid),
-    Done,
-}
-
+// Basically a thread with a lazily-created worktree. Once started, receives Tasks on its channel
+// and runs them.
 struct Worker {
     id: u32,
     // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
     // just make these references to a value owned by the Manager...
+    //
+    // TODO: Will actually need make these part of the Task.
     program: Arc<String>,
     args: Arc<Vec<String>>,
     current_dir: String,
