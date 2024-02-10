@@ -176,36 +176,37 @@ struct Worker {
 impl Worker {
     // TODO: Avoid copying path
     fn get_worktree<'a>(&'a mut self, task: &Task) -> anyhow::Result<&'a PathBuf> {
-        if self.worktree.is_none() {
-            // This is slow, so it should be done ondemand and it should be cancelable. How do we
-            // cancel git operations? libgit2 doesn't provide any such mechanism. Just run them via
-            // the commandline and use SIGTERM to cancel!
-            //
-            // TODO: Actually, we probably don't want to cancel worktree setup just because the
-            // individual task was canceled, only if we want to shut down the Manager.
-            //
-            // TODO: If it's canceled, we should also make sure we don't leak the worktree.
-            //
-            // TODO: (Actually we need to implement teardown in the first place).
-            let path =
-                mkdtemp(&env::temp_dir().join("local-ci-XXXXXX")).context("mkdtemp for worktree")?;
+        match &mut self.worktree {
+            Some(path) => Ok(path),
+            worktree @ None => {
+                // This is slow, so it should be done ondemand and it should be cancelable. How do we
+                // cancel git operations? libgit2 doesn't provide any such mechanism. Just run them via
+                // the commandline and use SIGTERM to cancel!
+                //
+                // TODO: Actually, we probably don't want to cancel worktree setup just because the
+                // individual task was canceled, only if we want to shut down the Manager.
+                //
+                // TODO: If it's canceled, we should also make sure we don't leak the worktree.
+                //
+                // TODO: (Actually we need to implement teardown in the first place).
+                let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
+                    .context("mkdtemp for worktree")?;
 
-            // TODO: How can I avoid this crazy manual OsStr construction?
-            let args: Vec<&OsStr> = vec![
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                path.as_os_str(),
-                OsStr::new("task.rev"),
-            ];
-            task.run_cmd(
-                process::Command::new("git")
-                    .args(args)
-                    .current_dir(&*self.repo_path),
-            )?;
-            self.worktree.replace(path);
+                // TODO: How can I avoid this crazy manual OsStr construction?
+                let args: Vec<&OsStr> = vec![
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    path.as_os_str(),
+                    OsStr::new("task.rev"),
+                ];
+                task.run_cmd(
+                    process::Command::new("git")
+                        .args(args)
+                        .current_dir(&*self.repo_path),
+                )?;
+                Ok(worktree.insert(path))
+            }
         }
-
-        return Ok(self.worktree.as_ref().unwrap());
     }
 
     fn run_task(&mut self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
