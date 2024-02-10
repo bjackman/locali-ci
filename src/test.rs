@@ -55,9 +55,8 @@ impl Manager {
     // TODO: should I mandate that this gets called? I guess I could just do it in Drop but it feels
     // like a lot of work for an implicit call. I do note that nothing mandates you join threads.
     //
-    // Oh:
-    // https://doc.rust-lang.org/book/ch20-03-graceful-shutdown-and-cleanup.html
-    // seems like doing it in Drop would be pretty standard.
+    // Oh: https://doc.rust-lang.org/book/ch20-03-graceful-shutdown-and-cleanup.html seems like
+    // doing it in Drop would be pretty standard.
     pub fn close(self) {
         for jh in self.join_handles {
             jh.join().unwrap_or_else(|e| panic::resume_unwind(e));
