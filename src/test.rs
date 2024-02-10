@@ -175,47 +175,47 @@ struct Worker {
 
 impl Worker {
     // TODO: Avoid copying path
-    fn get_worktree(&mut self, task: &Task) -> anyhow::Result<PathBuf> {
-        // This is slow, so it should be done ondemand and it should be cancelable. How do we cancel
-        // git operations? libgit2 doesn't provide any such mechanism. Just run them via the
-        // commandline and use SIGTERM to cancel!
-        //
-        // TODO: Actually, we probably don't want to cancel worktree setup just because the
-        // individual task was canceled, only if we want to shut down the Manager.
-        //
-        // TODO: If it's canceled, we should also make sure we don't leak the worktree.
-        //
-        // TODO: (Actually we need to implement teardown in the first place).
-        match &mut self.worktree {
-            Some(path) => Ok(path.clone()),
-            None => {
-                let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
-                    .context("mkdtemp for worktree")?;
-                // TODO: How can I avoid this crazy manual OsStr construction?
-                let args: Vec<&OsStr> = vec![
-                    OsStr::new("worktree"),
-                    OsStr::new("add"),
-                    path.as_os_str(),
-                    OsStr::new("task.rev"),
-                ];
-                task.run_cmd(
-                    process::Command::new("git")
-                        .args(args)
-                        .current_dir(&*self.repo_path),
-                )?;
-                Ok(self.worktree.get_or_insert(path).clone())
-            }
+    fn get_worktree<'a>(&'a mut self, task: &Task) -> anyhow::Result<&'a PathBuf> {
+        if self.worktree.is_none() {
+            // This is slow, so it should be done ondemand and it should be cancelable. How do we
+            // cancel git operations? libgit2 doesn't provide any such mechanism. Just run them via
+            // the commandline and use SIGTERM to cancel!
+            //
+            // TODO: Actually, we probably don't want to cancel worktree setup just because the
+            // individual task was canceled, only if we want to shut down the Manager.
+            //
+            // TODO: If it's canceled, we should also make sure we don't leak the worktree.
+            //
+            // TODO: (Actually we need to implement teardown in the first place).
+            let path =
+                mkdtemp(&env::temp_dir().join("local-ci-XXXXXX")).context("mkdtemp for worktree")?;
+
+            // TODO: How can I avoid this crazy manual OsStr construction?
+            let args: Vec<&OsStr> = vec![
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                path.as_os_str(),
+                OsStr::new("task.rev"),
+            ];
+            task.run_cmd(
+                process::Command::new("git")
+                    .args(args)
+                    .current_dir(&*self.repo_path),
+            )?;
+            self.worktree.replace(path);
         }
+
+        return Ok(self.worktree.as_ref().unwrap());
     }
 
     fn run_task(&mut self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
         // TODO: HOw do I get rid of the &* (to get &str from Arc<String) it looks stupid
-        let worktree = self.get_worktree(&task)?;
-        task.run_cmd(
-            process::Command::new(&*self.program)
-                .args(&*self.args)
-                .current_dir(worktree),
-        )
+        // let worktree = self.get_worktree(&task)?;
+        // TODO: join these statements back up again.
+        let mut cmd = process::Command::new(&*self.program);
+        let cmd = cmd.args(&*self.args);
+        let cmd = cmd.current_dir(self.get_worktree(&task)?);
+        task.run_cmd(cmd)
     }
 
     fn start(mut self) -> thread::JoinHandle<()> {
