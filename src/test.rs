@@ -200,15 +200,14 @@ impl Worker {
         cmd.stdout(process::Stdio::piped());
         let child = cmd.spawn().context("spawning child process")?;
         let pid = Pid::from_raw(child.id() as i32);
-        let _ct_reg = ct.register(
-            CancelCallback::FnOnce(Box::new(move || {
-                match signal::kill(pid, signal::SIGINT) {
-                    Ok(_) => (),
-                    Err(Errno::ESRCH) => (), // The process probably just terminated.
-                    // TODO logging to a sensible place?
-                    Err(errno) => println!("Couldn't kill pid {}: {}", pid, errno.desc()),
-                }
-            })));
+        let _ct_reg = ct.register(CancelCallback::FnOnce(Box::new(move || {
+            match signal::kill(pid, signal::SIGINT) {
+                Ok(_) => (),
+                Err(Errno::ESRCH) => (), // The process probably just terminated.
+                // TODO logging to a sensible place?
+                Err(errno) => println!("Couldn't kill pid {}: {}", pid, errno.desc()),
+            }
+        })));
         let output = child.wait_with_output().context("awaiting child")?;
         if ct.is_canceled() {
             return Ok(None);
@@ -253,11 +252,11 @@ impl Worker {
             // cromulent API anyway.
             //
             // I originally also had this on-demand only when receiving the first task. I'm not
-            // sure, maybe that was a better approach since it avoids unnecessary work, but ultimately
-            // this project is supposed to be about getting the user their test results sooner. So the
-            // sooner we kick off the worktree setup the quickker we can run the tests when the first
-            // requests come through (which, until we implement some storage cache for results, is
-            // always gonna be immediately on startup anyway)
+            // sure, maybe that was a better approach since it avoids unnecessary work, but
+            // ultimately this project is supposed to be about getting the user their test results
+            // sooner. So the sooner we kick off the worktree setup the quickker we can run the
+            // tests when the first requests come through (which, until we implement some storage
+            // cache for results, is always gonna be immediately on startup anyway)
             let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
                 .context("mkdtemp for worktree")?;
 
