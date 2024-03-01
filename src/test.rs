@@ -6,7 +6,6 @@ use nix::sys::signal;
 use nix::unistd::{mkdtemp, Pid};
 use std::collections;
 use std::env;
-use std::ffi::OsStr;
 use std::os::unix::process::ExitStatusExt;
 use std::panic;
 use std::path::PathBuf;
@@ -171,7 +170,9 @@ struct Task {
 impl Task {
     fn run(&self, worktree: &PathBuf) -> anyhow::Result<Option<process::Output>> {
         let mut checkout_cmd = process::Command::new("git");
-        checkout_cmd.args(["checkout", &self.rev]).current_dir(worktree);
+        checkout_cmd
+            .args(["checkout", &self.rev])
+            .current_dir(worktree);
         run_successful_cmd(&self.ct, checkout_cmd)?;
 
         let mut cmd = process::Command::new(&*self.program);
@@ -205,15 +206,11 @@ impl Worker {
             let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
                 .context("mkdtemp for worktree")?;
 
-            // TODO: How can I avoid this crazy manual OsStr construction?
-            let args: Vec<&OsStr> = vec![
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                path.as_os_str(),
-                OsStr::new("HEAD"),
-            ];
             let mut cmd = process::Command::new("git");
-            cmd.args(args).current_dir(&*self.repo_path);
+            cmd.args(["worktree", "add"])
+                .arg(&path)
+                .arg("HEAD")
+                .current_dir(&*self.repo_path);
             run_successful_cmd(&ct, cmd).context("setting up worktree")?;
 
             for task in self.chan_rx.clone() {
