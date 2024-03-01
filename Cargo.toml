@@ -11,3 +11,4 @@ clap = { version = "4.0", features = ["derive"] }
 anyhow = "1.0.79"
 crossbeam-channel = "0.5.11"
 nix = { version = "0.28.0", features = ["process", "signal", "fs", "feature"] }
+cancellation = "0.1.0"

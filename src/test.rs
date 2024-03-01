@@ -1,4 +1,5 @@
-use anyhow::Context;
+use anyhow::{anyhow, Context};
+use cancellation::{CancellationToken, CancellationTokenSource};
 use crossbeam_channel;
 use nix::errno::Errno;
 use nix::sys::signal;
@@ -6,6 +7,7 @@ use nix::unistd::{mkdtemp, Pid};
 use std::collections;
 use std::env;
 use std::ffi::OsStr;
+use std::os::unix::process::ExitStatusExt;
 use std::panic;
 use std::path::PathBuf;
 use std::process;
@@ -14,7 +16,7 @@ use std::thread;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
-    join_handles: Vec<thread::JoinHandle<()>>,
+    join_handles: Vec<thread::JoinHandle<anyhow::Result<()>>>,
     chan_tx: crossbeam_channel::Sender<Arc<Task>>,
     // TODO: This is a map from Task::rev -> Task. How can I avoid duplicating the key value?
     queued_tasks: collections::HashMap<String, Arc<Task>>,
@@ -27,6 +29,8 @@ impl Manager {
     pub fn new(num_threads: u32, repo_path: String, program: String, args: Vec<String>) -> Self {
         let (chan_tx, chan_rx) = crossbeam_channel::unbounded();
 
+        let cts = CancellationTokenSource::new();
+
         let program = Arc::new(program);
         let args = Arc::new(args);
         let repo_path = Arc::new(repo_path);
@@ -38,10 +42,9 @@ impl Manager {
                     args: args.clone(),
                     repo_path: repo_path.clone(),
                     chan_rx: chan_rx.clone(),
-                    worktree: None,
                 };
 
-                worker.start()
+                worker.start(cts.token().clone())
             })
             .collect();
 
@@ -59,7 +62,7 @@ impl Manager {
     // doing it in Drop would be pretty standard.
     pub fn close(self) {
         for jh in self.join_handles {
-            jh.join().unwrap_or_else(|e| panic::resume_unwind(e));
+            let _ = jh.join().unwrap_or_else(|e| panic::resume_unwind(e));
         }
     }
 
@@ -169,60 +172,109 @@ struct Worker {
     program: Arc<String>,
     args: Arc<Vec<String>>,
     repo_path: Arc<String>,
-    worktree: Option<PathBuf>, // Access via get_worktree.
     chan_rx: crossbeam_channel::Receiver<Arc<Task>>,
 }
 
 impl Worker {
-    // TODO: Avoid copying path
-    fn get_worktree<'a>(&'a mut self, task: &Task) -> anyhow::Result<&'a PathBuf> {
-        match &mut self.worktree {
-            Some(path) => Ok(path),
-            worktree @ None => {
-                // This is slow, so it should be done ondemand and it should be cancelable. How do we
-                // cancel git operations? libgit2 doesn't provide any such mechanism. Just run them via
-                // the commandline and use SIGTERM to cancel!
-                //
-                // TODO: Actually, we probably don't want to cancel worktree setup just because the
-                // individual task was canceled, only if we want to shut down the Manager.
-                //
-                // TODO: If it's canceled, we should also make sure we don't leak the worktree.
-                //
-                // TODO: (Actually we need to implement teardown in the first place).
-                let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
-                    .context("mkdtemp for worktree")?;
-
-                // TODO: How can I avoid this crazy manual OsStr construction?
-                let args: Vec<&OsStr> = vec![
-                    OsStr::new("worktree"),
-                    OsStr::new("add"),
-                    path.as_os_str(),
-                    OsStr::new(&task.rev),
-                ];
-                task.run_cmd(
-                    process::Command::new("git")
-                        .args(args)
-                        .current_dir(&*self.repo_path),
-                )?;
-                Ok(worktree.insert(path))
-            }
-        }
-    }
-
-    fn run_task(&mut self, task: &Task) -> anyhow::Result<Option<process::ExitStatus>> {
+    fn run_task(
+        &mut self,
+        worktree_path: &PathBuf,
+        task: &Task,
+    ) -> anyhow::Result<Option<process::ExitStatus>> {
         // TODO: HOw do I get rid of the &* (to get &str from Arc<String) it looks stupid
         // let worktree = self.get_worktree(&task)?;
         // TODO: join these statements back up again.
         let mut cmd = process::Command::new(&*self.program);
         let cmd = cmd.args(&*self.args);
-        let cmd = cmd.current_dir(self.get_worktree(&task)?);
+        let cmd = cmd.current_dir(worktree_path);
         task.run_cmd(cmd)
     }
 
-    fn start(mut self) -> thread::JoinHandle<()> {
+    // Run a process as a child, block until it's done and return its output, unless canceled.
+    // If canceled, SIGINT it, wait for it to complete anyway, but then return None.
+    fn run_cmd(
+        ct: &CancellationToken,
+        cmd: &mut process::Command,
+    ) -> anyhow::Result<Option<process::Output>> {
+        cmd.stderr(process::Stdio::piped());
+        cmd.stdout(process::Stdio::piped());
+        let child = cmd.spawn().context("spawning child process")?;
+        let pid = Pid::from_raw(child.id() as i32);
+        let output = ct.run(
+            || {
+                match signal::kill(pid, signal::SIGINT) {
+                    Ok(_) => (),
+                    Err(Errno::ESRCH) => (), // The process probably just terminated.
+                    // TODO logging to a sensible place?
+                    Err(errno) => println!("Couldn't kill pid {}: {}", pid, errno.desc()),
+                }
+            },
+            || child.wait_with_output().context("awaiting child"),
+        )?;
+        if ct.is_canceled() {
+            return Ok(None);
+        }
+        return Ok(Some(output));
+    }
+
+    // run_cmd, then check that the process returned successfully, or return a helpful error.
+    // Note you can't tell just from the result whether the operation was canceled.
+    // TODO: should this just be done as an extension trait of process::Output?
+    fn run_successful_cmd(ct: &CancellationToken, mut cmd: process::Command) -> anyhow::Result<()> {
+        match Self::run_cmd(ct, &mut cmd)? {
+            None => Ok(()),
+            Some(output) => {
+                // TODO: Is there a way to write this just using the match?
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    Err(match output.status.code() {
+                        None => anyhow!(
+                            "command {:?} terminated by signal {}",
+                            cmd,
+                            output.status.signal().unwrap()
+                        ),
+                        Some(code) => anyhow!(
+                            "command {:?} failed with exit code {}. stderr:\n{}\nstdout:\n{}",
+                            cmd,
+                            code,
+                            String::from_utf8_lossy(&output.stderr),
+                            String::from_utf8_lossy(&output.stdout)
+                        ),
+                    })
+                }
+            }
+        }
+    }
+
+    fn start(mut self, ct: Arc<CancellationToken>) -> thread::JoinHandle<anyhow::Result<()>> {
         thread::spawn(move || {
+            // First create a worktree for the worker. This is slow so it should be cancelable. git2
+            // doesn't support canceling this operation, which is fine, the git CLI is a perfectly
+            // cromulent API anyway.
+            //
+            // I originally also had this on-demand only when receiving the first task. I'm not
+            // sure, maybe that was a better approach since it avoids unnecessary work, but ultimately
+            // this project is supposed to be about getting the user their test results sooner. So the
+            // sooner we kick off the worktree setup the quickker we can run the tests when the first
+            // requests come through (which, until we implement some storage cache for results, is
+            // always gonna be immediately on startup anyway)
+            let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
+                .context("mkdtemp for worktree")?;
+
+            // TODO: How can I avoid this crazy manual OsStr construction?
+            let args: Vec<&OsStr> = vec![
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                path.as_os_str(),
+                OsStr::new("HEAD"),
+            ];
+            let mut cmd = process::Command::new("git");
+            cmd.args(args).current_dir(&*self.repo_path);
+            Self::run_successful_cmd(&ct, cmd).context("setting up worktree")?;
+
             for task in self.chan_rx.clone() {
-                let result = self.run_task(&task);
+                let result = self.run_task(&path, &task);
                 // TODO: Clean up this mess
                 println!(
                     "worker {} rev {} -> {:#}",
@@ -235,6 +287,7 @@ impl Worker {
                     }
                 );
             }
+            Ok(())
         })
     }
 }
