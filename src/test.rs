@@ -197,7 +197,7 @@ impl Worker {
                     OsStr::new("worktree"),
                     OsStr::new("add"),
                     path.as_os_str(),
-                    OsStr::new("task.rev"),
+                    OsStr::new(&task.rev),
                 ];
                 task.run_cmd(
                     process::Command::new("git")
