@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use cancellation::{CancellationToken, CancellationTokenSource};
+use cancellation_token::{CancelCallback, CancellationToken, CancellationTokenSource};
 use crossbeam_channel;
 use nix::errno::Errno;
 use nix::sys::signal;
@@ -44,7 +44,7 @@ impl Manager {
                     chan_rx: chan_rx.clone(),
                 };
 
-                worker.start(cts.token().clone())
+                worker.start(cts.token())
             })
             .collect();
 
@@ -200,17 +200,16 @@ impl Worker {
         cmd.stdout(process::Stdio::piped());
         let child = cmd.spawn().context("spawning child process")?;
         let pid = Pid::from_raw(child.id() as i32);
-        let output = ct.run(
-            || {
+        let _ct_reg = ct.register(
+            CancelCallback::FnOnce(Box::new(move || {
                 match signal::kill(pid, signal::SIGINT) {
                     Ok(_) => (),
                     Err(Errno::ESRCH) => (), // The process probably just terminated.
                     // TODO logging to a sensible place?
                     Err(errno) => println!("Couldn't kill pid {}: {}", pid, errno.desc()),
                 }
-            },
-            || child.wait_with_output().context("awaiting child"),
-        )?;
+            })));
+        let output = child.wait_with_output().context("awaiting child")?;
         if ct.is_canceled() {
             return Ok(None);
         }
@@ -247,7 +246,7 @@ impl Worker {
         }
     }
 
-    fn start(mut self, ct: Arc<CancellationToken>) -> thread::JoinHandle<anyhow::Result<()>> {
+    fn start(mut self, ct: CancellationToken) -> thread::JoinHandle<anyhow::Result<()>> {
         thread::spawn(move || {
             // First create a worktree for the worker. This is slow so it should be cancelable. git2
             // doesn't support canceling this operation, which is fine, the git CLI is a perfectly

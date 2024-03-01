@@ -63,10 +63,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed570934406eb16438a4e976b1b4500774099c13b8cb96eec99f620f05090ddf"
 
 [[package]]
-name = "cancellation"
+name = "cancellation-token"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7a879c84c21f354f13535f87ad119ac3be22ebb9097b552a0af6a78f86628c4"
+checksum = "34049173cb0fda9c2ce88e3bd4b48d84e8facf70a9ecf3dff1564ccb0b0cfefa"
+dependencies = [
+ "slabmap",
+]
 
 [[package]]
 name = "cc"
@@ -251,7 +254,7 @@ name = "local-ci"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cancellation",
+ "cancellation-token",
  "clap",
  "crossbeam-channel",
  "git2",
@@ -323,6 +326,12 @@ checksum = "291ec9ab5efd934aaf503a6466c5d5251535d108ee747472c3977cc5acc868ef"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "slabmap"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2d216050112c63bbf5f073e6bfdab3afd9d5779e9d24471e40b66b55d86ca04"
 
 [[package]]
 name = "strsim"
