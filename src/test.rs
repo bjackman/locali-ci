@@ -69,23 +69,24 @@ impl Manager {
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
     pub fn set_revisions(&mut self, revs: Vec<String>) {
-        let rev_set: collections::HashSet<&str> = revs.iter().map(|s| s.as_str()).collect();
+        let mut rev_set: collections::HashSet<&str> = revs.iter().map(|s| s.as_str()).collect();
         for (rev, cts) in &self.task_cts {
-            if !rev_set.contains(rev.as_str()) {
+            // We're already testing rev, so we don't need to kick it off below.
+            if !rev_set.remove(rev.as_str()){
+                // This rev is being tested but wasn't in rev_set.
                 cts.cancel();
             }
         }
 
-        // TODO: skip revs that are already running.
-        for rev in revs {
+        for rev in rev_set {
             let cts = CancellationTokenSource::new();
             let task = Arc::new(Task {
                 ct: cts.token(),
-                rev: rev.clone(),
+                rev: rev.to_string(),
                 program: self.program.clone(),
                 args: self.args.clone(),
             });
-            self.task_cts.insert(rev, cts);
+            self.task_cts.insert(rev.to_string(), cts);
             // At the moment I think this cannot fail because we never close the receiver. I guess
             // once the lifecycle of the manager is clearer perhaps we want to be able to return an
             // error here?
