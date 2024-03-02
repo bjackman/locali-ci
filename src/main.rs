@@ -1,8 +1,10 @@
 use clap::Parser as _;
 use std::collections;
 use std::str;
+use std::path::PathBuf;
 
 mod test;
+mod git;
 mod process;
 
 #[derive(clap::Parser)]
@@ -26,6 +28,7 @@ struct Args {
 fn do_main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    let _repo = git::Repo::open(PathBuf::from(&args.repo_path))?;
     let mut cmd = collections::VecDeque::from(args.cmd);
     let mut m = test::Manager::new(
         args.num_threads,
