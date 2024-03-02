@@ -1,10 +1,9 @@
-use anyhow::Context;
 use clap::Parser as _;
-use git2;
 use std::collections;
 use std::str;
 
 mod test;
+mod process;
 
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
@@ -26,22 +25,6 @@ struct Args {
 
 fn do_main() -> anyhow::Result<()> {
     let args = Args::parse();
-
-    let repo = git2::Repository::open(&args.repo_path).context("opening repo")?;
-    // https://www.youtube.com/watch?v=aS8O-F0ICxw
-    let head = repo.head().context("getting head")?;
-    println!("head: {}", str::from_utf8(head.name_bytes()).unwrap());
-    let (obj, reference) = repo
-        .revparse_ext(&args.base)
-        .context("parsing base revision")?;
-    println!(
-        "base: {:?}, {:?}",
-        obj,
-        reference.map_or("no ref".to_string(), |r| {
-            r.kind()
-                .map_or("no kind".to_string(), |kind| kind.to_string())
-        })
-    );
 
     let mut cmd = collections::VecDeque::from(args.cmd);
     let mut m = test::Manager::new(
