@@ -1,8 +1,10 @@
-use crate::process::CommandExt;
 use anyhow::{anyhow, Context};
+use async_stream::try_stream;
 use cancellation_token::CancellationTokenSource;
 use futures::{SinkExt as _, StreamExt as _};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+
+use crate::process::CommandExt;
 
 use futures_core::stream::Stream;
 
@@ -124,7 +126,7 @@ impl Repo {
         // in futures::executor::block_on. I think I could also use the debouncer even with the
         // async approach but I think then there would be a lot of unnecessary logic going on under
         // the hood, like I guess it probably spins up a thread.
-        let (mut tx, rx) = futures::channel::mpsc::unbounded();
+        let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
 
         // Automatically select the best implementation for your platform.
         // You can also access each implementation directly e.g. INotifyWatcher.
@@ -140,7 +142,13 @@ impl Repo {
         watcher
             .watch(&self.git_dir, RecursiveMode::Recursive)
             .context("setting up watcher")?;
-        Ok((watcher, rx.map(|_event| self.rev_list(range_spec))))
+        Ok((watcher, try_stream! {
+            while let Some(result) = rx.next().await {
+                result?;
+                yield self.rev_list(range_spec)?;
+            }
+            println!("watcher done");
+        }))
     }
 }
 

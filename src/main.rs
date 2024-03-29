@@ -4,6 +4,7 @@ use futures::StreamExt;
 use std::collections;
 use std::ffi::OsStr;
 use std::path::PathBuf;
+use std::pin::pin;
 use std::str;
 use tokio;
 
@@ -43,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
         Vec::from(cmd),
     );
     let (_watcher, mut revs_stream) = repo.watch_refs(&OsStr::new("HEAD^^^..HEAD"))?;
+    let mut revs_stream = pin!(revs_stream);
     while let Some(revs) = revs_stream.next().await {
         println!("update");
         // TODO: I wrote the manager using proper Strings, oops.
