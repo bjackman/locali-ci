@@ -1,9 +1,9 @@
 use crate::process::CommandExt;
 use anyhow::{anyhow, Context};
 use cancellation_token::CancellationTokenSource;
-use inotify::{Inotify, WatchMask};
+use futures::{SinkExt as _, StreamExt as _};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
-use futures::stream::StreamExt;
 use futures_core::stream::Stream;
 
 use std::ffi::{OsStr, OsString};
@@ -100,23 +100,47 @@ impl Repo {
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
     // on the channel with the new resolved spec.
+    //
+    // TODO: How do I hide the notify::RecommendedWatcher from the caller? They need to own it
+    // because otherwise it just gets dropped. I think I probably want to just move it into the
+    // object I return that implements Stream.
     pub fn watch_refs<'a>(
         &'a self,
         range_spec: &'a OsStr,
-    ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Vec<OsString>>> + 'a> {
-        // We use inotify directly because a) this code anyway doesn't work on Windows and b) the
-        // generic "notify" crate seems under-specified, you can't seem to mask off the events you
-        // don't care about.
-        let inotify = Inotify::init().context("inotify init")?;
-        inotify.watches().add(
-            &self.git_dir,
-            WatchMask::CREATE | WatchMask::DELETE | WatchMask::MODIFY,
+    ) -> anyhow::Result<(notify::RecommendedWatcher, impl Stream<Item = anyhow::Result<Vec<OsString>>> + 'a)> {
+        // Alternatives considered/attempted:
+        //
+        // - inotify (also fanotify) doesn't support recursively watching directories, whereas the
+        //   notify crate has convenient support for that.
+        // - The notify crate has convenient support for sending stuff directly down std::sync::mpsc
+        //   channels, and even has support for debouncing those events. However it seems like you
+        //   then need to create a whole additional channel if you wanna "map" the events to
+        //   something else, i.e. like we wannaho call rev_list here.
+        //
+        // Overall the idea of how to turn this into an async thingy comes from
+        // https://github.com/notify-rs/notify/blob/main/examples/async_monitor.rs, I am not sure if
+        // this is "real" or toy code that I should not have followed so literally, in particular I
+        // am not clear on the implications of taking the async send operation and just wrapping it
+        // in futures::executor::block_on. I think I could also use the debouncer even with the
+        // async approach but I think then there would be a lot of unnecessary logic going on under
+        // the hood, like I guess it probably spins up a thread.
+        let (mut tx, rx) = futures::channel::mpsc::unbounded();
+
+        // Automatically select the best implementation for your platform.
+        // You can also access each implementation directly e.g. INotifyWatcher.
+        let mut watcher = RecommendedWatcher::new(
+            move |res| {
+                futures::executor::block_on(async {
+                    // TODO: I am not sure what I am unwrapping here, when does the send fail?
+                    tx.send(res).await.unwrap();
+                })
+            },
+            Config::default(),
         )?;
-        let evt_buf = [0; 4096];
-        Ok(inotify
-            .into_event_stream(evt_buf)
-            .context("inotify event stream init")?
-            .map(|_e| self.rev_list(range_spec)))
+        watcher
+            .watch(&self.git_dir, RecursiveMode::Recursive)
+            .context("setting up watcher")?;
+        Ok((watcher, rx.map(|_event| self.rev_list(range_spec))))
     }
 }
 

@@ -30,7 +30,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn do_main() -> anyhow::Result<()> {
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let repo = git::Repo::open(PathBuf::from(&args.repo_path))
@@ -42,8 +42,9 @@ async fn do_main() -> anyhow::Result<()> {
         cmd.pop_front().unwrap(),
         Vec::from(cmd),
     );
-    let mut revs_stream = repo.watch_refs(&OsStr::new("HEAD^^^..HEAD"))?;
+    let (_watcher, mut revs_stream) = repo.watch_refs(&OsStr::new("HEAD^^^..HEAD"))?;
     while let Some(revs) = revs_stream.next().await {
+        println!("update");
         // TODO: I wrote the manager using proper Strings, oops.
         let revs = revs?
             .into_iter()
@@ -51,13 +52,7 @@ async fn do_main() -> anyhow::Result<()> {
             .collect();
         m.set_revisions(revs);
     }
+    println!("revset stream terminated");
     m.close();
-    return Ok(());
-}
-
-fn main() {
-    match do_main() {
-        Ok(()) => println!("OK!"),
-        Err(e) => println!("{:#}", e),
-    };
+    Ok(())
 }
