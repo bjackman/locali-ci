@@ -13,3 +13,5 @@ nix = { version = "0.28.0", features = ["process", "signal", "fs", "feature"] }
 cancellation-token = "0.1.0"
 tempfile = "3.10.1"
 inotify = "0.10.2"
+futures-core = "0.3.30"
+futures = "0.3.30"

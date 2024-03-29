@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::Parser as _;
 use std::collections;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::str;
 
@@ -29,7 +30,8 @@ struct Args {
 fn do_main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let _repo = git::Repo::open(PathBuf::from(&args.repo_path)).context(format!("opening repo {}", args.repo_path))?;
+    let repo = git::Repo::open(PathBuf::from(&args.repo_path))
+        .context(format!("opening repo {}", args.repo_path))?;
     let mut cmd = collections::VecDeque::from(args.cmd);
     let mut m = test::Manager::new(
         args.num_threads,
@@ -37,7 +39,10 @@ fn do_main() -> anyhow::Result<()> {
         cmd.pop_front().unwrap(),
         Vec::from(cmd),
     );
-    m.set_revisions(vec!["HEAD^^".to_string(), "HEAD^".to_string()]);
+    let revs_stream = repo.watch_refs(&OsStr::from("HEAD^^^..HEAD"));
+    while let Some(revs) = revs_stream.next().await {
+        m.set_revisions(revs);
+    }
     m.close();
     return Ok(());
 }

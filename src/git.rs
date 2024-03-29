@@ -1,13 +1,14 @@
 use crate::process::CommandExt;
 use anyhow::{anyhow, Context};
-use cancellation_token::{CancelCallback, CancellationToken};
+use cancellation_token::CancellationTokenSource;
 use inotify::{Inotify, WatchMask};
-use nix::unistd;
+
+use futures::stream::StreamExt;
+use futures_core::stream::Stream;
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
-use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::PathBuf;
 use std::process;
@@ -63,10 +64,15 @@ impl Repo {
         })
     }
 
-    fn rev_list(&self, ct: &CancellationToken, range_spec: &OsStr) -> anyhow::Result<Vec<OsString>> {
+    fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<OsString>> {
+        // TODO: use async command API to support cancellation and avoid blocking.
         let mut cmd = process::Command::new("git");
-        cmd.arg("-C").arg(&self.git_dir).arg("rev-list").arg(range_spec);
-        let output = cmd.output_not_killed(&ct)?;
+        cmd.arg("-C")
+            .arg(&self.git_dir)
+            .arg("rev-list")
+            .arg(range_spec);
+        let cts = CancellationTokenSource::new();
+        let output = cmd.output_not_killed(&cts.token())?;
         // Hack: empirically, rev-list returns 128 when the range is invalid, it's not documented
         // but hopefully this is stable behaviour that we're supposed to be able to rely on for
         // this...?
@@ -94,36 +100,20 @@ impl Repo {
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
     // on the channel with the new resolved spec.
-    pub fn watch_refs(
-        &self,
-        ct: CancellationToken,
-        range_spec: &OsStr,
-        tx: crossbeam_channel::Sender<Vec<OsString>>,
-    ) -> anyhow::Result<()> {
+    pub fn watch_refs<'a>(&'a self, range_spec: &'a OsStr) -> anyhow::Result<impl Stream + 'a> {
         // We use inotify directly because a) this code anyway doesn't work on Windows and b) the
         // generic "notify" crate seems under-specified, you can't seem to mask off the events you
         // don't care about.
-        let mut inotify = Inotify::init().context("inotify init")?;
+        let inotify = Inotify::init().context("inotify init")?;
         inotify.watches().add(
             &self.git_dir,
             WatchMask::CREATE | WatchMask::DELETE | WatchMask::MODIFY,
         )?;
-
-        // Terrible hack (?) to shut down the inotify reader from the cancelling thread.
-        let fd = inotify.as_raw_fd();
-        ct.register(CancelCallback::FnOnce(Box::new(move || {
-            unistd::close(fd).expect("shutting down inotify");
-        })));
-
-        let mut evt_buf = [0; 4096];
-        loop {
-            let err = inotify.read_events_blocking(&mut evt_buf);
-            if ct.is_canceled() {
-                return Ok(());
-            }
-            err?;
-            tx.send(self.rev_list(&ct, range_spec)?)?;
-        }
+        let evt_buf = [0; 4096];
+        Ok(inotify
+            .into_event_stream(evt_buf)
+            .context("inotify event stream init")?
+            .map(|_e| self.rev_list(range_spec)))
     }
 }
 
