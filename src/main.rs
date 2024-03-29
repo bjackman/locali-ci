@@ -1,11 +1,12 @@
+use anyhow::Context;
 use clap::Parser as _;
 use std::collections;
-use std::str;
 use std::path::PathBuf;
+use std::str;
 
-mod test;
 mod git;
 mod process;
+mod test;
 
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
@@ -28,7 +29,7 @@ struct Args {
 fn do_main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let _repo = git::Repo::open(PathBuf::from(&args.repo_path))?;
+    let _repo = git::Repo::open(PathBuf::from(&args.repo_path)).context(format!("opening repo {}", args.repo_path))?;
     let mut cmd = collections::VecDeque::from(args.cmd);
     let mut m = test::Manager::new(
         args.num_threads,

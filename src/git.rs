@@ -19,7 +19,7 @@ pub struct Repo {
 
 impl Repo {
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
-        let mut git_file = File::open(&path.join(".git"))?;
+        let mut git_file = File::open(&path.join(".git")).context("opening .git")?;
         if git_file.metadata()?.file_type().is_dir() {
             return Ok(Repo { git_dir: path });
         }
