@@ -100,7 +100,10 @@ impl Repo {
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
     // on the channel with the new resolved spec.
-    pub fn watch_refs<'a>(&'a self, range_spec: &'a OsStr) -> anyhow::Result<impl Stream + 'a> {
+    pub fn watch_refs<'a>(
+        &'a self,
+        range_spec: &'a OsStr,
+    ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Vec<OsString>>> + 'a> {
         // We use inotify directly because a) this code anyway doesn't work on Windows and b) the
         // generic "notify" crate seems under-specified, you can't seem to mask off the events you
         // don't care about.

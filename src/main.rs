@@ -1,9 +1,11 @@
 use anyhow::Context;
 use clap::Parser as _;
+use futures::StreamExt;
 use std::collections;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::str;
+use tokio;
 
 mod git;
 mod process;
@@ -27,7 +29,8 @@ struct Args {
     cmd: Vec<String>,
 }
 
-fn do_main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn do_main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let repo = git::Repo::open(PathBuf::from(&args.repo_path))
@@ -39,8 +42,13 @@ fn do_main() -> anyhow::Result<()> {
         cmd.pop_front().unwrap(),
         Vec::from(cmd),
     );
-    let revs_stream = repo.watch_refs(&OsStr::from("HEAD^^^..HEAD"));
+    let mut revs_stream = repo.watch_refs(&OsStr::new("HEAD^^^..HEAD"))?;
     while let Some(revs) = revs_stream.next().await {
+        // TODO: I wrote the manager using proper Strings, oops.
+        let revs = revs?
+            .into_iter()
+            .map(|os_string| os_string.into_string().unwrap())
+            .collect();
         m.set_revisions(revs);
     }
     m.close();
