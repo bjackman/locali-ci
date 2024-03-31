@@ -4,18 +4,21 @@ use crossbeam_channel;
 use nix::unistd::mkdtemp;
 use std::collections;
 use std::env;
+use std::ffi::OsStr;
 use std::panic;
 use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
 use std::thread;
+
+use crate::git::RevSpec;
 use crate::process::CommandExt;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     join_handles: Vec<thread::JoinHandle<anyhow::Result<()>>>,
     chan_tx: crossbeam_channel::Sender<Arc<Task>>,
-    task_cts: collections::HashMap<String, CancellationTokenSource>,
+    task_cts: collections::HashMap<RevSpec, CancellationTokenSource>,
     program: Arc<String>,
     args: Arc<Vec<String>>,
 }
@@ -66,11 +69,12 @@ impl Manager {
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
-    pub fn set_revisions(&mut self, revs: Vec<String>) {
-        let mut rev_set: collections::HashSet<&str> = revs.iter().map(|s| s.as_str()).collect();
+    pub fn set_revisions(&mut self, revs: Vec<RevSpec>) {
+        let mut rev_set: collections::HashSet<&OsStr> =
+            revs.iter().map(|s| s.as_os_str()).collect();
         for (rev, cts) in &self.task_cts {
             // We're already testing rev, so we don't need to kick it off below.
-            if !rev_set.remove(rev.as_str()){
+            if !rev_set.remove(rev.as_os_str()) {
                 // This rev is being tested but wasn't in rev_set.
                 cts.cancel();
             }
@@ -80,11 +84,11 @@ impl Manager {
             let cts = CancellationTokenSource::new();
             let task = Arc::new(Task {
                 ct: cts.token(),
-                rev: rev.to_string(),
+                rev: rev.to_os_string(),
                 program: self.program.clone(),
                 args: self.args.clone(),
             });
-            self.task_cts.insert(rev.to_string(), cts);
+            self.task_cts.insert(rev.to_os_string(), cts);
             // At the moment I think this cannot fail because we never close the receiver. I guess
             // once the lifecycle of the manager is clearer perhaps we want to be able to return an
             // error here?
@@ -102,7 +106,7 @@ struct Task {
     // TODO: I made this a String instead of &str, because the lifetime of the str would need to be
     // the lifetime of the task - but that lifetime is not really visible to the user of the
     // Manager. Am I being silly here or is this just the practical way?
-    rev: String,
+    rev: RevSpec,
     ct: CancellationToken,
     // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
     // just make these references to a value owned by the Manager (basically same comment as for
@@ -115,7 +119,8 @@ impl Task {
     fn run(&self, worktree: &PathBuf) -> anyhow::Result<process::Output> {
         let mut checkout_cmd = process::Command::new("git");
         checkout_cmd
-            .args(["checkout", &self.rev])
+            .arg("checkout")
+            .arg(&self.rev)
             .current_dir(worktree)
             .output_ok(&self.ct)?;
 
@@ -162,7 +167,7 @@ impl Worker {
                 let result = task.run(&path);
                 // TODO: Clean up this mess
                 println!(
-                    "worker {} rev {} -> {:#}",
+                    "worker {} rev {:?} -> {:#}",
                     self.id,
                     task.rev,
                     match result {

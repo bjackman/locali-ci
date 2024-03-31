@@ -1,13 +1,12 @@
 use anyhow::{anyhow, Context};
-use tokio::time::sleep;
 use async_stream::try_stream;
 use cancellation_token::CancellationTokenSource;
-use futures::{FutureExt, future::Fuse, select, SinkExt as _, StreamExt as _};
+use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use tokio::time::sleep;
 
 use crate::process::CommandExt;
-
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -28,6 +27,10 @@ use std::time::Duration;
 pub struct Repo {
     git_dir: PathBuf,
 }
+
+// Here we don't use the newtype pattern because we actually wanna be able to leak useful features
+// of OsString.
+pub type RevSpec = OsString;
 
 impl Repo {
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
@@ -69,7 +72,7 @@ impl Repo {
         })
     }
 
-    fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<OsString>> {
+    fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
         // TODO: use async command API to support cancellation and avoid blocking.
         let mut cmd = process::Command::new("git");
         cmd.arg("-C")
@@ -114,7 +117,7 @@ impl Repo {
         range_spec: &'a OsStr,
     ) -> anyhow::Result<(
         notify::RecommendedWatcher,
-        impl Stream<Item = anyhow::Result<Vec<OsString>>> + 'a,
+        impl Stream<Item = anyhow::Result<Vec<RevSpec>>> + 'a,
     )> {
         // Alternatives considered/attempted:
         //

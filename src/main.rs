@@ -50,7 +50,6 @@ async fn main() -> anyhow::Result<()> {
         // TODO: I wrote the manager using proper Strings, oops.
         let revs = revs?
             .into_iter()
-            .map(|os_string| os_string.into_string().unwrap())
             .collect();
         m.set_revisions(revs);
     }
