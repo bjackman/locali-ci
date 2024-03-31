@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use async_std::task::sleep;
+use tokio::time::sleep;
 use async_stream::try_stream;
 use cancellation_token::CancellationTokenSource;
 use futures::{FutureExt, future::Fuse, select, SinkExt as _, StreamExt as _};
@@ -166,8 +166,7 @@ impl Repo {
                                         sleep_fut.set(sleep(Duration::from_secs(1)).fuse());
                                     }
                                 },
-                                // TODO: Do I really understand if this can happen? I think maybe
-                                // not.
+                                // TODO: Do I really understand if this can happen? I think maybe not.
                                 None  => break,
                             }
                         },
