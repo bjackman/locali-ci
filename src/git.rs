@@ -1,19 +1,22 @@
 use anyhow::{anyhow, Context};
+use async_std::task::sleep;
 use async_stream::try_stream;
 use cancellation_token::CancellationTokenSource;
-use futures::{SinkExt as _, StreamExt as _};
+use futures::{FutureExt, future::Fuse, select, SinkExt as _, StreamExt as _};
+use futures_core::{stream::Stream, FusedFuture};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::process::CommandExt;
 
-use futures_core::stream::Stream;
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::PathBuf;
+use std::pin::pin;
 use std::process;
+use std::time::Duration;
 
 // This module contains horribly manual git logic. This is manual for two main reasons:
 // - We need to be able to get notified of changes to ranges, this is not something that git
@@ -109,7 +112,10 @@ impl Repo {
     pub fn watch_refs<'a>(
         &'a self,
         range_spec: &'a OsStr,
-    ) -> anyhow::Result<(notify::RecommendedWatcher, impl Stream<Item = anyhow::Result<Vec<OsString>>> + 'a)> {
+    ) -> anyhow::Result<(
+        notify::RecommendedWatcher,
+        impl Stream<Item = anyhow::Result<Vec<OsString>>> + 'a,
+    )> {
         // Alternatives considered/attempted:
         //
         // - inotify (also fanotify) doesn't support recursively watching directories, whereas the
@@ -128,8 +134,6 @@ impl Repo {
         // the hood, like I guess it probably spins up a thread.
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
 
-        // Automatically select the best implementation for your platform.
-        // You can also access each implementation directly e.g. INotifyWatcher.
         let mut watcher = RecommendedWatcher::new(
             move |res| {
                 futures::executor::block_on(async {
@@ -142,13 +146,35 @@ impl Repo {
         watcher
             .watch(&self.git_dir, RecursiveMode::Recursive)
             .context("setting up watcher")?;
-        Ok((watcher, try_stream! {
-            while let Some(result) = rx.next().await {
-                result?;
-                yield self.rev_list(range_spec)?;
-            }
-            println!("watcher done");
-        }))
+
+        // This logic "debounces" consecutive events within the same 1s window, to avoid thrashing
+        // on the downstream logic as Git works its way through changes.
+        Ok((
+            watcher,
+            try_stream! {
+                // Start with an expired timer.
+                let mut sleep_fut = pin!(Fuse::terminated());
+                loop {
+                    select! {
+                        // Produce an update when the timer expires.
+                        () = sleep_fut =>  yield self.rev_list(range_spec)?,
+                        // Ensure the timer is set when we see an update.
+                        maybe_result = rx.next() => {
+                            match maybe_result {
+                                Some(_result) => {
+                                    if sleep_fut.is_terminated() {
+                                        sleep_fut.set(sleep(Duration::from_secs(1)).fuse());
+                                    }
+                                },
+                                // TODO: Do I really understand if this can happen? I think maybe
+                                // not.
+                                None  => break,
+                            }
+                        },
+                    }
+                }
+            },
+        ))
     }
 }
 
