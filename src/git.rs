@@ -1,21 +1,20 @@
-use anyhow::{anyhow, Context};
-use async_stream::try_stream;
-use cancellation_token::CancellationTokenSource;
-use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
-use futures_core::{stream::Stream, FusedFuture};
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use tokio::time::sleep;
-
-use crate::process::CommandExt;
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::process;
 use std::time::Duration;
+
+use anyhow::{anyhow, Context};
+use async_stream::try_stream;
+use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
+use futures_core::{stream::Stream, FusedFuture};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use tokio::process::Command;
+use tokio::time::sleep;
+
+use crate::process::CommandExt;
 
 // This module contains horribly manual git logic. This is manual for two main reasons:
 // - We need to be able to get notified of changes to ranges, this is not something that git
@@ -72,15 +71,14 @@ impl Repo {
         })
     }
 
-    fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
+    async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
         // TODO: use async command API to support cancellation and avoid blocking.
-        let mut cmd = process::Command::new("git");
+        let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.git_dir)
             .arg("rev-list")
             .arg(range_spec);
-        let cts = CancellationTokenSource::new();
-        let output = cmd.output_not_killed(&cts.token())?;
+        let output = cmd.output_not_killed().await?;
         // Hack: empirically, rev-list returns 128 when the range is invalid, it's not documented
         // but hopefully this is stable behaviour that we're supposed to be able to rely on for
         // this...?
@@ -160,7 +158,7 @@ impl Repo {
                 loop {
                     select! {
                         // Produce an update when the timer expires.
-                        () = sleep_fut =>  yield self.rev_list(range_spec)?,
+                        () = sleep_fut =>  yield self.rev_list(range_spec).await?,
                         // Ensure the timer is set when we see an update.
                         maybe_result = rx.next() => {
                             match maybe_result {

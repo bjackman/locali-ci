@@ -1,9 +1,4 @@
-use anyhow::{anyhow, Context};
-use cancellation_token;
-use cancellation_token::{CancelCallback, CancellationToken};
-use nix::errno::Errno;
-use nix::sys::signal;
-use nix::unistd::Pid;
+use anyhow::anyhow;
 use std::error;
 use std::fmt;
 use std::os::unix::process::ExitStatusExt;
@@ -14,16 +9,13 @@ use std::process;
 // normal process API usage. Since this is partly a learning project, I'll do the fancy thing and
 // if it turns out to be too clever I'll have learned a lesson.
 pub trait CommandExt {
-    // Like std::process::Command::output, but SIGINTs the child if the token is canceled. Also
-    // unconditionally captures stderr and stdout.
-    fn output_ct(&mut self, ct: &CancellationToken) -> anyhow::Result<process::Output>;
     // Like the above, but fails if the process is terminated by a signal.
-    fn output_not_killed(&mut self, ct: &CancellationToken) -> anyhow::Result<process::Output>;
+    async fn output_not_killed(&mut self) -> anyhow::Result<process::Output>;
     // Like the above, but also fails if the process exits with a non-zero return code.
     // This is a convenience hack, somewhat like
     // std::process::ExitStatus::exit_ok, but it's more informative. Arguably we
     // should have a ExitStatusExt for that rather than just squashing it into CommandExt.
-    fn output_ok(&mut self, ct: &CancellationToken) -> anyhow::Result<()>;
+    async fn output_ok(&mut self) -> anyhow::Result<()>;
 }
 
 // cancellation_token::Canceled doesn't implement std::errorr::Error so we can't put it into an
@@ -59,31 +51,10 @@ impl error::Error for Canceled {
     }
 }
 
-impl CommandExt for process::Command {
-    fn output_ct(&mut self, ct: &CancellationToken) -> anyhow::Result<process::Output> {
-        self.stderr(process::Stdio::piped());
-        self.stdout(process::Stdio::piped());
-        let child = self.spawn().context("spawning child process")?;
-
-        let pid = Pid::from_raw(child.id() as i32);
-        let _ct_reg = ct.register(CancelCallback::FnOnce(Box::new(move || {
-            match signal::kill(pid, signal::SIGINT) {
-                Ok(_) => (),
-                Err(Errno::ESRCH) => (), // The process probably just terminated.
-                // TODO logging to a sensible place?
-                Err(errno) => println!("Couldn't kill pid {}: {}", pid, errno.desc()),
-            }
-        })));
-
-        let output = child.wait_with_output().context("awaiting child")?;
-        if ct.is_canceled() {
-            return Err(anyhow::Error::new(Canceled {}));
-        }
-        return Ok(output);
-    }
-
-    fn output_not_killed(&mut self, ct: &CancellationToken) -> anyhow::Result<process::Output> {
-        let output = self.output_ct(ct)?;
+impl CommandExt for tokio::process::Command {
+    // Returns the Output, but fails if the child was killed by a signal.
+    async fn output_not_killed(&mut self) -> anyhow::Result<process::Output> {
+        let output = self.output().await?;
         match output.status.code() {
             None => Err(anyhow!(
                 "terminated by signal {}",
@@ -96,8 +67,8 @@ impl CommandExt for process::Command {
         }
     }
 
-    fn output_ok(&mut self, ct: &CancellationToken) -> anyhow::Result<()> {
-        let output = self.output_not_killed(ct)?;
+    async fn output_ok(&mut self) -> anyhow::Result<()> {
+        let output = self.output_not_killed().await?;
         match output.status.code().unwrap() {
             0 => Ok(()),
             code => Err(anyhow!(

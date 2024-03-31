@@ -2,7 +2,7 @@ use anyhow::Context;
 use clap::Parser as _;
 use futures::StreamExt;
 use std::collections;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::pin::pin;
 use std::str;
@@ -15,6 +15,9 @@ mod test;
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    // TODO: Don't require valid utf-8 strings here, OsStrings shoud be fine. But
+    // https://stackoverflow.com/questions/76341332/clap-default-value-for-pathbuf
+
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo_path: String,
     /// Maximum number of tests to run concurrently. Each concurrent thread
@@ -40,9 +43,9 @@ async fn main() -> anyhow::Result<()> {
     let mut m = test::Manager::new(
         args.num_threads,
         args.repo_path,
-        cmd.pop_front().unwrap(),
-        Vec::from(cmd),
-    );
+        OsString::from(cmd.pop_front().unwrap()),
+        cmd.iter().map(OsString::from).collect(),
+    ).await;
     let (_watcher, mut revs_stream) = repo.watch_refs(&OsStr::new("HEAD^^^..HEAD"))?;
     let mut revs_stream = pin!(revs_stream);
     while let Some(revs) = revs_stream.next().await {
@@ -51,9 +54,8 @@ async fn main() -> anyhow::Result<()> {
         let revs = revs?
             .into_iter()
             .collect();
-        m.set_revisions(revs);
+        m.set_revisions(revs).await;
     }
     println!("revset stream terminated");
-    m.close();
     Ok(())
 }
