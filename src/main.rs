@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let mut cmd = collections::VecDeque::from(args.cmd);
     let mut m = test::Manager::new(
         args.num_threads,
-        args.repo_path,
+        args.repo_path.as_ref(),
         OsString::from(cmd.pop_front().unwrap()),
         cmd.iter().map(OsString::from).collect(),
     ).await;

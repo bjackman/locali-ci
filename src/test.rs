@@ -1,8 +1,7 @@
 use std::collections;
 use std::collections::HashMap;
-use std::env;
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
 
@@ -11,12 +10,11 @@ use anyhow::Context;
 use async_channel;
 use futures::future::join_all;
 use futures::StreamExt;
-use nix::unistd::mkdtemp;
 use tokio::process::Command;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::git::RevSpec;
+use crate::git::{TempWorktree, RevSpec};
 use crate::process::OutputExt;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
@@ -32,23 +30,20 @@ impl Manager {
     // Starts the workers. You must call close() before dropping it.
     //
     // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
-    // TODO: Get rid of String
     pub async fn new(
         num_threads: u32,
-        repo_path: String,
+        repo_path: &Path,
         program: OsString,
         args: Vec<OsString>,
     ) -> Self {
         let (chan_tx, chan_rx) = async_channel::unbounded();
-        let repo_path = Arc::new(repo_path);
         let join_handles = join_all((1..num_threads).map(|i| {
             let worker = Worker {
                 id: i,
-                repo_path: repo_path.clone(),
                 chan_rx: chan_rx.clone(),
             };
 
-            worker.start()
+            worker.start(repo_path.into())
         }))
         .await;
         // .collect::<Vec<Future<Output = JoinHandle<anyhow::Result<()>>>>>(),
@@ -111,14 +106,15 @@ struct Job {
 }
 
 impl Job {
-    async fn run(&self, worktree: &PathBuf) -> anyhow::Result<std::process::Output> {
+    async fn run(&self, worktree: &Path) -> anyhow::Result<std::process::Output> {
         let mut checkout_cmd = Command::new("git");
         checkout_cmd
             .arg("checkout")
             .arg(&self.rev)
             .current_dir(worktree)
             .output()
-            .await?.ok()?;
+            .await?
+            .ok()?;
 
         let mut cmd = Command::new(&*self.program);
         // TODO: Is that stupid-looking &* a smell that I'm doing something stupid?
@@ -131,30 +127,21 @@ impl Job {
 // and runs them.
 struct Worker {
     id: u32,
-    repo_path: Arc<String>,
     chan_rx: async_channel::Receiver<Job>,
 }
 
 impl Worker {
-    async fn start(self) -> JoinHandle<anyhow::Result<()>> {
+    async fn start(self, repo_path: PathBuf) -> JoinHandle<anyhow::Result<()>> {
         tokio::spawn(async move {
             // TODO: Make async
-            let path = mkdtemp(&env::temp_dir().join("local-ci-XXXXXX"))
-                .context("mkdtemp for worktree")?;
-
-            let mut cmd = Command::new("git");
-            cmd.args(["worktree", "add"])
-                .arg(&path)
-                .arg("HEAD")
-                .current_dir(&*self.repo_path)
-                .output()
+            // TODO: Where do we handle failure of this?
+            let worktree = TempWorktree::new(repo_path)
                 .await
-                .ok()
-                .context("setting up worktree")?;
+                .context("setting up worker")?;
 
             let mut rx = pin!(self.chan_rx);
             while let Some(job) = rx.next().await {
-                let result = job.run(&path);
+                let result = job.run(worktree.path());
                 // TODO: Clean up this mess
                 println!(
                     "worker {} rev {:?} -> {:#}",

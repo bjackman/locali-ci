@@ -1,6 +1,6 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use std::os::unix::process::ExitStatusExt as _;
-use std::process::Output;
+use std::process::{Command, Output};
 
 pub trait OutputExt {
     // Returns exit code, fails verbosely if the process was killed by a signal.
@@ -8,7 +8,6 @@ pub trait OutputExt {
     // Fails verbosely unless the command completed successfully
     // TODO: Is ok a bad name for this? Clashes with Option::ok.
     fn ok(&self) -> anyhow::Result<()>;
-
 }
 
 impl OutputExt for Output {
@@ -33,5 +32,16 @@ impl OutputExt for Output {
                 self.stdout,
             )),
         }
+    }
+}
+
+pub trait CommandExt {
+    // Run a command and fail informatively if anything at all goes wrong.
+    fn execute(&mut self) -> anyhow::Result<()>;
+}
+
+impl CommandExt for Command {
+    fn execute(&mut self) -> anyhow::Result<()> {
+        self.output().context("couldn't run command")?.ok()
     }
 }

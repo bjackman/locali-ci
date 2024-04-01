@@ -2,8 +2,9 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::pin;
+use std::process::Command as SyncCommand;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -11,10 +12,11 @@ use async_stream::try_stream;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::sleep;
 
-use crate::process::OutputExt;
+use crate::process::{CommandExt, OutputExt};
 
 // This module contains horribly manual git logic. This is manual for two main reasons:
 // - We need to be able to get notified of changes to ranges, this is not something that git
@@ -32,6 +34,7 @@ pub struct Repo {
 pub type RevSpec = OsString;
 
 impl Repo {
+    // TODO: Make async.
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let mut git_file = File::open(&path.join(".git")).context("opening .git")?;
         if git_file.metadata()?.file_type().is_dir() {
@@ -178,6 +181,56 @@ impl Repo {
     }
 }
 
+// A worktree that is deleted when dropped. This is kind of a dumb API that just happens to fit this
+// project's exact needs. Instead probably Repo::new and this method should return a common trait or
+// something.
+pub struct TempWorktree {
+    // TODO: It would be nice if we didn't have to own a copy of this PathBuf, but lifetimes are
+    // tricky!
+    repo_path: PathBuf, // Origin repo
+    temp_dir: TempDir,  // Location of worktree
+}
+
+impl TempWorktree {
+    pub async fn new(repo_path: PathBuf) -> anyhow::Result<Self> {
+        // Not doing this async because I assume it's fast, there is no white-glove support, and the
+        // drop will have to be synchronous anyway.
+        let temp_dir = TempDir::new().context("creating temp dir")?;
+
+        let mut cmd = Command::new("git");
+        cmd.args(["worktree", "add"])
+            .arg(temp_dir.path())
+            .arg("HEAD")
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .ok()
+            .context("setting up worktree")?;
+
+        Ok(Self {
+            repo_path,
+            temp_dir,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        self.temp_dir.path()
+    }
+}
+
+impl Drop for TempWorktree {
+    fn drop(&mut self) {
+        let mut cmd = SyncCommand::new("git");
+        cmd.args(["worktree", "remove"])
+            .arg(&self.temp_dir.path())
+            .current_dir(&self.repo_path)
+            .execute()
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
+            });
+    }
+}
+
 trait OsStrExt {
     fn split_lines(&self) -> Vec<&OsStr>;
 }
@@ -215,7 +268,6 @@ mod tests {
 
     use std::io::Write;
     use std::path::Path;
-    use std::process;
     use tempfile::TempDir;
 
     #[test]
@@ -246,7 +298,7 @@ mod tests {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut cmd = process::Command::new("git");
+        let mut cmd = SyncCommand::new("git");
         cmd.arg("-C").arg(path).args(args);
         cmd.output().ok().expect("git command failed");
     }
@@ -266,7 +318,7 @@ mod tests {
         println!("tmp_dir {:?} worktree {:?}", tmp_dir, worktree);
         must_git(tmp_dir.path(), ["init"]);
         must_git(tmp_dir.path(), ["commit", "--allow-empty", "-m", "foo"]);
-        let mut cmd = process::Command::new("git");
+        let mut cmd = SyncCommand::new("git");
         cmd.arg("-C")
             .arg(tmp_dir.path())
             .args(["worktree", "add"])
