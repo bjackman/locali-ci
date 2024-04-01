@@ -16,9 +16,9 @@ use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::sleep;
 
-use crate::process::{OutputExt, SyncCommandExt};
 #[cfg(test)]
 use crate::process::CommandExt;
+use crate::process::{OutputExt, SyncCommandExt};
 
 // This module contains horribly manual git logic. This is manual for two main reasons:
 // - We need to be able to get notified of changes to ranges, this is not something that git
@@ -41,7 +41,7 @@ pub type CommitHash = String;
 impl Repo {
     // TODO: Make async.
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
-        let mut git_file = File::open(&path.join(".git")).context("opening .git")?;
+        let mut git_file = File::open(path.join(".git")).context("opening .git")?;
         if git_file.metadata()?.file_type().is_dir() {
             return Ok(Repo { git_dir: path });
         }
@@ -63,14 +63,14 @@ impl Repo {
             "{:?} not a worktree path (no parent)",
             path
         )))?;
-        if worktrees_path.file_name() != Some(&OsStr::new("worktrees")) {
+        if worktrees_path.file_name() != Some(OsStr::new("worktrees")) {
             return Err(anyhow!(format!("{:?} not a worktrees path", path)))?;
         }
         let git_path = worktrees_path.parent().ok_or(anyhow!(format!(
             "{:?} not a worktree path (no parent)",
             path
         )))?;
-        let git_file = File::open(&git_path).context(format!("open worktree origin {:?}", path))?;
+        let git_file = File::open(git_path).context(format!("open worktree origin {:?}", path))?;
         if !git_file.metadata()?.file_type().is_dir() {
             return Err(anyhow!(format!("not a git repository: {:?}", path)));
         }
@@ -266,7 +266,7 @@ impl Drop for TempWorktree {
     fn drop(&mut self) {
         let mut cmd = SyncCommand::new("git");
         cmd.args(["worktree", "remove"])
-            .arg(&self.temp_dir.path())
+            .arg(self.temp_dir.path())
             .current_dir(&self.repo_path)
             .execute()
             .unwrap_or_else(|e| {
@@ -295,11 +295,9 @@ impl OsStrExt for OsStr {
                     ret.push(OsStr::from_bytes(&sb[start..i]));
                     in_line = false;
                 }
-            } else {
-                if sb[i] != b'\n' {
-                    start = i;
-                    in_line = true;
-                }
+            } else if sb[i] != b'\n' {
+                start = i;
+                in_line = true;
             }
         }
         if in_line {

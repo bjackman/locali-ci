@@ -6,8 +6,6 @@ use std::pin::pin;
 use std::sync::Arc;
 
 use anyhow::Context;
-// Tokio's multiple-consumer channels only support broadcast where each receiver gets every message.
-use async_channel;
 use futures::future::{join_all, select_all, SelectAll};
 use futures::StreamExt;
 use log::info;
@@ -80,7 +78,7 @@ impl Manager {
             let ct = CancellationToken::new();
             self.job_cts.insert(rev.to_os_string(), ct.clone());
             let job = Job {
-                ct: ct.clone(),
+                _ct: ct.clone(),
                 rev: rev.to_os_string(),
                 program: self.program.clone(),
                 args: self.args.clone(),
@@ -93,7 +91,10 @@ impl Manager {
                 (result, _, _) = &mut self.worker_shutdown => {
                     result.expect("select failed").context("worker thread shut down")
                 },
-                result = self.chan_tx.send(job) => Ok(result.expect("channel send failed"))
+                result = self.chan_tx.send(job) => {
+                    result.expect("channel send failed");
+                    Ok(())
+                }
             )?
         }
         Ok(())
@@ -110,7 +111,8 @@ struct Job {
     // the lifetime of the task - but that lifetime is not really visible to the user of the
     // Manager. Am I being silly here or is this just the practical way?
     rev: RevSpec,
-    ct: CancellationToken,
+    // TODO: Implement cancellation.
+    _ct: CancellationToken,
     // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
     // just make these references to a value owned by the Manager (basically same comment as for
     // .rev)
@@ -140,6 +142,8 @@ impl Job {
 // and runs them.
 struct Worker {
     id: u32,
+    // Tokio's multiple-consumer channels only support broadcast where each receiver gets every
+    // message.
     chan_rx: async_channel::Receiver<Job>,
 }
 

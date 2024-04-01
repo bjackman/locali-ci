@@ -6,7 +6,6 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::pin::pin;
 use std::str;
-use tokio;
 
 mod git;
 mod process;
@@ -48,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
         OsString::from(cmd.pop_front().unwrap()),
         cmd.iter().map(OsString::from).collect(),
     ).await;
-    let (_watcher, mut revs_stream) = repo.watch_refs(&OsStr::new("HEAD^^^..HEAD"))?;
+    let (_watcher, mut revs_stream) = repo.watch_refs(OsStr::new("HEAD^^^..HEAD"))?;
     let mut revs_stream = pin!(revs_stream);
     while let Some(revs) = revs_stream.next().await {
         println!("update");
