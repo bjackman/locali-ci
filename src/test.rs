@@ -182,14 +182,23 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use tempfile::TempDir;
     use test_log;
+    use tokio::time::{interval, sleep};
 
     use crate::git::Repo;
 
     use super::*;
+
+    // Blocks until file exists, the dumb way.
+    async fn file_exists(path: &Path) {
+        let mut interval = interval(Duration::from_millis(10));
+        while !path.try_exists().unwrap() {
+            interval.tick().await;
+        }
+    }
 
     #[test_log::test(tokio::test)]
     async fn test_cancellation() {
@@ -208,14 +217,14 @@ mod tests {
             vec!["-c".into(), script.into()],
         )
         .await;
-        m.set_revisions(vec!["HEAD".into()]).await.expect("couldn't set_revisions");
+        m.set_revisions(vec!["HEAD".into()])
+            .await
+            .expect("couldn't set_revisions");
         // TODO: Instead of watching until we see the command being done, ask the manager when it's
         // stable.
-        let start = Instant::now();
-        while !started_path.try_exists().unwrap() {
-            if Instant::now().duration_since(start) > Duration::from_secs(1) {
-                panic!("script did not run after 1s")
-            }
-        }
+        select!(
+            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
+            _ = file_exists(&started_path) => (),
+        )
     }
 }
