@@ -37,6 +37,8 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    env_logger::init();
+
     let repo = git::Repo::open(PathBuf::from(&args.repo_path))
         .context(format!("opening repo {}", args.repo_path))?;
     let mut cmd = collections::VecDeque::from(args.cmd);

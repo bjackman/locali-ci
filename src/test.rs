@@ -163,12 +163,13 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use tempfile::TempDir;
+    use test_log;
 
     use crate::git::Repo;
 
     use super::*;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_cancellation() {
         let temp_dir = TempDir::new().expect("couldn't make tempdir");
         let repo = Repo::init(temp_dir.path().into())
