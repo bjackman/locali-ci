@@ -18,39 +18,6 @@ pub trait CommandExt {
     async fn output_ok(&mut self) -> anyhow::Result<()>;
 }
 
-// cancellation_token::Canceled doesn't implement std::errorr::Error so we can't put it into an
-// anyhow error. Here's a custom error type that we can.
-//
-// TODO: Maybe it's dumb to squash cancellation status into the error band. Should we nest
-// MayBeCanceled with Result, or just return an Option which is None under cancellation? That would
-// be pretty un-ergonomic in cases where we don't expect cancellation though.=
-#[derive(Debug)]
-pub struct Canceled {}
-
-impl fmt::Display for Canceled {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // Write strictly the first element into the supplied output
-        // stream: `f`. Returns `fmt::Result` which indicates whether the
-        // operation succeeded or failed. Note that `write!` uses syntax which
-        // is very similar to `println!`.
-        write!(f, "canceled")
-    }
-}
-
-impl error::Error for Canceled {
-    // If we integrated properly with the cancellation library it would be cool to report the token
-    // hierarchy here.
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        None
-    }
-    fn description(&self) -> &str {
-        "token canceled"
-    }
-    fn cause(&self) -> Option<&dyn error::Error> {
-        None
-    }
-}
-
 impl CommandExt for tokio::process::Command {
     // Returns the Output, but fails if the child was killed by a signal.
     async fn output_not_killed(&mut self) -> anyhow::Result<process::Output> {
