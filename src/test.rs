@@ -1,20 +1,20 @@
 use std::collections;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
 
 use anyhow::Context;
 use futures::future::{join_all, select_all, SelectAll};
 use futures::StreamExt;
-use log::info;
+use log::{info, warn};
 use tokio::process::Command;
 use tokio::select;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::git::{RevSpec, TempWorktree};
+use crate::git::{RevSpec, Worktree};
 use crate::process::OutputExt;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
@@ -32,7 +32,7 @@ impl Manager {
     // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
     pub async fn new(
         num_threads: u32,
-        repo_path: &Path,
+        repo: &Worktree,
         program: OsString,
         args: Vec<OsString>,
     ) -> Self {
@@ -43,7 +43,7 @@ impl Manager {
                 chan_rx: chan_rx.clone(),
             };
 
-            worker.start(repo_path.into())
+            worker.start(repo)
         }))
         .await;
 
@@ -131,7 +131,10 @@ impl Job {
             .output()
             .await?
             .ok())
-        .context(format!("checking out revision {:?} in {:?}", self.rev, worktree))?;
+        .context(format!(
+            "checking out revision {:?} in {:?}",
+            self.rev, worktree
+        ))?;
 
         let mut cmd = Command::new(&*self.program);
         // TODO: Is that stupid-looking &* a smell that I'm doing something stupid?
@@ -150,12 +153,21 @@ struct Worker {
 }
 
 impl Worker {
-    async fn start(self, repo_path: PathBuf) -> JoinHandle<anyhow::Result<()>> {
+    // TODO: Need to log somewhere immediately when the worker hits an irrecoverable error.
+    async fn start(self, repo: &Worktree) -> JoinHandle<anyhow::Result<()>> {
+        // TODO: How can I get the repo path into the worker task more cleanly than this?
+        let repo_path = repo.path.clone();
         tokio::spawn(async move {
             // TODO: Where do we handle failure of this?
-            let worktree = TempWorktree::new(repo_path)
+            let repo = Worktree { path: repo_path };
+            let worktree = repo
+                .temp_worktree()
                 .await
-                .context("setting up worker")?;
+                .context("setting up worker")
+                .map_err(|e| {
+                    warn!("{:#}", e);
+                    e
+                })?;
 
             info!(
                 "Worker {} started, working in {:?}",
@@ -203,6 +215,7 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
+    // TODO: this doesn't actually test cancellation lmao
     async fn test_cancellation() {
         let temp_dir = TempDir::new().expect("couldn't make tempdir");
         let repo = Worktree::init_repo(temp_dir.path().into())
@@ -212,13 +225,7 @@ mod tests {
         let _hash = repo.commit("hello,".as_ref());
         let started_path = temp_dir.path().join("started");
         let script = format!("touch {}", started_path.to_string_lossy());
-        let mut m = Manager::new(
-            2,
-            temp_dir.path().as_ref(),
-            "bash".into(),
-            vec!["-c".into(), script.into()],
-        )
-        .await;
+        let mut m = Manager::new(2, &repo, "bash".into(), vec!["-c".into(), script.into()]).await;
         m.set_revisions(vec!["HEAD".into()])
             .await
             .expect("couldn't set_revisions");
@@ -229,4 +236,6 @@ mod tests {
             _ = file_exists(&started_path) => (),
         )
     }
+
+    // TODO: test starting up on an empty repo?
 }

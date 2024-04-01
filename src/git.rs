@@ -17,13 +17,6 @@ use tokio::time::sleep;
 
 use crate::process::CommandExt;
 use crate::process::{OutputExt, SyncCommandExt};
-
-// Worktree represents a git tree, which might be the "main" worktree (in which case it might be
-// more clearly refrred to by the name Repo) or some other one.
-pub struct Worktree {
-    pub path: PathBuf,
-}
-
 // Here we don't use the newtype pattern because we actually wanna be able to leak useful features
 // of OsString.
 pub type RevSpec = OsString;
@@ -31,33 +24,44 @@ pub type RevSpec = OsString;
 #[cfg(test)]
 pub type CommitHash = String;
 
+// Worktree represents a git tree, which might be the "main" worktree (in which case it might be
+// more clearly refrred to by the name Repo) or some other one.
+pub struct Worktree {
+    pub path: PathBuf,
+}
+
 impl Worktree {
-    pub async fn git_dir(&self) -> anyhow::Result<PathBuf> {
+    // Convenience function to create a git command with some pre-filled args.
+    fn git<I, S>(&self, args: I) -> Command
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let mut cmd = Command::new("git");
-        let output = (cmd
-            .args(["rev-parse", "--git-dir"])
-            .current_dir(&self.path)
+        cmd.current_dir(&self.path).args(args);
+        cmd
+    }
+
+    pub async fn git_dir(&self) -> anyhow::Result<PathBuf> {
+        let output = self
+            .git(["rev-parse", "--git-dir"])
             .execute()
             .await
-            .ok())
-        .context("'git rev-parse --git-dir' failed")?;
+            .context("'git rev-parse --git-dir' failed")?;
         Ok(OsStr::from_bytes(&output.stderr).into())
     }
 
     #[cfg(test)]
     pub async fn init_repo(path: PathBuf) -> anyhow::Result<Self> {
-        // TODO: dedupe setting up Command objects
-        let mut cmd = Command::new("git");
-        cmd.arg("init").current_dir(&path).execute().await?;
-        Ok(Self { path })
+        let zelf = Self { path }; // https://www.youtube.com/watch?v=_MwboA5NIVA
+        zelf.git(["init"]).execute().await?;
+        Ok(zelf)
     }
 
     #[cfg(test)]
     pub async fn commit(&self, message: &OsStr) -> anyhow::Result<CommitHash> {
-        Command::new("git")
-            .args(["commit", "-m"])
+        self.git(["commit", "-m"])
             .arg(message)
-            .current_dir(&self.path)
             .execute()
             .await
             .context("'git commit' failed")?;
@@ -68,24 +72,22 @@ impl Worktree {
 
     #[cfg(test)]
     async fn rev_parse(&self, rev_spec: RevSpec) -> anyhow::Result<CommitHash> {
-        let stdout = Command::new("git")
-            .arg("rev-parse")
+        let output = self
+            .git(["rev-parse"])
             .arg(rev_spec)
             .execute()
             .await
-            .context("'git rev-parse' failed")?
-            .stdout;
-        String::from_utf8(stdout).context("reading git rev-parse output")
+            .context("'git rev-parse' failed")?;
+        String::from_utf8(output.stdout).context("reading git rev-parse output")
     }
 
     async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
-        // TODO: use async command API to support cancellation and avoid blocking.
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.path)
-            .arg("rev-list")
-            .arg(range_spec);
-        let output = cmd.output().await?;
+        let output = self
+            .git(["rev-list"])
+            .arg(range_spec)
+            .execute()
+            .await
+            .context("'git rev-list' failed")?;
         // Hack: empirically, rev-list returns 128 when the range is invalid, it's not documented
         // but hopefully this is stable behaviour that we're supposed to be able to rely on for
         // this...?
@@ -183,43 +185,42 @@ impl Worktree {
             },
         ))
     }
+
+    pub async fn temp_worktree(&self) -> anyhow::Result<TempWorktree> {
+        // Not doing this async because I assume it's fast, there is no white-glove support, and the
+        // drop will have to be synchronous anyway.
+        let temp_dir = TempDir::new().context("creating temp dir")?;
+
+        self.git(["worktree", "add"])
+            .arg(temp_dir.path())
+            .arg("HEAD")
+            .execute()
+            .await
+            .context("'git worktree add' failed")?;
+
+        Ok(TempWorktree {
+            worktree: Self {
+                path: temp_dir.path().to_owned(),
+            },
+            temp_dir,
+        })
+    }
 }
 
 // A worktree that is deleted when dropped. This is kind of a dumb API that just happens to fit this
 // project's exact needs. Instead probably Repo::new and this method should return a common trait or
 // something.
 pub struct TempWorktree {
-    // TODO: It would be nice if we didn't have to own a copy of this PathBuf, but lifetimes are
-    // tricky!
-    repo_path: PathBuf, // Origin repo
-    temp_dir: TempDir,  // Location of worktree
+    // TODO: It would be nice if we didn't have to have two copies of the dir path...?
+    worktree: Worktree,
+    temp_dir: TempDir,
 }
 
+// TODO: this is silly, TempWorktree should really just share logic with Worktree. That should also
+// allow remembering the difference between the repository itself and on of its worktrees.
 impl TempWorktree {
-    pub async fn new(repo_path: PathBuf) -> anyhow::Result<Self> {
-        // Not doing this async because I assume it's fast, there is no white-glove support, and the
-        // drop will have to be synchronous anyway.
-        let temp_dir = TempDir::new().context("creating temp dir")?;
-
-        let mut cmd = Command::new("git");
-        cmd.args(["worktree", "add"])
-            .arg(temp_dir.path())
-            .arg("HEAD")
-            .execute()
-            .await
-            .ok()
-            .context("setting up worktree")?;
-
-        debug!("Created worktree at {:?}", temp_dir.path());
-
-        Ok(Self {
-            repo_path,
-            temp_dir,
-        })
-    }
-
     pub fn path(&self) -> &Path {
-        self.temp_dir.path()
+        &self.worktree.path
     }
 }
 
@@ -228,7 +229,7 @@ impl Drop for TempWorktree {
         let mut cmd = SyncCommand::new("git");
         cmd.args(["worktree", "remove"])
             .arg(self.temp_dir.path())
-            .current_dir(&self.repo_path)
+            .current_dir(self.path())
             .execute()
             .unwrap_or_else(|e| {
                 error!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
@@ -268,8 +269,8 @@ impl OsStrExt for OsStr {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
     use std::fs::File;
+    use std::io::Write;
 
     use tempfile::TempDir;
 
