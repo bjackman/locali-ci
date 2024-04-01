@@ -11,12 +11,12 @@ use anyhow::{anyhow, Context};
 use async_stream::try_stream;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
+use log::{debug, error};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::sleep;
 
-#[cfg(test)]
 use crate::process::CommandExt;
 use crate::process::{OutputExt, SyncCommandExt};
 
@@ -41,6 +41,12 @@ pub type CommitHash = String;
 impl Repo {
     // TODO: Make async.
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
+        // TODO: all the bullshit in here is pointless now that we don't try to peek inside Git
+        // internals and just watch the whole .git directory. This should either just be deleted or
+        // replaced with a `git rev-parse --git-dir` sanity check (remember to
+        // .env_remove("GIT_DIR")). In fact this also needs to be unified with the TempWorktree
+        // garbage.
+
         let mut git_file = File::open(path.join(".git")).context("opening .git")?;
         if git_file.metadata()?.file_type().is_dir() {
             return Ok(Repo { git_dir: path });
@@ -245,11 +251,23 @@ impl TempWorktree {
         cmd.args(["worktree", "add"])
             .arg(temp_dir.path())
             .arg("HEAD")
-            .current_dir(&repo_path)
-            .output()
+            .execute()
             .await
             .ok()
             .context("setting up worktree")?;
+
+        debug!("Created worktree at {:?}", temp_dir.path());
+
+        let mut cmd = Command::new("git");
+        let output =
+                &cmd.args(["rev-parse", "--git-dir"])
+                    .arg(temp_dir.path())
+                    .current_dir(&temp_dir.path())
+                    .execute()
+                    .await
+                    .ok()
+                    .expect("not git dir");
+        debug!("--git-dir: {:?}", OsStr::from_bytes(&output.stderr));
 
         Ok(Self {
             repo_path,
@@ -270,11 +288,9 @@ impl Drop for TempWorktree {
             .current_dir(&self.repo_path)
             .execute()
             .unwrap_or_else(|e| {
-                eprintln!(
-                    "Warning: couldn't clean up worktree {:?}: {:?}",
-                    &self.temp_dir, e
-                );
+                error!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
             });
+        debug!("Delorted worktree at {:?}", self.temp_dir.path());
     }
 }
 

@@ -122,14 +122,16 @@ struct Job {
 
 impl Job {
     async fn run(&self, worktree: &Path) -> anyhow::Result<std::process::Output> {
+        // TODO: Move this logic into the git module.
         let mut checkout_cmd = Command::new("git");
-        checkout_cmd
+        (checkout_cmd
             .arg("checkout")
             .arg(&self.rev)
             .current_dir(worktree)
             .output()
             .await?
-            .ok()?;
+            .ok())
+        .context(format!("checking out revision {:?} in {:?}", self.rev, worktree))?;
 
         let mut cmd = Command::new(&*self.program);
         // TODO: Is that stupid-looking &* a smell that I'm doing something stupid?
