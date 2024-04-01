@@ -14,7 +14,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::process::Command;
 use tokio::time::sleep;
 
-use crate::process::CommandExt;
+use crate::process::OutputExt;
 
 // This module contains horribly manual git logic. This is manual for two main reasons:
 // - We need to be able to get notified of changes to ranges, this is not something that git
@@ -78,11 +78,11 @@ impl Repo {
             .arg(&self.git_dir)
             .arg("rev-list")
             .arg(range_spec);
-        let output = cmd.output_not_killed().await?;
+        let output = cmd.output().await?;
         // Hack: empirically, rev-list returns 128 when the range is invalid, it's not documented
         // but hopefully this is stable behaviour that we're supposed to be able to rely on for
         // this...?
-        if output.status.code().unwrap() == 128 {
+        if output.code_not_killed()? == 128 {
             return Ok(vec![]);
         }
         let code = output.status.code().unwrap();
@@ -213,8 +213,6 @@ impl OsStrExt for OsStr {
 mod tests {
     use super::*;
 
-    use crate::process::CommandExt;
-    use cancellation_token::CancellationToken;
     use std::io::Write;
     use std::path::Path;
     use std::process;
@@ -250,8 +248,7 @@ mod tests {
     {
         let mut cmd = process::Command::new("git");
         cmd.arg("-C").arg(path).args(args);
-        cmd.output_ok(&CancellationToken::new(false))
-            .expect("git command failed");
+        cmd.output().ok().expect("git command failed");
     }
 
     #[test]
@@ -275,8 +272,7 @@ mod tests {
             .args(["worktree", "add"])
             .arg(worktree.path())
             .arg("HEAD");
-        cmd.output_ok(&CancellationToken::new(false))
-            .expect("couldn't setup git worktree");
+        cmd.output().ok().expect("couldn't setup git worktree");
         let repo = Repo::open(worktree.path().to_path_buf()).expect("failed to open repo");
         assert_eq!(repo.git_dir, tmp_dir.path().join(".git"));
     }

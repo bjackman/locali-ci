@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::git::RevSpec;
-use crate::process::CommandExt;
+use crate::process::OutputExt;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
@@ -41,18 +41,17 @@ impl Manager {
     ) -> Self {
         let (chan_tx, chan_rx) = async_channel::unbounded();
         let repo_path = Arc::new(repo_path);
-        let join_handles = join_all(
-            (1..num_threads)
-                .map(|i| {
-                    let worker = Worker {
-                        id: i,
-                        repo_path: repo_path.clone(),
-                        chan_rx: chan_rx.clone(),
-                    };
+        let join_handles = join_all((1..num_threads).map(|i| {
+            let worker = Worker {
+                id: i,
+                repo_path: repo_path.clone(),
+                chan_rx: chan_rx.clone(),
+            };
 
-                    worker.start()
-                })).await;
-                // .collect::<Vec<Future<Output = JoinHandle<anyhow::Result<()>>>>>(),
+            worker.start()
+        }))
+        .await;
+        // .collect::<Vec<Future<Output = JoinHandle<anyhow::Result<()>>>>>(),
 
         Self {
             job_cts: HashMap::new(),
@@ -118,8 +117,8 @@ impl Job {
             .arg("checkout")
             .arg(&self.rev)
             .current_dir(worktree)
-            .output_ok()
-            .await?;
+            .output()
+            .await?.ok()?;
 
         let mut cmd = Command::new(&*self.program);
         // TODO: Is that stupid-looking &* a smell that I'm doing something stupid?
@@ -148,8 +147,9 @@ impl Worker {
                 .arg(&path)
                 .arg("HEAD")
                 .current_dir(&*self.repo_path)
-                .output_ok()
+                .output()
                 .await
+                .ok()
                 .context("setting up worktree")?;
 
             let mut rx = pin!(self.chan_rx);
