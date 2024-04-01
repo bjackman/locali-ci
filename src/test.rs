@@ -165,7 +165,7 @@ impl Worker {
             while let Some(job) = rx.next().await {
                 let result = job.run(worktree.path());
                 // TODO: Clean up this mess
-                println!(
+                info!(
                     "worker {} rev {:?} -> {:#}",
                     self.id,
                     job.rev,
