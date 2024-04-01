@@ -8,9 +8,11 @@ use std::sync::Arc;
 use anyhow::Context;
 // Tokio's multiple-consumer channels only support broadcast where each receiver gets every message.
 use async_channel;
-use futures::future::join_all;
+use futures::future::{join_all, select_all, SelectAll};
 use futures::StreamExt;
+use log::info;
 use tokio::process::Command;
+use tokio::select;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +25,7 @@ pub struct Manager {
     program: Arc<OsString>,
     args: Arc<Vec<OsString>>,
     chan_tx: async_channel::Sender<Job>,
-    join_handles: Vec<JoinHandle<anyhow::Result<()>>>,
+    worker_shutdown: SelectAll<JoinHandle<anyhow::Result<()>>>,
 }
 
 impl Manager {
@@ -46,28 +48,32 @@ impl Manager {
             worker.start(repo_path.into())
         }))
         .await;
-        // .collect::<Vec<Future<Output = JoinHandle<anyhow::Result<()>>>>>(),
 
         Self {
             job_cts: HashMap::new(),
             program: Arc::new(program),
             args: Arc::new(args),
-            join_handles,
+            worker_shutdown: select_all(join_handles),
             chan_tx,
         }
     }
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
-    pub async fn set_revisions(&mut self, revs: Vec<RevSpec>) {
+    pub async fn set_revisions(&mut self, revs: Vec<RevSpec>) -> anyhow::Result<()> {
         let mut rev_set: collections::HashSet<&OsStr> =
             revs.iter().map(|s| s.as_os_str()).collect();
-        for (rev, ct) in &self.job_cts {
+        let mut cancel_revs = Vec::new();
+        for rev in self.job_cts.keys() {
             // We're already testing rev, so we don't need to kick it off below.
             if !rev_set.remove(rev.as_os_str()) {
                 // This rev is being tested but wasn't in rev_set.
-                ct.cancel();
+                cancel_revs.push(rev)
             }
+        }
+        info!("Starting {:?}, cancelling {:?}", rev_set, cancel_revs);
+        for rev in cancel_revs {
+            self.job_cts[rev].cancel();
         }
 
         for rev in rev_set {
@@ -79,11 +85,18 @@ impl Manager {
                 program: self.program.clone(),
                 args: self.args.clone(),
             };
-            // At the moment I think this cannot fail because we never close the receiver. I guess
-            // once the lifecycle of the manager is clearer perhaps we want to be able to return an
-            // error here?
-            self.chan_tx.send(job).await.unwrap();
+            // Send the job down the channel, but bail if any of the workers are dead.
+            //
+            // TODO: This is a dreadful mess. There are too many layers of fallbility, maybe I am
+            // doing something wrong.
+            select!(
+                (result, _, _) = &mut self.worker_shutdown => {
+                    result.expect("select failed").context("worker thread shut down")
+                },
+                result = self.chan_tx.send(job) => Ok(result.expect("channel send failed"))
+            )?
         }
+        Ok(())
     }
 }
 
@@ -133,11 +146,16 @@ struct Worker {
 impl Worker {
     async fn start(self, repo_path: PathBuf) -> JoinHandle<anyhow::Result<()>> {
         tokio::spawn(async move {
-            // TODO: Make async
             // TODO: Where do we handle failure of this?
             let worktree = TempWorktree::new(repo_path)
                 .await
                 .context("setting up worker")?;
+
+            info!(
+                "Worker {} started, working in {:?}",
+                self.id,
+                worktree.path()
+            );
 
             let mut rx = pin!(self.chan_rx);
             while let Some(job) = rx.next().await {
@@ -175,7 +193,8 @@ mod tests {
         let repo = Repo::init(temp_dir.path().into())
             .await
             .expect("couldn't init test repo");
-        let hash = repo.commit("hello,".as_ref());
+        // TODO: check correct version was tested.
+        let _hash = repo.commit("hello,".as_ref());
         let started_path = temp_dir.path().join("started");
         let script = format!("touch {}", started_path.to_string_lossy());
         let mut m = Manager::new(
@@ -185,7 +204,7 @@ mod tests {
             vec!["-c".into(), script.into()],
         )
         .await;
-        m.set_revisions(vec!["HEAD".into()]).await;
+        m.set_revisions(vec!["HEAD".into()]).await.expect("couldn't set_revisions");
         // TODO: Instead of watching until we see the command being done, ask the manager when it's
         // stable.
         let start = Instant::now();

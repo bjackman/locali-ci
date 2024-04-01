@@ -52,11 +52,10 @@ async fn main() -> anyhow::Result<()> {
     let mut revs_stream = pin!(revs_stream);
     while let Some(revs) = revs_stream.next().await {
         println!("update");
-        // TODO: I wrote the manager using proper Strings, oops.
         let revs = revs?
             .into_iter()
             .collect();
-        m.set_revisions(revs).await;
+        m.set_revisions(revs).await?;
     }
     println!("revset stream terminated");
     Ok(())
