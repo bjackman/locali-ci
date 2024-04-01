@@ -165,13 +165,13 @@ impl Worker {
 
             let mut rx = pin!(self.chan_rx);
             while let Some(job) = rx.next().await {
-                let result = job.run(worktree.path());
+                let result = job.run(worktree.path()).await;
                 // TODO: Clean up this mess
                 info!(
                     "worker {} rev {:?} -> {:#}",
                     self.id,
                     job.rev,
-                    match result.await {
+                    match result {
                         Ok(output) => format!("{:?}", output),
                         Err(e) => format!("err: {:#}", e),
                     }
