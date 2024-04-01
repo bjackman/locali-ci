@@ -14,7 +14,7 @@ use tokio::process::Command;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::git::{TempWorktree, RevSpec};
+use crate::git::{RevSpec, TempWorktree};
 use crate::process::OutputExt;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
@@ -155,5 +155,43 @@ impl Worker {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use tempfile::TempDir;
+
+    use crate::git::Repo;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cancellation() {
+        let temp_dir = TempDir::new().expect("couldn't make tempdir");
+        let repo = Repo::init(temp_dir.path().into())
+            .await
+            .expect("couldn't init test repo");
+        let hash = repo.commit("hello,".as_ref());
+        let started_path = temp_dir.path().join("started");
+        let script = format!("touch {}", started_path.to_string_lossy());
+        let mut m = Manager::new(
+            2,
+            temp_dir.path().as_ref(),
+            "bash".into(),
+            vec!["-c".into(), script.into()],
+        )
+        .await;
+        m.set_revisions(vec!["HEAD".into()]).await;
+        // TODO: Instead of watching until we see the command being done, ask the manager when it's
+        // stable.
+        let start = Instant::now();
+        while !started_path.try_exists().unwrap() {
+            if Instant::now().duration_since(start) > Duration::from_secs(1) {
+                panic!("script did not run after 1s")
+            }
+        }
     }
 }

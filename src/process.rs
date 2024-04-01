@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context};
+use tokio::process::Command;
 use std::os::unix::process::ExitStatusExt as _;
-use std::process::{Command, Output};
+use std::process::{Command as SyncCommand, Output};
 
 pub trait OutputExt {
     // Returns exit code, fails verbosely if the process was killed by a signal.
@@ -37,10 +38,22 @@ impl OutputExt for Output {
 
 pub trait CommandExt {
     // Run a command and fail informatively if anything at all goes wrong.
-    fn execute(&mut self) -> anyhow::Result<()>;
+    async fn execute(&mut self) -> anyhow::Result<Output>;
 }
 
 impl CommandExt for Command {
+    async fn execute(&mut self) -> anyhow::Result<Output> {
+        let output = self.output().await.context("couldn't run command")?;
+        output.ok()?;
+        Ok(output)
+    }
+}
+
+pub trait SyncCommandExt {
+    fn execute(&mut self) -> anyhow::Result<()>;
+}
+
+impl SyncCommandExt for SyncCommand {
     fn execute(&mut self) -> anyhow::Result<()> {
         self.output().context("couldn't run command")?.ok()
     }

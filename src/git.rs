@@ -16,7 +16,9 @@ use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::sleep;
 
-use crate::process::{CommandExt, OutputExt};
+use crate::process::{OutputExt, SyncCommandExt};
+#[cfg(test)]
+use crate::process::CommandExt;
 
 // This module contains horribly manual git logic. This is manual for two main reasons:
 // - We need to be able to get notified of changes to ranges, this is not something that git
@@ -32,6 +34,9 @@ pub struct Repo {
 // Here we don't use the newtype pattern because we actually wanna be able to leak useful features
 // of OsString.
 pub type RevSpec = OsString;
+
+#[cfg(test)]
+pub type CommitHash = String;
 
 impl Repo {
     // TODO: Make async.
@@ -72,6 +77,45 @@ impl Repo {
         Ok(Repo {
             git_dir: PathBuf::from(git_path),
         })
+    }
+
+    #[cfg(test)]
+    pub async fn init(path: PathBuf) -> anyhow::Result<Self> {
+        // TODO: dedupe setting up Command objects
+        let mut cmd = Command::new("git");
+        cmd.arg("init").current_dir(&path).execute().await?;
+        Self::open(path)
+    }
+
+    #[cfg(test)]
+    pub async fn commit(&self, message: &OsStr) -> anyhow::Result<CommitHash> {
+        Command::new("git")
+            .args(["commit", "-m"])
+            .arg(message)
+            .current_dir(self.path())
+            .execute()
+            .await
+            .context("'git commit' failed")?;
+        // Doesn't seem like there's a safer way to do this than commit and then retroactively parse
+        // HEAD and hope nobody else is messing with us.
+        self.rev_parse("HEAD".into()).await
+    }
+
+    #[cfg(test)]
+    async fn rev_parse(&self, rev_spec: RevSpec) -> anyhow::Result<CommitHash> {
+        let stdout = Command::new("git")
+            .arg("rev-parse")
+            .arg(rev_spec)
+            .execute()
+            .await
+            .context("'git rev-parse' failed")?
+            .stdout;
+        String::from_utf8(stdout).context("reading git rev-parse output")
+    }
+
+    #[cfg(test)]
+    fn path(&self) -> &Path {
+        self.git_dir.parent().expect("git_dir was empty")
     }
 
     async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
@@ -226,7 +270,10 @@ impl Drop for TempWorktree {
             .current_dir(&self.repo_path)
             .execute()
             .unwrap_or_else(|e| {
-                eprintln!("Warning: couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
+                eprintln!(
+                    "Warning: couldn't clean up worktree {:?}: {:?}",
+                    &self.temp_dir, e
+                );
             });
     }
 }
