@@ -190,7 +190,7 @@ mod tests {
     use test_log;
     use tokio::time::{interval, sleep};
 
-    use crate::git::Repo;
+    use crate::git::Worktree;
 
     use super::*;
 
@@ -205,7 +205,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_cancellation() {
         let temp_dir = TempDir::new().expect("couldn't make tempdir");
-        let repo = Repo::init(temp_dir.path().into())
+        let repo = Worktree::init_repo(temp_dir.path().into())
             .await
             .expect("couldn't init test repo");
         // TODO: check correct version was tested.

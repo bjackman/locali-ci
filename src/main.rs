@@ -3,7 +3,6 @@ use clap::Parser as _;
 use futures::StreamExt;
 use std::collections;
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
 use std::pin::pin;
 use std::str;
 
@@ -16,7 +15,6 @@ mod test;
 struct Args {
     // TODO: Don't require valid utf-8 strings here, OsStrings shoud be fine. But
     // https://stackoverflow.com/questions/76341332/clap-default-value-for-pathbuf
-
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo_path: String,
     /// Maximum number of tests to run concurrently. Each concurrent thread
@@ -38,7 +36,12 @@ async fn main() -> anyhow::Result<()> {
 
     env_logger::init();
 
-    let repo = git::Repo::open(PathBuf::from(&args.repo_path))
+    let repo = git::Worktree {
+        path: args.repo_path.to_owned().into(),
+    };
+    // Check repo is valid.
+    repo.git_dir()
+        .await
         .context(format!("opening repo {}", args.repo_path))?;
     let mut cmd = collections::VecDeque::from(args.cmd);
     let mut m = test::Manager::new(
@@ -46,14 +49,13 @@ async fn main() -> anyhow::Result<()> {
         args.repo_path.as_ref(),
         OsString::from(cmd.pop_front().unwrap()),
         cmd.iter().map(OsString::from).collect(),
-    ).await;
+    )
+    .await;
     let (_watcher, mut revs_stream) = repo.watch_refs(OsStr::new("HEAD^^^..HEAD"))?;
     let mut revs_stream = pin!(revs_stream);
     while let Some(revs) = revs_stream.next().await {
         println!("update");
-        let revs = revs?
-            .into_iter()
-            .collect();
+        let revs = revs?.into_iter().collect();
         m.set_revisions(revs).await?;
     }
     println!("revset stream terminated");
