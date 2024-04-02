@@ -225,8 +225,7 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    // TODO: this doesn't actually test cancellation lmao
-    async fn test_cancellation() {
+    async fn should_run_single() {
         let temp_dir = TempDir::new().expect("couldn't make tempdir");
         let repo = Worktree::init_repo(temp_dir.path().into())
             .await
@@ -257,5 +256,6 @@ mod tests {
         assert_eq!(content, hash);
     }
 
+    // TODO: test cancellation
     // TODO: test starting up on an empty repo?
 }
