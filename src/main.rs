@@ -5,6 +5,7 @@ use std::collections;
 use std::ffi::{OsStr, OsString};
 use std::pin::pin;
 use std::str;
+use std::sync::Arc;
 
 mod git;
 mod process;
@@ -44,9 +45,10 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context(format!("opening repo {}", args.repo_path))?;
     let mut cmd = collections::VecDeque::from(args.cmd);
+    let repo = Arc::new(repo);
     let mut m = test::Manager::new(
         args.num_threads,
-        &repo,
+        repo.clone(),
         OsString::from(cmd.pop_front().unwrap()),
         cmd.iter().map(OsString::from).collect(),
     )

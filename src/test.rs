@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -30,12 +31,17 @@ impl Manager {
     // Starts the workers. You must call close() before dropping it.
     //
     // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
-    pub async fn new(
+    pub async fn new<W>(
         num_threads: u32,
-        repo: &Worktree,
+        repo: W,
         program: OsString,
         args: Vec<OsString>,
-    ) -> Self {
+    ) -> Self
+    where
+        // TODO: is this just a really silly roundabout way of saying that W has to be
+        // Arc<Worktree>?
+        W: Borrow<Worktree> + Send + Clone + 'static,
+    {
         let (chan_tx, chan_rx) = async_channel::unbounded();
         let join_handles = join_all((1..num_threads).map(|i| {
             let worker = Worker {
@@ -43,7 +49,7 @@ impl Manager {
                 chan_rx: chan_rx.clone(),
             };
 
-            worker.start(repo)
+            worker.start(repo.clone())
         }))
         .await;
 
@@ -154,15 +160,17 @@ struct Worker {
 
 impl Worker {
     // TODO: Need to log somewhere immediately when the worker hits an irrecoverable error.
-    async fn start(self, repo: &Worktree) -> JoinHandle<anyhow::Result<()>> {
+    async fn start<W>(self, repo: W) -> JoinHandle<anyhow::Result<()>>
+    where
+        W: Borrow<Worktree> + Send + 'static,
+    {
         // TODO: How can I get the repo path into the worker task more cleanly than this? If we had
         // an Rc or Arc we could clone that. Can we do that without having to hard-code the smart
         // pointer type in Manager::new, perhaps using Borrow<Worktree>?
-        let repo_path = repo.path.clone();
         tokio::spawn(async move {
             // TODO: Where do we handle failure of this?
-            let repo = Worktree { path: repo_path };
             let worktree = repo
+                .borrow()
                 .temp_worktree()
                 .await
                 .context("setting up worker")
@@ -230,7 +238,13 @@ mod tests {
             .expect("couldn't create test commit");
         let started_path = temp_dir.path().join("started");
         let script = format!("touch {}", started_path.to_string_lossy());
-        let mut m = Manager::new(2, &repo, "bash".into(), vec!["-c".into(), script.into()]).await;
+        let mut m = Manager::new(
+            2,
+            Arc::new(repo),
+            "bash".into(),
+            vec!["-c".into(), script.into()],
+        )
+        .await;
         m.set_revisions(vec!["HEAD".into()])
             .await
             .expect("couldn't set_revisions");
