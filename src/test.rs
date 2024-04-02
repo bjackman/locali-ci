@@ -210,7 +210,7 @@ mod tests {
 
     use tempfile::TempDir;
     use test_log;
-    use tokio::time::{interval, sleep};
+    use tokio::{fs, time::{interval, sleep}};
 
     use crate::git::Worktree;
 
@@ -231,13 +231,12 @@ mod tests {
         let repo = Worktree::init_repo(temp_dir.path().into())
             .await
             .expect("couldn't init test repo");
-        // TODO: check correct version was tested.
-        let _hash = repo
+        let hash = repo
             .commit("hello,".as_ref())
             .await
             .expect("couldn't create test commit");
         let started_path = temp_dir.path().join("started");
-        let script = format!("touch {}", started_path.to_string_lossy());
+        let script = format!("git rev-parse HEAD >> {}", started_path.to_string_lossy());
         let mut m = Manager::new(
             2,
             Arc::new(repo),
@@ -253,7 +252,9 @@ mod tests {
         select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
             _ = file_exists(&started_path) => (),
-        )
+        );
+        let content = fs::read_to_string(started_path).await.expect("couldn't read hash file");
+        assert_eq!(content, hash);
     }
 
     // TODO: test starting up on an empty repo?
