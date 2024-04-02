@@ -62,6 +62,7 @@ impl Worktree {
     pub async fn commit(&self, message: &OsStr) -> anyhow::Result<CommitHash> {
         self.git(["commit", "-m"])
             .arg(message)
+            .arg("--allow-empty")
             .execute()
             .await
             .context("'git commit' failed")?;

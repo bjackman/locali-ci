@@ -224,7 +224,10 @@ mod tests {
             .await
             .expect("couldn't init test repo");
         // TODO: check correct version was tested.
-        let _hash = repo.commit("hello,".as_ref());
+        let _hash = repo
+            .commit("hello,".as_ref())
+            .await
+            .expect("couldn't create test commit");
         let started_path = temp_dir.path().join("started");
         let script = format!("touch {}", started_path.to_string_lossy());
         let mut m = Manager::new(2, &repo, "bash".into(), vec!["-c".into(), script.into()]).await;
