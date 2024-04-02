@@ -31,12 +31,7 @@ impl Manager {
     // Starts the workers. You must call close() before dropping it.
     //
     // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
-    pub async fn new<W>(
-        num_threads: u32,
-        repo: W,
-        program: OsString,
-        args: Vec<OsString>,
-    ) -> Self
+    pub async fn new<W>(num_threads: u32, repo: W, program: OsString, args: Vec<OsString>) -> Self
     where
         // TODO: is this just a really silly roundabout way of saying that W has to be
         // Arc<Worktree>?
@@ -210,35 +205,56 @@ mod tests {
 
     use tempfile::TempDir;
     use test_log;
-    use tokio::{fs, time::{interval, sleep}};
+    use tokio::{
+        fs,
+        time::{interval, sleep},
+    };
 
     use crate::git::Worktree;
 
     use super::*;
 
-    // Blocks until file exists, the dumb way.
-    async fn file_exists(path: &Path) {
+    // Blocks until file exists, the dumb way, then reads it as a string.
+    async fn await_exists_and_read<P>(path: P) -> String
+    where
+        P: AsRef<Path>,
+    {
         let mut interval = interval(Duration::from_millis(10));
-        while !path.try_exists().unwrap() {
+        while !path.as_ref().try_exists().unwrap() {
             interval.tick().await;
+        }
+        fs::read_to_string(path)
+            .await
+            .expect("couldn't read hash file")
+    }
+
+    // TODO: this sucks, find a way to dedupe more. One thing I think we could dedupue is the bash
+    // test command - it could be a struct that has methods like called() that blocks until it's
+    // started,  and finish() that exits successfully and stuff like that.
+    struct Fixture(TempDir, Arc<Worktree>);
+
+    impl Fixture {
+        async fn new() -> Self {
+            let temp_dir = TempDir::new().expect("couldn't make tempdir");
+            let repo = Worktree::init_repo(temp_dir.path().into())
+                .await
+                .expect("couldn't init test repo");
+            Self(temp_dir, Arc::new(repo))
         }
     }
 
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
-        let temp_dir = TempDir::new().expect("couldn't make tempdir");
-        let repo = Worktree::init_repo(temp_dir.path().into())
-            .await
-            .expect("couldn't init test repo");
+        let Fixture(temp_dir, repo) = Fixture::new().await;
         let hash = repo
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
-        let started_path = temp_dir.path().join("started");
-        let script = format!("git rev-parse HEAD >> {}", started_path.to_string_lossy());
+        let hash_path = temp_dir.path().join("hash");
+        let script = format!("git rev-parse HEAD >> {}", hash_path.to_string_lossy());
         let mut m = Manager::new(
             2,
-            Arc::new(repo),
+            repo,
             "bash".into(),
             vec!["-c".into(), script.into()],
         )
@@ -248,14 +264,51 @@ mod tests {
             .expect("couldn't set_revisions");
         // TODO: Instead of watching until we see the command being done, ask the manager when it's
         // stable.
+        let got_hash = select!(
+            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
+            content = await_exists_and_read(&hash_path) => content,
+        );
+        assert_eq!(got_hash, hash);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn should_cancel_running() {
+        let Fixture(temp_dir, repo) = Fixture::new().await;
+        repo.commit("hello,")
+            .await
+            .expect("couldn't create test commit");
+        // This script will block forever.
+        let script = format!(
+            "cd {} && touch started.$(git rev-parse HEAD) && read",
+            temp_dir.path().to_string_lossy()
+        );
+        let mut m = Manager::new(
+            2,
+            repo.clone(),
+            "bash".into(),
+            // TODO: make this more generic so we don't need the .into()
+            vec!["-c".into(), script.into()],
+        )
+        .await;
+        m.set_revisions(vec!["HEAD".into()])
+            .await
+            .expect("couldn't set_revisions");
+        // Wait until the script has definitely started.
+        let started_path = temp_dir.path().join(format!(
+            "started.{}",
+            repo.rev_parse("HEAD".into()).await.unwrap()
+        ));
         select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
-            _ = file_exists(&started_path) => (),
+            _ = await_exists_and_read(temp_dir.path().join("started")) => ()
         );
-        let content = fs::read_to_string(started_path).await.expect("couldn't read hash file");
-        assert_eq!(content, hash);
+        // TODO: check that the new commit starts getting tested.
+        // TODO: check that the old test gets aborted.
     }
 
     // TODO: test cancellation
     // TODO: test starting up on an empty repo?
+    // TODO: test only one worker task (I think this is actually broken)
+    // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
+    // to do with panic and drop order I think.
 }

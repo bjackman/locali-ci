@@ -75,7 +75,7 @@ impl Worktree {
     }
 
     #[cfg(test)]
-    async fn rev_parse(&self, rev_spec: RevSpec) -> anyhow::Result<CommitHash> {
+    pub async fn rev_parse(&self, rev_spec: RevSpec) -> anyhow::Result<CommitHash> {
         let output = self
             .git(["rev-parse"])
             .arg(rev_spec)
