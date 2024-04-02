@@ -231,7 +231,7 @@ mod tests {
             .await
             .expect("couldn't init test repo");
         let hash = repo
-            .commit("hello,".as_ref())
+            .commit("hello,")
             .await
             .expect("couldn't create test commit");
         let started_path = temp_dir.path().join("started");

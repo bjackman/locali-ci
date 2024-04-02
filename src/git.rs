@@ -59,7 +59,10 @@ impl Worktree {
     }
 
     #[cfg(test)]
-    pub async fn commit(&self, message: &OsStr) -> anyhow::Result<CommitHash> {
+    pub async fn commit<S>(&self, message: S) -> anyhow::Result<CommitHash>
+    where
+        S: AsRef<OsStr>,
+    {
         self.git(["commit", "-m"])
             .arg(message)
             .arg("--allow-empty")
