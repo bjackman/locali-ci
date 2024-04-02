@@ -155,7 +155,9 @@ struct Worker {
 impl Worker {
     // TODO: Need to log somewhere immediately when the worker hits an irrecoverable error.
     async fn start(self, repo: &Worktree) -> JoinHandle<anyhow::Result<()>> {
-        // TODO: How can I get the repo path into the worker task more cleanly than this?
+        // TODO: How can I get the repo path into the worker task more cleanly than this? If we had
+        // an Rc or Arc we could clone that. Can we do that without having to hard-code the smart
+        // pointer type in Manager::new, perhaps using Borrow<Worktree>?
         let repo_path = repo.path.clone();
         tokio::spawn(async move {
             // TODO: Where do we handle failure of this?
