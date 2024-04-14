@@ -153,6 +153,9 @@ struct Worker {
     chan_rx: async_channel::Receiver<Job>,
 }
 
+// TODO: Now that we have async, this is a dumb architecture. Instead of spinning up a task per
+// worktree and then feeding jobs into them, we should just create a task immediately when we create
+// a job, and it should just block until it can get an available worktree from a pool.
 impl Worker {
     // TODO: Need to log somewhere immediately when the worker hits an irrecoverable error.
     async fn start<W>(self, repo: W) -> JoinHandle<anyhow::Result<()>>
