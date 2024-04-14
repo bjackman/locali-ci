@@ -193,7 +193,7 @@ impl Worktree {
     pub async fn temp_worktree(&self) -> anyhow::Result<TempWorktree> {
         // Not doing this async because I assume it's fast, there is no white-glove support, and the
         // drop will have to be synchronous anyway.
-        let temp_dir = TempDir::new().context("creating temp dir")?;
+        let temp_dir = TempDir::with_prefix("worktree-").context("creating temp dir")?;
 
         self.git(["worktree", "add"])
             .arg(temp_dir.path())
