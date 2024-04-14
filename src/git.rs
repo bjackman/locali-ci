@@ -203,6 +203,7 @@ impl Worktree {
             .context("'git worktree add' failed")?;
 
         Ok(TempWorktree {
+            origin: self.path.clone(),
             worktree: Self {
                 path: temp_dir.path().to_owned(),
             },
@@ -215,6 +216,7 @@ impl Worktree {
 // project's exact needs. Instead probably Repo::new and this method should return a common trait or
 // something.
 pub struct TempWorktree {
+    origin: PathBuf, // Path of repo this was created from.
     // TODO: It would be nice if we didn't have to have two copies of the dir path...?
     worktree: Worktree,
     temp_dir: TempDir,
@@ -231,9 +233,17 @@ impl TempWorktree {
 impl Drop for TempWorktree {
     fn drop(&mut self) {
         let mut cmd = SyncCommand::new("git");
+        if !self.origin.exists() {
+            debug!(
+                "Not de-registering worktree at {:?} as origin repo ({:?}) is gone.",
+                self.temp_dir.path(),
+                self.origin
+            );
+            return;
+        }
         cmd.args(["worktree", "remove"])
             .arg(self.temp_dir.path())
-            .current_dir(self.path())
+            .current_dir(&self.origin)
             .execute()
             .unwrap_or_else(|e| {
                 error!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
