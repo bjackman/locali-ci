@@ -82,7 +82,8 @@ impl Worktree {
             .execute()
             .await
             .context("'git rev-parse' failed")?;
-        String::from_utf8(output.stdout).context("reading git rev-parse output")
+        let out_string = String::from_utf8(output.stdout).context("reading git rev-parse output")?;
+        Ok(out_string.trim().to_owned())
     }
 
     async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
