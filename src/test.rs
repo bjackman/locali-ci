@@ -213,7 +213,7 @@ mod tests {
         time::{interval, sleep},
     };
 
-    use crate::git::Worktree;
+    use crate::git::{CommitHash, Worktree};
 
     use super::*;
 
@@ -234,7 +234,10 @@ mod tests {
     // TODO: this sucks, find a way to dedupe more. One thing I think we could dedupue is the bash
     // test command - it could be a struct that has methods like called() that blocks until it's
     // started,  and finish() that exits successfully and stuff like that.
-    struct Fixture(TempDir, Arc<Worktree>);
+    struct Fixture {
+        _temp_dir: TempDir,
+        repo: Arc<Worktree>,
+    }
 
     impl Fixture {
         async fn new() -> Self {
@@ -242,68 +245,101 @@ mod tests {
             let repo = Worktree::init_repo(temp_dir.path().into())
                 .await
                 .expect("couldn't init test repo");
-            Self(temp_dir, Arc::new(repo))
+            Self {
+                _temp_dir: temp_dir,
+                repo: Arc::new(repo),
+            }
+        }
+    }
+
+    // A script that can be used as the test command for a Manager, with utilities for testing the
+    // manager. The script won't terminate until told to.
+    struct TestScript {
+        dir: TempDir,
+        script: OsString, // Raw content.
+    }
+
+    enum Terminate {
+        Immediately,
+        Never,
+    }
+
+    impl TestScript {
+        const STARTED_FILENAME_PREFIX: &'static str = "started.";
+
+        // Creates a script, this will create a temporary directory, which will
+        // be destroyed on drop.
+        fn new(terminate: Terminate) -> Self {
+            let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
+            let script = format!(
+                "touch {:?}$(git rev-parse HEAD) {}",
+                dir.path().join(Self::STARTED_FILENAME_PREFIX),
+                match terminate {
+                    Terminate::Immediately => "",
+                    Terminate::Never => "&& read",
+                }
+            );
+            Self {
+                dir,
+                script: script.into(),
+            }
+        }
+
+        // Pass this to Manager::new
+        fn program(&self) -> OsString {
+            "bash".into()
+        }
+        // Pass this to Manager::new
+        fn args(&self) -> Vec<OsString> {
+            vec!["-xc".into(), self.script.clone()]
+        }
+
+        // Blocks until the script is started for the given commit hash.
+        async fn started(&self, hash: CommitHash) {
+            let mut f = OsString::from(Self::STARTED_FILENAME_PREFIX);
+            f.push(hash);
+            let p = self.dir.path().join(f);
+            await_exists_and_read(p).await;
         }
     }
 
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
-        let Fixture(temp_dir, repo) = Fixture::new().await;
-        let hash = repo
+        let fixture = Fixture::new().await;
+        let hash = fixture
+            .repo
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
-        let hash_path = temp_dir.path().join("hash");
-        let script = format!("git rev-parse HEAD >> {}", hash_path.to_string_lossy());
-        let mut m = Manager::new(
-            2,
-            repo,
-            "bash".into(),
-            vec!["-c".into(), script.into()],
-        )
-        .await;
+        let script = TestScript::new(Terminate::Immediately);
+        let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args()).await;
         m.set_revisions(vec!["HEAD".into()])
             .await
             .expect("couldn't set_revisions");
         // TODO: Instead of watching until we see the command being done, ask the manager when it's
         // stable.
-        let got_hash = select!(
+        select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
-            content = await_exists_and_read(&hash_path) => content,
+            _ = script.started(hash) => (),
         );
-        assert_eq!(got_hash, hash);
     }
 
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
-        let Fixture(temp_dir, repo) = Fixture::new().await;
-        repo.commit("hello,")
+        let fixture = Fixture::new().await;
+        let hash = fixture
+            .repo
+            .commit("hello,")
             .await
             .expect("couldn't create test commit");
-        // This script will block forever.
-        let script = format!(
-            "cd {} && touch started.$(git rev-parse HEAD) && read",
-            temp_dir.path().to_string_lossy()
-        );
-        let mut m = Manager::new(
-            2,
-            repo.clone(),
-            "bash".into(),
-            // TODO: make this more generic so we don't need the .into()
-            vec!["-c".into(), script.into()],
-        )
-        .await;
+        let script = TestScript::new(Terminate::Never);
+        let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args()).await;
         m.set_revisions(vec!["HEAD".into()])
             .await
             .expect("couldn't set_revisions");
-        // Wait until the script has definitely started.
-        let started_path = temp_dir.path().join(format!(
-            "started.{}",
-            repo.rev_parse("HEAD".into()).await.unwrap()
-        ));
         select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
-            _ = await_exists_and_read(started_path) => ()
+            _ = script.started(hash) => ()
         );
         // TODO: check that the new commit starts getting tested.
         // TODO: check that the old test gets aborted.
