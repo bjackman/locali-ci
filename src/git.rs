@@ -71,19 +71,26 @@ impl Worktree {
             .context("'git commit' failed")?;
         // Doesn't seem like there's a safer way to do this than commit and then retroactively parse
         // HEAD and hope nobody else is messing with us.
-        self.rev_parse("HEAD".into()).await
+        self.rev_parse("HEAD".into()).await?.ok_or(anyhow!("no HEAD after committing"))
     }
 
     #[cfg(test)]
-    pub async fn rev_parse(&self, rev_spec: RevSpec) -> anyhow::Result<CommitHash> {
+    // None means we successfully looked it up but it didn't exist.
+    pub async fn rev_parse(&self, rev_spec: RevSpec) -> anyhow::Result<Option<CommitHash>> {
         let output = self
             .git(["rev-parse"])
             .arg(rev_spec)
             .execute()
             .await
             .context("'git rev-parse' failed")?;
+        // Hack: empirically, rev-parse returns 128 when the range is invalid, it's not documented
+        // but hopefully this is stable behaviour that we're supposed to be able to rely on for
+        // this...?
+        if output.code_not_killed()? == 128 {
+            return Ok(None);
+        }
         let out_string = String::from_utf8(output.stdout).context("reading git rev-parse output")?;
-        Ok(out_string.trim().to_owned())
+        Ok(Some(out_string.trim().to_owned()))
     }
 
     async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
@@ -93,9 +100,7 @@ impl Worktree {
             .execute()
             .await
             .context("'git rev-list' failed")?;
-        // Hack: empirically, rev-list returns 128 when the range is invalid, it's not documented
-        // but hopefully this is stable behaviour that we're supposed to be able to rely on for
-        // this...?
+        // See coment in rev_parse.
         if output.code_not_killed()? == 128 {
             return Ok(vec![]);
         }
