@@ -303,7 +303,7 @@ mod tests {
         ));
         select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
-            _ = await_exists_and_read(temp_dir.path().join("started")) => ()
+            _ = await_exists_and_read(started_path) => ()
         );
         // TODO: check that the new commit starts getting tested.
         // TODO: check that the old test gets aborted.
