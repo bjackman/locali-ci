@@ -327,7 +327,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
         let fixture = Fixture::new().await;
-        let hash = fixture
+        let hash1 = fixture
             .repo
             .commit("hello,")
             .await
@@ -338,10 +338,21 @@ mod tests {
             .await
             .expect("couldn't set_revisions");
         select!(
-            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
-            _ = script.started(hash) => ()
+            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s for hash1"),
+            _ = script.started(hash1) => ()
         );
-        // TODO: check that the new commit starts getting tested.
+        let hash2 = fixture
+            .repo
+            .commit("hello,")
+            .await
+            .expect("couldn't create test commit");
+        m.set_revisions(vec!["HEAD".into()])
+            .await
+            .expect("couldn't set_revisions");
+        select!(
+            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s for hash2"),
+            _ = script.started(hash2) => ()
+        );
         // TODO: check that the old test gets aborted.
     }
 
