@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
-use std::collections;
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
@@ -15,12 +15,12 @@ use tokio::select;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::git::{RevSpec, Worktree};
+use crate::git::{CommitHash, Worktree};
 use crate::process::OutputExt;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
-    job_cts: HashMap<RevSpec, CancellationToken>,
+    job_cts: HashMap<CommitHash, CancellationToken>,
     program: Arc<OsString>,
     args: Arc<Vec<OsString>>,
     chan_tx: async_channel::Sender<Job>,
@@ -59,28 +59,27 @@ impl Manager {
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
-    pub async fn set_revisions(&mut self, revs: Vec<RevSpec>) -> anyhow::Result<()> {
-        let mut rev_set: collections::HashSet<&OsStr> =
-            revs.iter().map(|s| s.as_os_str()).collect();
+    pub async fn set_revisions(&mut self, revs: Vec<CommitHash>) -> anyhow::Result<()> {
+        let mut to_start = HashSet::<&CommitHash>::from_iter(revs.iter());
         let mut cancel_revs = Vec::new();
         for rev in self.job_cts.keys() {
             // We're already testing rev, so we don't need to kick it off below.
-            if !rev_set.remove(rev.as_os_str()) {
+            if !to_start.remove(rev) {
                 // This rev is being tested but wasn't in rev_set.
                 cancel_revs.push(rev)
             }
         }
-        info!("Starting {:?}, cancelling {:?}", rev_set, cancel_revs);
+        info!("Starting {:?}, cancelling {:?}", to_start, cancel_revs);
         for rev in cancel_revs {
             self.job_cts[rev].cancel();
         }
 
-        for rev in rev_set {
+        for rev in to_start {
             let ct = CancellationToken::new();
-            self.job_cts.insert(rev.to_os_string(), ct.clone());
+            self.job_cts.insert((*rev).clone(), ct.clone());
             let job = Job {
                 _ct: ct.clone(),
-                rev: rev.to_os_string(),
+                rev: (*rev).clone(),
                 program: self.program.clone(),
                 args: self.args.clone(),
             };
@@ -111,7 +110,7 @@ struct Job {
     // TODO: I made this a String instead of &str, because the lifetime of the str would need to be
     // the lifetime of the task - but that lifetime is not really visible to the user of the
     // Manager. Am I being silly here or is this just the practical way?
-    rev: RevSpec,
+    rev: CommitHash,
     // TODO: Implement cancellation.
     _ct: CancellationToken,
     // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
@@ -311,7 +310,7 @@ mod tests {
             .expect("couldn't create test commit");
         let script = TestScript::new(Terminate::Immediately);
         let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args()).await;
-        m.set_revisions(vec!["HEAD".into()])
+        m.set_revisions(vec![hash.clone()])
             .await
             .expect("couldn't set_revisions");
         // TODO: Instead of watching until we see the command being done, ask the manager when it's
@@ -332,7 +331,7 @@ mod tests {
             .expect("couldn't create test commit");
         let script = TestScript::new(Terminate::Never);
         let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args()).await;
-        m.set_revisions(vec!["HEAD".into()])
+        m.set_revisions(vec![hash1.clone()])
             .await
             .expect("couldn't set_revisions");
         select!(
@@ -344,7 +343,7 @@ mod tests {
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
-        m.set_revisions(vec!["HEAD".into()])
+        m.set_revisions(vec![hash2.clone()])
             .await
             .expect("couldn't set_revisions");
         select!(

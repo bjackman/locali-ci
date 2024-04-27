@@ -3,6 +3,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::Command as SyncCommand;
+use std::str;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -21,6 +22,7 @@ use crate::process::{OutputExt, SyncCommandExt};
 // of OsString.
 pub type RevSpec = OsString;
 
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct CommitHash(String);
 
 impl AsRef<OsStr> for CommitHash {
@@ -76,7 +78,9 @@ impl Worktree {
             .context("'git commit' failed")?;
         // Doesn't seem like there's a safer way to do this than commit and then retroactively parse
         // HEAD and hope nobody else is messing with us.
-        self.rev_parse("HEAD".into()).await?.ok_or(anyhow!("no HEAD after committing"))
+        self.rev_parse("HEAD".into())
+            .await?
+            .ok_or(anyhow!("no HEAD after committing"))
     }
 
     #[cfg(test)]
@@ -94,11 +98,12 @@ impl Worktree {
         if output.code_not_killed()? == 128 {
             return Ok(None);
         }
-        let out_string = String::from_utf8(output.stdout).context("reading git rev-parse output")?;
+        let out_string =
+            String::from_utf8(output.stdout).context("reading git rev-parse output")?;
         Ok(Some(CommitHash(out_string.trim().to_owned())))
     }
 
-    async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
+    async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<CommitHash>> {
         let output = self
             .git(["rev-list"])
             .arg(range_spec)
@@ -118,14 +123,8 @@ impl Worktree {
                 String::from_utf8_lossy(&output.stdout)
             ));
         }
-        Ok(OsStr::from_bytes(&output.stdout)
-            .split_lines()
-            .iter()
-            // TODO: How do I avoid allocating and copying each string here? I
-            // think I need to move the stdout into the caller, is there an
-            // ergonomic way to do that?
-            .map(|os_str| os_str.to_os_string())
-            .collect())
+        let out_str: &str = str::from_utf8(&output.stdout).context("non utf-8 rev-list output")?;
+        Ok(out_str.lines().map(|l| CommitHash(l.to_owned())).collect())
     }
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
@@ -139,7 +138,7 @@ impl Worktree {
         range_spec: &'a OsStr,
     ) -> anyhow::Result<(
         notify::RecommendedWatcher,
-        impl Stream<Item = anyhow::Result<Vec<RevSpec>>> + 'a,
+        impl Stream<Item = anyhow::Result<Vec<CommitHash>>> + 'a,
     )> {
         // Alternatives considered/attempted:
         //
