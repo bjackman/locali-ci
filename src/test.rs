@@ -295,10 +295,8 @@ mod tests {
         }
 
         // Blocks until the script is started for the given commit hash.
-        async fn started(&self, hash: CommitHash) {
-            let mut f = OsString::from(Self::STARTED_FILENAME_PREFIX);
-            f.push(hash);
-            let p = self.dir.path().join(f);
+        async fn started(&self, hash: &CommitHash) {
+            let p = self.dir.path().join(hash.as_ref());
             await_exists_and_read(p).await;
         }
     }
@@ -320,7 +318,7 @@ mod tests {
         // stable.
         select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
-            _ = script.started(hash) => (),
+            _ = script.started(&hash) => (),
         );
     }
 
@@ -339,7 +337,7 @@ mod tests {
             .expect("couldn't set_revisions");
         select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s for hash1"),
-            _ = script.started(hash1) => ()
+            _ = script.started(&hash1) => ()
         );
         let hash2 = fixture
             .repo
@@ -351,7 +349,7 @@ mod tests {
             .expect("couldn't set_revisions");
         select!(
             _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s for hash2"),
-            _ = script.started(hash2) => ()
+            _ = script.started(&hash2) => ()
         );
         // TODO: check that the old test gets aborted.
     }

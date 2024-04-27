@@ -21,8 +21,13 @@ use crate::process::{OutputExt, SyncCommandExt};
 // of OsString.
 pub type RevSpec = OsString;
 
-#[cfg(test)]
-pub type CommitHash = String;
+pub struct CommitHash(String);
+
+impl AsRef<OsStr> for CommitHash {
+    fn as_ref(&self) -> &OsStr {
+        OsStr::from_bytes(self.0.as_bytes())
+    }
+}
 
 // Worktree represents a git tree, which might be the "main" worktree (in which case it might be
 // more clearly refrred to by the name Repo) or some other one.
@@ -90,7 +95,7 @@ impl Worktree {
             return Ok(None);
         }
         let out_string = String::from_utf8(output.stdout).context("reading git rev-parse output")?;
-        Ok(Some(out_string.trim().to_owned()))
+        Ok(Some(CommitHash(out_string.trim().to_owned())))
     }
 
     async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<RevSpec>> {
