@@ -295,8 +295,11 @@ mod tests {
 
         // Blocks until the script is started for the given commit hash.
         async fn started(&self, hash: &CommitHash) {
-            let p = self.dir.path().join(hash.as_ref());
-            await_exists_and_read(p).await;
+            // Argh I dunno this is annoying.
+            let mut filename = OsString::from(Self::STARTED_FILENAME_PREFIX);
+            filename.push(hash.as_ref());
+            let path = self.dir.path().join(filename);
+            await_exists_and_read(path).await;
         }
     }
 
