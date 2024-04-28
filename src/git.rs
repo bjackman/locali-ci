@@ -1,4 +1,4 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
@@ -18,9 +18,6 @@ use tokio::time::sleep;
 
 use crate::process::CommandExt;
 use crate::process::{OutputExt, SyncCommandExt};
-// Here we don't use the newtype pattern because we actually wanna be able to leak useful features
-// of OsString.
-pub type RevSpec = OsString;
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct CommitHash(String);
@@ -78,14 +75,17 @@ impl Worktree {
             .context("'git commit' failed")?;
         // Doesn't seem like there's a safer way to do this than commit and then retroactively parse
         // HEAD and hope nobody else is messing with us.
-        self.rev_parse("HEAD".into())
+        self.rev_parse("HEAD")
             .await?
             .ok_or(anyhow!("no HEAD after committing"))
     }
 
     #[cfg(test)]
     // None means we successfully looked it up but it didn't exist.
-    pub async fn rev_parse(&self, rev_spec: RevSpec) -> anyhow::Result<Option<CommitHash>> {
+    pub async fn rev_parse<S>(&self, rev_spec: S) -> anyhow::Result<Option<CommitHash>>
+    where
+        S: AsRef<OsStr>,
+    {
         let output = self
             .git(["rev-parse"])
             .arg(rev_spec)
@@ -103,7 +103,8 @@ impl Worktree {
         Ok(Some(CommitHash(out_string.trim().to_owned())))
     }
 
-    async fn rev_list(&self, range_spec: &OsStr) -> anyhow::Result<Vec<CommitHash>> {
+    async fn rev_list<S>(&self, range_spec: S) -> anyhow::Result<Vec<CommitHash>>
+    where S: AsRef<OsStr>{
         let output = self
             .git(["rev-list"])
             .arg(range_spec)
