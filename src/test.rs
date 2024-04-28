@@ -4,12 +4,16 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::Path;
 use std::pin::pin;
+use std::process::Stdio;
 use std::sync::Arc;
 
-use anyhow::Context;
-use futures::future::{join_all, select_all, SelectAll};
+use anyhow::{anyhow, Context};
+use futures::future::{FutureExt, join_all, select_all, SelectAll};
 use futures::StreamExt;
 use log::{info, warn};
+use nix::sys::signal::kill;
+use nix::sys::signal::Signal;
+use nix::unistd::Pid;
 use tokio::process::Command;
 use tokio::select;
 use tokio::task::JoinHandle;
@@ -78,7 +82,7 @@ impl Manager {
             let ct = CancellationToken::new();
             self.job_cts.insert((*rev).clone(), ct.clone());
             let job = Job {
-                _ct: ct.clone(),
+                ct: ct.clone(),
                 rev: (*rev).clone(),
                 program: self.program.clone(),
                 args: self.args.clone(),
@@ -112,7 +116,7 @@ struct Job {
     // Manager. Am I being silly here or is this just the practical way?
     rev: CommitHash,
     // TODO: Implement cancellation.
-    _ct: CancellationToken,
+    ct: CancellationToken,
     // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
     // just make these references to a value owned by the Manager (basically same comment as for
     // .rev)
@@ -121,7 +125,8 @@ struct Job {
 }
 
 impl Job {
-    async fn run(&self, worktree: &Path) -> anyhow::Result<std::process::Output> {
+    // Returns None if the job is cancelled, once it has been killed.
+    async fn run(&self, worktree: &Path) -> anyhow::Result<Option<std::process::Output>> {
         // TODO: Move this logic into the git module.
         let mut checkout_cmd = Command::new("git");
         (checkout_cmd
@@ -139,7 +144,44 @@ impl Job {
         let mut cmd = Command::new(&*self.program);
         // TODO: Is that stupid-looking &* a smell that I'm doing something stupid?
         cmd.args(&*self.args).current_dir(worktree);
-        cmd.output().await.map_err(anyhow::Error::from)
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        let child = cmd.spawn().context("spawning test command")?;
+        // lol wat?
+        let pid = Pid::from_raw(
+            child
+                .id()
+                .ok_or(anyhow!("no PID for child job"))?
+                .try_into()
+                .unwrap(),
+        );
+        // We'll interrupt the child if we get cancelled, but we must wait for it to finish
+        // regardless before we can release the worktree for another job.
+        // TODO: this whole dance seems pretty ridiculous, would be interesting
+        // to come back to this with some more experience...
+        let mut wait_fut = pin!(child.wait_with_output());
+        let mut cancel_fut = pin!(self.ct.cancelled().fuse());
+        let mut cancelled = false;
+        // Max 2 iterations are possible.
+        loop {
+            select! {
+                result = &mut wait_fut => {
+                    // I think maybe a true Rustacean would write this block as a
+                    // single chain of methods? But it seems ridiculous to me.
+                    let output = result.map_err(anyhow::Error::from)?;
+                    if cancelled {
+                        // Don't care about actual outcome of job.
+                        return Ok(None);
+                    } else {
+                        return Ok(Some(output))
+                    }
+                },
+                _ = &mut cancel_fut => {
+                    kill(pid, Signal::SIGINT).context("couldn't interrupt child job")?;
+                    cancelled = true;
+                }
+            }
+        }
     }
 }
 
