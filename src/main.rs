@@ -7,6 +7,8 @@ use std::pin::pin;
 use std::str;
 use std::sync::Arc;
 
+use crate::git::Worktree;
+
 mod git;
 mod process;
 mod test;
@@ -37,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     env_logger::init();
 
-    let repo = git::Worktree {
+    let repo = git::PersistentWorktree {
         path: args.repo_path.to_owned().into(),
     };
     // Check repo is valid.

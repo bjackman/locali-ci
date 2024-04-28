@@ -19,6 +19,9 @@ use tokio::select;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+use crate::git::PersistentWorktree;
+use crate::git::TempWorktree;
 use crate::git::{CommitHash, Worktree};
 use crate::process::OutputExt;
 
@@ -35,11 +38,18 @@ impl Manager {
     // Starts the workers. You must call close() before dropping it.
     //
     // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
-    pub async fn new<W>(num_threads: u32, repo: W, program: OsString, args: Vec<OsString>) -> Self
+    pub async fn new<W>(
+        num_threads: u32,
+        // This needs to be an Arc because we hold onto a reference to it for a
+        // while, and create temporary worktrees from it in the background.
+        repo: Arc<W>,
+        program: OsString,
+        args: Vec<OsString>,
+    ) -> Self
     where
-        // TODO: is this just a really silly roundabout way of saying that W has to be
-        // Arc<Worktree>?
-        W: Borrow<Worktree> + Send + Clone + 'static,
+        // TODO: it would be easier to just require that Worktree is Send+Sync. But it feels Wrong.
+        // TODO: I don't really understand why we have 'static here, the compiler suggested it :/
+        W: Worktree + Sync + Send + 'static,
     {
         let (chan_tx, chan_rx) = async_channel::unbounded();
         let join_handles = join_all((0..num_threads).map(|i| {
@@ -48,7 +58,7 @@ impl Manager {
                 chan_rx: chan_rx.clone(),
             };
 
-            worker.start(repo.clone())
+            worker.start::<Arc<_>, W>(repo.clone())
         }))
         .await;
 
@@ -199,18 +209,17 @@ struct Worker {
 // a job, and it should just block until it can get an available worktree from a pool.
 impl Worker {
     // TODO: Need to log somewhere immediately when the worker hits an irrecoverable error.
-    async fn start<W>(self, repo: W) -> JoinHandle<anyhow::Result<()>>
+    async fn start<R, W>(self, repo: R) -> JoinHandle<anyhow::Result<()>>
     where
-        W: Borrow<Worktree> + Send + 'static,
+        R: Borrow<W> + Send + 'static,
+        W: Worktree + Sync,
     {
         // TODO: How can I get the repo path into the worker task more cleanly than this? If we had
         // an Rc or Arc we could clone that. Can we do that without having to hard-code the smart
         // pointer type in Manager::new, perhaps using Borrow<Worktree>?
         tokio::spawn(async move {
             // TODO: Where do we handle failure of this?
-            let worktree = repo
-                .borrow()
-                .temp_worktree()
+            let worktree = TempWorktree::create_from(repo.borrow())
                 .await
                 .context("setting up worker")
                 .map_err(|e| {
@@ -278,13 +287,13 @@ mod tests {
     // started,  and finish() that exits successfully and stuff like that.
     struct Fixture {
         _temp_dir: TempDir,
-        repo: Arc<Worktree>,
+        repo: Arc<PersistentWorktree>,
     }
 
     impl Fixture {
         async fn new() -> Self {
             let temp_dir = TempDir::with_prefix("fixture-").expect("couldn't make tempdir");
-            let repo = Worktree::init_repo(temp_dir.path().into())
+            let repo = PersistentWorktree::create(temp_dir.path().into())
                 .await
                 .expect("couldn't init test repo");
             Self {

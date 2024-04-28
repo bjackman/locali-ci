@@ -30,11 +30,28 @@ impl AsRef<OsStr> for CommitHash {
 
 // Worktree represents a git tree, which might be the "main" worktree (in which case it might be
 // more clearly refrred to by the name Repo) or some other one.
-pub struct Worktree {
+pub struct PersistentWorktree {
     pub path: PathBuf,
 }
 
-impl Worktree {
+impl PersistentWorktree {
+    #[cfg(test)]
+    pub async fn create(path: PathBuf) -> anyhow::Result<Self> {
+        let zelf = Self { path }; // https://www.youtube.com/watch?v=_MwboA5NIVA
+        zelf.git(["init"]).execute().await?;
+        Ok(zelf)
+    }
+}
+
+impl Worktree for PersistentWorktree {
+    fn path(&self) -> &Path {
+        return &self.path;
+    }
+}
+
+pub trait Worktree {
+    fn path(&self) -> &Path;
+
     // Convenience function to create a git command with some pre-filled args.
     fn git<I, S>(&self, args: I) -> Command
     where
@@ -42,11 +59,11 @@ impl Worktree {
         S: AsRef<OsStr>,
     {
         let mut cmd = Command::new("git");
-        cmd.current_dir(&self.path).args(args);
+        cmd.current_dir(self.path()).args(args);
         cmd
     }
 
-    pub async fn git_dir(&self) -> anyhow::Result<PathBuf> {
+    async fn git_dir(&self) -> anyhow::Result<PathBuf> {
         let output = self
             .git(["rev-parse", "--git-dir"])
             .execute()
@@ -56,14 +73,7 @@ impl Worktree {
     }
 
     #[cfg(test)]
-    pub async fn init_repo(path: PathBuf) -> anyhow::Result<Self> {
-        let zelf = Self { path }; // https://www.youtube.com/watch?v=_MwboA5NIVA
-        zelf.git(["init"]).execute().await?;
-        Ok(zelf)
-    }
-
-    #[cfg(test)]
-    pub async fn commit<S>(&self, message: S) -> anyhow::Result<CommitHash>
+    async fn commit<S>(&self, message: S) -> anyhow::Result<CommitHash>
     where
         S: AsRef<OsStr>,
     {
@@ -82,7 +92,7 @@ impl Worktree {
 
     #[cfg(test)]
     // None means we successfully looked it up but it didn't exist.
-    pub async fn rev_parse<S>(&self, rev_spec: S) -> anyhow::Result<Option<CommitHash>>
+    async fn rev_parse<S>(&self, rev_spec: S) -> anyhow::Result<Option<CommitHash>>
     where
         S: AsRef<OsStr>,
     {
@@ -134,7 +144,7 @@ impl Worktree {
     // TODO: How do I hide the notify::RecommendedWatcher from the caller? They need to own it
     // because otherwise it just gets dropped. I think I probably want to just move it into the
     // object I return that implements Stream.
-    pub fn watch_refs<'a>(
+    fn watch_refs<'a>(
         &'a self,
         range_spec: &'a OsStr,
     ) -> anyhow::Result<(
@@ -169,7 +179,7 @@ impl Worktree {
             Config::default(),
         )?;
         watcher
-            .watch(&self.path, RecursiveMode::Recursive)
+            .watch(self.path(), RecursiveMode::Recursive)
             .context("setting up watcher")?;
 
         // This logic "debounces" consecutive events within the same 1s window, to avoid thrashing
@@ -200,27 +210,6 @@ impl Worktree {
             },
         ))
     }
-
-    pub async fn temp_worktree(&self) -> anyhow::Result<TempWorktree> {
-        // Not doing this async because I assume it's fast, there is no white-glove support, and the
-        // drop will have to be synchronous anyway.
-        let temp_dir = TempDir::with_prefix("worktree-").context("creating temp dir")?;
-
-        self.git(["worktree", "add"])
-            .arg(temp_dir.path())
-            .arg("HEAD")
-            .execute()
-            .await
-            .context("'git worktree add' failed")?;
-
-        Ok(TempWorktree {
-            origin: self.path.clone(),
-            worktree: Self {
-                path: temp_dir.path().to_owned(),
-            },
-            temp_dir,
-        })
-    }
 }
 
 // A worktree that is deleted when dropped. This is kind of a dumb API that just happens to fit this
@@ -228,16 +217,38 @@ impl Worktree {
 // something.
 pub struct TempWorktree {
     origin: PathBuf, // Path of repo this was created from.
-    // TODO: It would be nice if we didn't have to have two copies of the dir path...?
-    worktree: Worktree,
     temp_dir: TempDir,
+}
+
+impl TempWorktree {
+    pub async fn create_from<W>(origin: &W) -> anyhow::Result<TempWorktree>
+    where
+        W: Worktree,
+    {
+        // Not doing this async because I assume it's fast, there is no white-glove support, and the
+        // drop will have to be synchronous anyway.
+        let temp_dir = TempDir::with_prefix("worktree-").context("creating temp dir")?;
+
+        origin
+            .git(["worktree", "add"])
+            .arg(temp_dir.path())
+            .arg("HEAD")
+            .execute()
+            .await
+            .context("'git worktree add' failed")?;
+
+        Ok(Self {
+            origin: origin.path().to_owned(),
+            temp_dir,
+        })
+    }
 }
 
 // TODO: this is silly, TempWorktree should really just share logic with Worktree. That should also
 // allow remembering the difference between the repository itself and on of its worktrees.
-impl TempWorktree {
-    pub fn path(&self) -> &Path {
-        &self.worktree.path
+impl Worktree for TempWorktree {
+    fn path(&self) -> &Path {
+        &self.temp_dir.path()
     }
 }
 
@@ -304,7 +315,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_new_gitdir_notgit() {
         let tmp_dir = TempDir::new().expect("couldn't make tempdir");
-        let wt = Worktree {
+        let wt = PersistentWorktree {
             path: tmp_dir.path().to_path_buf(),
         };
         assert!(
@@ -321,7 +332,7 @@ mod tests {
                 File::create(tmp_dir.path().join(".git")).expect("couldn't create .git");
             write!(bogus_git_file, "no no no").expect("couldn't write .git");
         }
-        let wt = Worktree {
+        let wt = PersistentWorktree {
             path: tmp_dir.path().to_path_buf(),
         };
         assert!(
