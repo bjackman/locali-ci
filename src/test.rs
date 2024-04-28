@@ -303,7 +303,7 @@ mod tests {
 
     enum Terminate {
         Immediately,
-        Never,
+        OnSigint,
     }
 
     impl TestScript {
@@ -325,7 +325,7 @@ mod tests {
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
                 maybe_read = match terminate {
                     Terminate::Immediately => "",
-                    Terminate::Never => "read",
+                    Terminate::OnSigint => "read",
                 }
             );
             Self {
@@ -416,7 +416,7 @@ mod tests {
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
-        let script = TestScript::new(Terminate::Never);
+        let script = TestScript::new(Terminate::OnSigint);
         let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args()).await;
         m.set_revisions(vec![hash1.clone()])
             .await
