@@ -8,7 +8,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use futures::future::{FutureExt, join_all, select_all, SelectAll};
+use futures::future::{join_all, select_all, FutureExt, SelectAll};
 use futures::StreamExt;
 use log::{info, warn};
 use nix::sys::signal::kill;
@@ -245,8 +245,9 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{path::PathBuf, time::Duration};
 
+    use futures::Future;
     use tempfile::TempDir;
     use test_log;
     use tokio::{
@@ -307,17 +308,24 @@ mod tests {
 
     impl TestScript {
         const STARTED_FILENAME_PREFIX: &'static str = "started.";
+        const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
 
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
-        fn new(terminate: Terminate) -> Self {
+        pub fn new(terminate: Terminate) -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
+            // The script will touch a special file to notify us that it has been started. On
+            // receiving SIGINT it touches a nother special file. Then if
+            // Terminate::Never it blocks on input, which it will never receive.
             let script = format!(
-                "touch {:?}$(git rev-parse HEAD) {}",
-                dir.path().join(Self::STARTED_FILENAME_PREFIX),
-                match terminate {
+                "touch {started_path_prefix:?}$(git rev-parse HEAD)
+                trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
+                {maybe_read}",
+                started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
+                siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
+                maybe_read = match terminate {
                     Terminate::Immediately => "",
-                    Terminate::Never => "&& read",
+                    Terminate::Never => "read",
                 }
             );
             Self {
@@ -327,22 +335,57 @@ mod tests {
         }
 
         // Pass this to Manager::new
-        fn program(&self) -> OsString {
+        pub fn program(&self) -> OsString {
             "bash".into()
         }
         // Pass this to Manager::new
-        fn args(&self) -> Vec<OsString> {
+        pub fn args(&self) -> Vec<OsString> {
             vec!["-xc".into(), self.script.clone()]
         }
 
-        // Blocks until the script is started for the given commit hash.
-        async fn started(&self, hash: &CommitHash) {
+        // Path used by the running script to signal an event.
+        fn signalling_path(&self, filename_prefix: &str, hash: &CommitHash) -> PathBuf {
             // Argh I dunno this is annoying.
-            let mut filename = OsString::from(Self::STARTED_FILENAME_PREFIX);
+            let mut filename = OsString::from(filename_prefix);
             filename.push(hash.as_ref());
-            let path = self.dir.path().join(filename);
-            await_exists_and_read(path).await;
+            self.dir.path().join(filename)
         }
+
+        // Blocks until the script is started for the given commit hash.
+        pub async fn started(&self, hash: &CommitHash) -> StartedTestScript {
+            await_exists_and_read(self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)).await;
+            StartedTestScript {
+                script: &self,
+                hash: hash.to_owned(),
+            }
+        }
+    }
+
+    // Like a TestScript, but you can only get one once it's already startd running, so it has extra
+    // operations.
+    struct StartedTestScript<'a> {
+        script: &'a TestScript,
+        hash: CommitHash,
+    }
+
+    impl<'a> StartedTestScript<'a> {
+        // Blocks until the script has received a SIGINT.
+        pub async fn siginted(&self) {
+            await_exists_and_read(
+                self.script
+                    .signalling_path(TestScript::SIGINTED_FILENAME_PREFIX, &self.hash),
+            ).await;
+        }
+    }
+
+    async fn timeout_1s<F, T>(fut: F) -> anyhow::Result<T>
+    where
+        F: Future<Output = T>,
+    {
+        select!(
+            _ = sleep(Duration::from_secs(1)) => Err(anyhow!("timeout after 1s")),
+            output = fut => Ok(output)
+        )
     }
 
     #[test_log::test(tokio::test)]
@@ -360,10 +403,9 @@ mod tests {
             .expect("couldn't set_revisions");
         // TODO: Instead of watching until we see the command being done, ask the manager when it's
         // stable.
-        select!(
-            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s"),
-            _ = script.started(&hash) => (),
-        );
+        timeout_1s(script.started(&hash))
+            .await
+            .expect("script did not run");
     }
 
     #[test_log::test(tokio::test)]
@@ -375,14 +417,13 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new(Terminate::Never);
-        let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args()).await;
+        let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args()).await;
         m.set_revisions(vec![hash1.clone()])
             .await
             .expect("couldn't set_revisions");
-        select!(
-            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s for hash1"),
-            _ = script.started(&hash1) => ()
-        );
+        let started_hash1 = timeout_1s(script.started(&hash1))
+            .await
+            .expect("script did not run for hash1");
         let hash2 = fixture
             .repo
             .commit("hello,")
@@ -391,14 +432,15 @@ mod tests {
         m.set_revisions(vec![hash2.clone()])
             .await
             .expect("couldn't set_revisions");
-        select!(
-            _ = sleep(Duration::from_secs(1)) => panic!("script did not run after 1s for hash2"),
-            _ = script.started(&hash2) => ()
-        );
-        // TODO: check that the old test gets aborted.
+        timeout_1s(script.started(&hash2))
+            .await
+            .expect("script did not run for hash2");
+        timeout_1s(started_hash1.siginted()).await.expect("hash1 test did not get siginted");
+        // TODO: Is there some way to check that the hash1 test got fully shut
+        // down before the hash2 test was able to start using the worktree?
     }
 
-    // TODO: test cancellation
+    // TODO: test with variations of nthreads size and queue depth.
     // TODO: test starting up on an empty repo?
     // TODO: test only one worker task (I think this is actually broken)
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
