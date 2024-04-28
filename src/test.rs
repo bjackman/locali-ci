@@ -42,7 +42,7 @@ impl Manager {
         W: Borrow<Worktree> + Send + Clone + 'static,
     {
         let (chan_tx, chan_rx) = async_channel::unbounded();
-        let join_handles = join_all((1..num_threads).map(|i| {
+        let join_handles = join_all((0..num_threads).map(|i| {
             let worker = Worker {
                 id: i,
                 chan_rx: chan_rx.clone(),
