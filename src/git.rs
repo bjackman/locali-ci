@@ -45,7 +45,7 @@ impl PersistentWorktree {
 
 impl Worktree for PersistentWorktree {
     fn path(&self) -> &Path {
-        return &self.path;
+        &self.path
     }
 }
 
@@ -248,7 +248,7 @@ impl TempWorktree {
 // allow remembering the difference between the repository itself and on of its worktrees.
 impl Worktree for TempWorktree {
     fn path(&self) -> &Path {
-        &self.temp_dir.path()
+        self.temp_dir.path()
     }
 }
 
