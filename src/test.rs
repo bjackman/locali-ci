@@ -339,8 +339,8 @@ mod tests {
             // receiving SIGINT it touches a nother special file. Then if
             // Terminate::Never it blocks on input, which it will never receive.
             let script = format!(
-                "touch {started_path_prefix:?}$(git rev-parse HEAD)
-                trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
+                "trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
+                touch {started_path_prefix:?}$(git rev-parse HEAD)
                 {maybe_read}",
                 started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
