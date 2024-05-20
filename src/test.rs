@@ -395,7 +395,8 @@ mod tests {
             await_exists_and_read(
                 self.script
                     .signalling_path(TestScript::SIGINTED_FILENAME_PREFIX, &self.hash),
-            ).await;
+            )
+            .await;
         }
     }
 
@@ -456,7 +457,9 @@ mod tests {
         timeout_1s(script.started(&hash2))
             .await
             .expect("script did not run for hash2");
-        timeout_1s(started_hash1.siginted()).await.expect("hash1 test did not get siginted");
+        timeout_1s(started_hash1.siginted())
+            .await
+            .expect("hash1 test did not get siginted");
         // TODO: Is there some way to check that the hash1 test got fully shut
         // down before the hash2 test was able to start using the worktree?
     }
