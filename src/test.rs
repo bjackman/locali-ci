@@ -266,9 +266,10 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, time::Duration};
+    use std::{path::PathBuf, thread::panicking, time::Duration};
 
     use futures::Future;
+    use log::error;
     use tempfile::TempDir;
     use test_log;
     use tokio::{
@@ -330,25 +331,48 @@ mod tests {
     impl TestScript {
         const STARTED_FILENAME_PREFIX: &'static str = "started.";
         const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
+        const LOCK_FILENAME: &'static str = "lockfile";
+        const EXCLUSION_BUG_PATH: &'static str = "exclusion_bug";
 
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
         pub fn new(terminate: Terminate) -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
             // The script will touch a special file to notify us that it has been started. On
-            // receiving SIGINT it touches a nother special file. Then if
-            // Terminate::Never it blocks on input, which it will never receive.
+            // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
+            // on input, which it will never receive.
+            //
+            // The "lockfile" lets us detect if the worktree gets assigned to multiple script
+            // instances at once. We would ideally actually do this with flock but it turns out to
+            // be a bit of a pain to use, so we just use regular if-statements. I _guess_ we can
+            // trust from the PoV of a single thread that this will be consistent, i.e. it cannot
+            // produce false positive failures. I am sure that it can produce false negatives, but
+            // we could get false negatives here even with flock, since there is always a window
+            // between the script starting and it actually taking the lock.
+            //
+            // Note that the blocking thing (maybe_read) must be a shell builtin; otherwise we would
+            // need more Bash hackery to ensure that the signal gets forwarded to it.
             let script = format!(
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
                 touch {started_path_prefix:?}$(git rev-parse HEAD)
+
+                if [ -e {lockfile_path:?} ]; then
+                    touch {exclusion_bug_path:?}
+                fi
+                touch {lockfile_path:?}
+                trap \"rm {lockfile_path:?}\" EXIT
+
                 {maybe_read}",
                 started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
+                lockfile_path = dir.path().join(Self::LOCK_FILENAME),
+                exclusion_bug_path = dir.path().join(Self::EXCLUSION_BUG_PATH),
                 maybe_read = match terminate {
                     Terminate::Immediately => "",
                     Terminate::OnSigint => "read",
                 }
             );
+
             Self {
                 dir,
                 script: script.into(),
@@ -372,12 +396,34 @@ mod tests {
             self.dir.path().join(filename)
         }
 
+        // If this path exists, two instances of the script used the same worktree at once.
+        fn exclusion_bug_path(&self) -> PathBuf {
+            self.dir.path().join(Self::EXCLUSION_BUG_PATH)
+        }
+
         // Blocks until the script is started for the given commit hash.
         pub async fn started(&self, hash: &CommitHash) -> StartedTestScript {
             await_exists_and_read(self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)).await;
             StartedTestScript {
                 script: &self,
                 hash: hash.to_owned(),
+            }
+        }
+    }
+
+    // Hack to check for stuff that is orthogonal to any particular test, so we
+    // don't wanna have to it in every individual test.
+    impl Drop for TestScript {
+        fn drop(&mut self) {
+            if self.exclusion_bug_path().exists() {
+                let msg = "Overlapping test script runs used the same worktree";
+                if panicking() {
+                    // If you panic during a panic (i.e. if this fails when the test had already
+                    // failed) you get a huge splat. Just log instead.
+                    error!("{}", msg);
+                } else {
+                    panic!("{}", msg);
+                }
             }
         }
     }
@@ -460,10 +506,9 @@ mod tests {
         timeout_1s(started_hash1.siginted())
             .await
             .expect("hash1 test did not get siginted");
-        // TODO: Is there some way to check that the hash1 test got fully shut
-        // down before the hash2 test was able to start using the worktree?
     }
 
+    // TODO: test actually getting the result back
     // TODO: test with variations of nthreads size and queue depth.
     // TODO: test starting up on an empty repo?
     // TODO: test only one worker task (I think this is actually broken)
