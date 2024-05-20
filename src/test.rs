@@ -245,7 +245,16 @@ impl Worker {
                     self.id,
                     job.rev,
                     match result {
-                        Ok(output) => format!("{:?}", output),
+                        // String::from harmonizes types between legs of the match.
+                        Ok(None) => String::from("cancelled"),
+                        Ok(output) => {
+                            let o = output.unwrap();
+                            format!(
+                                "stdout: {}\nstderr: {}",
+                                String::from_utf8_lossy(&o.stdout),
+                                String::from_utf8_lossy(&o.stderr)
+                            )
+                        }
                         Err(e) => format!("err: {:#}", e),
                     }
                 );
