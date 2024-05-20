@@ -1,3 +1,5 @@
+use core::fmt;
+use core::fmt::Display;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -8,30 +10,31 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use futures::future::{join_all, select_all, FutureExt, SelectAll};
-use futures::StreamExt;
-use log::{info, warn};
+use futures::future::{try_join_all, FutureExt};
+use log::info;
 use nix::sys::signal::kill;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use tokio::process::Command;
 use tokio::select;
-use tokio::task::JoinHandle;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
 use crate::git::PersistentWorktree;
 use crate::git::TempWorktree;
 use crate::git::{CommitHash, Worktree};
+use crate::pool::Pool;
 use crate::process::OutputExt;
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     job_cts: HashMap<CommitHash, CancellationToken>,
+    // TODO: Fold error case into CommitTestResult, figure out how to do this with ? operator.
+    result_tx: broadcast::Sender<Arc<anyhow::Result<CommitTestResult>>>,
     program: Arc<OsString>,
     args: Arc<Vec<OsString>>,
-    chan_tx: async_channel::Sender<Job>,
-    worker_shutdown: SelectAll<JoinHandle<anyhow::Result<()>>>,
+    worktree_pool: Arc<Pool<TempWorktree>>,
 }
 
 impl Manager {
@@ -45,7 +48,7 @@ impl Manager {
         repo: Arc<W>,
         program: OsString,
         args: Vec<OsString>,
-    ) -> Self
+    ) -> anyhow::Result<Self>
     where
         // We need to specify 'static here. Just because we have an Arc over the
         // repo that doesn't mean it automatically satisfies 'static:
@@ -54,24 +57,18 @@ impl Manager {
         // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
         W: Worktree + Sync + Send + 'static,
     {
-        let (chan_tx, chan_rx) = async_channel::unbounded();
-        let join_handles = join_all((0..num_threads).map(|i| {
-            let worker = Worker {
-                id: i,
-                chan_rx: chan_rx.clone(),
-            };
-
-            worker.start::<Arc<_>, W>(repo.clone())
-        }))
-        .await;
-
-        Self {
+        let worktrees =
+            try_join_all((0..num_threads).map(|_| TempWorktree::create_from::<W>(repo.borrow())))
+                .await
+                .context("setting up temporary worktrees")?;
+        let (result_tx, _) = broadcast::channel(32);
+        Ok(Self {
+            result_tx,
             job_cts: HashMap::new(),
             program: Arc::new(program),
             args: Arc::new(args),
-            worker_shutdown: select_all(join_handles),
-            chan_tx,
-        }
+            worktree_pool: Arc::new(Pool::new(worktrees)),
+        })
     }
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
@@ -96,26 +93,55 @@ impl Manager {
             let ct = CancellationToken::new();
             self.job_cts.insert((*rev).clone(), ct.clone());
             let job = Job {
-                ct: ct.clone(),
-                rev: (*rev).clone(),
+                rev: rev.to_owned(),
+                ct,
                 program: self.program.clone(),
                 args: self.args.clone(),
             };
-            // Send the job down the channel, but bail if any of the workers are dead.
-            //
-            // TODO: This is a dreadful mess. There are too many layers of fallbility, maybe I am
-            // doing something wrong.
-            select!(
-                (result, _, _) = &mut self.worker_shutdown => {
-                    result.expect("select failed").context("worker thread shut down")
-                },
-                result = self.chan_tx.send(job) => {
-                    result.expect("channel send failed");
-                    Ok(())
-                }
-            )?
+            let pool = self.worktree_pool.clone();
+            let tx = self.result_tx.clone();
+            tokio::spawn(async move {
+                let worktree = pool.get().await;
+                let result = job.run(worktree.path()).await;
+                tx.send(Arc::new(result)).expect("couldn't send result");
+            });
         }
         Ok(())
+    }
+
+    // Streams results back. Note you need to call this _before_ you generate the results you want
+    // to receive.
+    //
+    // I think the "proper" solution for this is to return a Stream. But I don't understand it.
+    pub fn results(&self) -> broadcast::Receiver<Arc<anyhow::Result<CommitTestResult>>> {
+        self.result_tx.subscribe()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CommitTestResult {
+    pub hash: CommitHash,
+    pub result: TestResult,
+}
+
+impl Display for CommitTestResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Result: {} => {}", self.hash, self.result)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TestResult {
+    Canceled,
+    Completed { exit_code: i32 },
+}
+
+impl Display for TestResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Canceled => write!(f, "Cancelled"),
+            Self::Completed { exit_code } => write!(f, "Completed - exit code {}", exit_code),
+        }
     }
 }
 
@@ -139,8 +165,7 @@ struct Job {
 }
 
 impl Job {
-    // Returns None if the job is cancelled, once it has been killed.
-    async fn run(&self, worktree: &Path) -> anyhow::Result<Option<std::process::Output>> {
+    async fn run(&self, worktree: &Path) -> anyhow::Result<CommitTestResult> {
         // TODO: Move this logic into the git module.
         let mut checkout_cmd = Command::new("git");
         (checkout_cmd
@@ -185,9 +210,9 @@ impl Job {
                     let output = result.map_err(anyhow::Error::from)?;
                     if cancelled {
                         // Don't care about actual outcome of job.
-                        return Ok(None);
+                        return Ok(CommitTestResult{hash: self.rev.to_owned(), result: TestResult::Canceled});
                     } else {
-                        return Ok(Some(output))
+                        return Ok(CommitTestResult{hash: self.rev.to_owned(), result: TestResult::Completed{exit_code: output.status.code().expect("TODO")}});
                     }
                 },
                 _ = &mut cancel_fut => {
@@ -196,72 +221,6 @@ impl Job {
                 }
             }
         }
-    }
-}
-
-// Basically a thread with a lazily-created worktree. Once started, receives Tasks on its channel
-// and runs them.
-struct Worker {
-    id: u32,
-    // Tokio's multiple-consumer channels only support broadcast where each receiver gets every
-    // message.
-    chan_rx: async_channel::Receiver<Job>,
-}
-
-// TODO: Now that we have async, this is a dumb architecture. Instead of spinning up a task per
-// worktree and then feeding jobs into them, we should just create a task immediately when we create
-// a job, and it should just block until it can get an available worktree from a pool.
-impl Worker {
-    // TODO: Need to log somewhere immediately when the worker hits an irrecoverable error.
-    async fn start<R, W>(self, repo: R) -> JoinHandle<anyhow::Result<()>>
-    where
-        R: Borrow<W> + Send + 'static,
-        W: Worktree + Sync,
-    {
-        // TODO: How can I get the repo path into the worker task more cleanly than this? If we had
-        // an Rc or Arc we could clone that. Can we do that without having to hard-code the smart
-        // pointer type in Manager::new, perhaps using Borrow<Worktree>?
-        tokio::spawn(async move {
-            // TODO: Where do we handle failure of this?
-            let worktree = TempWorktree::create_from(repo.borrow())
-                .await
-                .context("setting up worker")
-                .map_err(|e| {
-                    warn!("{:#}", e);
-                    e
-                })?;
-
-            info!(
-                "Worker {} started, working in {:?}",
-                self.id,
-                worktree.path()
-            );
-
-            let mut rx = pin!(self.chan_rx);
-            while let Some(job) = rx.next().await {
-                let result = job.run(worktree.path()).await;
-                // TODO: Clean up this mess
-                info!(
-                    "worker {} rev {:?} -> {:#}",
-                    self.id,
-                    job.rev,
-                    match result {
-                        // String::from harmonizes types between legs of the match.
-                        Ok(None) => String::from("cancelled"),
-                        Ok(output) => {
-                            let o = output.unwrap();
-                            format!(
-                                "stdout: {}\nstderr: {}",
-                                String::from_utf8_lossy(&o.stdout),
-                                String::from_utf8_lossy(&o.stderr)
-                            )
-                        }
-                        Err(e) => format!("err: {:#}", e),
-                    }
-                );
-            }
-            Ok(())
-        })
     }
 }
 
@@ -457,6 +416,26 @@ mod tests {
         )
     }
 
+    async fn expect_result_1s(
+        results: &mut broadcast::Receiver<Arc<anyhow::Result<CommitTestResult>>>,
+        want: CommitTestResult,
+    ) -> anyhow::Result<()> {
+        let result = timeout_1s(results.recv())
+            .await
+            .context("didn't get result after 1s")?
+            .expect("result channel terminated");
+        // TODO: What the fuck is going on with this double as_ref??
+        let got = result.as_ref().as_ref().expect("failed to test commit");
+        if got != &want {
+            return Err(anyhow!(
+                "Didn't get expected result - got {} want {}",
+                got,
+                want
+            ));
+        }
+        Ok(())
+    }
+
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
         let fixture = Fixture::new().await;
@@ -466,15 +445,25 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new(Terminate::Immediately);
-        let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args()).await;
+        let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args())
+            .await
+            .expect("couldn't set up manager");
+        let mut results = m.results();
         m.set_revisions(vec![hash.clone()])
             .await
             .expect("couldn't set_revisions");
-        // TODO: Instead of watching until we see the command being done, ask the manager when it's
-        // stable.
-        timeout_1s(script.started(&hash))
-            .await
-            .expect("script did not run");
+        // TODO: wait until the manager thinks it has no more work to do, using
+        // a special "settle" test method.
+        // We should get a singular result because we only fed in one revision.
+        expect_result_1s(
+            &mut results,
+            CommitTestResult {
+                hash: hash,
+                result: TestResult::Completed { exit_code: 0 },
+            },
+        )
+        .await
+        .expect("bad test result");
     }
 
     #[test_log::test(tokio::test)]
@@ -486,7 +475,10 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new(Terminate::OnSigint);
-        let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args()).await;
+        let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args())
+            .await
+            .expect("couldn't set up manager");
+        let mut results = m.results();
         m.set_revisions(vec![hash1.clone()])
             .await
             .expect("couldn't set_revisions");
@@ -507,9 +499,17 @@ mod tests {
         timeout_1s(started_hash1.siginted())
             .await
             .expect("hash1 test did not get siginted");
+        expect_result_1s(
+            &mut results,
+            CommitTestResult {
+                hash: hash1,
+                result: TestResult::Canceled,
+            },
+        )
+        .await
+        .unwrap();
     }
 
-    // TODO: test actually getting the result back
     // TODO: test with variations of nthreads size and queue depth.
     // TODO: test starting up on an empty repo?
     // TODO: test only one worker task (I think this is actually broken)

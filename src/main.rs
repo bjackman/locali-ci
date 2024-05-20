@@ -6,13 +6,14 @@ use std::ffi::{OsStr, OsString};
 use std::pin::pin;
 use std::str;
 use std::sync::Arc;
+use tokio::select;
 
 use crate::git::Worktree;
 
 mod git;
+mod pool;
 mod process;
 mod test;
-mod pool;
 
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
@@ -55,14 +56,27 @@ async fn main() -> anyhow::Result<()> {
         OsString::from(cmd.pop_front().unwrap()),
         cmd.iter().map(OsString::from).collect(),
     )
-    .await;
+    .await
+    .context("setting up test manager")?;
     let (_watcher, mut revs_stream) = repo.watch_refs(OsStr::new("HEAD^^^..HEAD"))?;
     let mut revs_stream = pin!(revs_stream);
-    while let Some(revs) = revs_stream.next().await {
-        println!("update");
-        let revs = revs?.into_iter().collect();
-        m.set_revisions(revs).await?;
+    let mut results = m.results();
+    loop {
+        select!(
+            revs = revs_stream.next() => {
+                // TODO: figure out if/how this can actually fail.
+                let revs = revs.expect("revset stream terminated");
+                let revs = revs?.into_iter().collect();
+                m.set_revisions(revs).await?;
+            },
+            result = results.recv() => {
+                // https://github.com/rust-lang/futures-rs/issues/1857
+                // AFAICS there is no way to encode a stream that never terminates.
+                let result = result.expect("result stream terminated");
+                // TODO: What the fucking fuck???? I should have used Perl.
+                let result = result.as_ref().as_ref().expect("failed to test!");
+                println!("Result for {}: {}", result.hash, result.result);
+            }
+        )
     }
-    println!("revset stream terminated");
-    Ok(())
 }

@@ -1,3 +1,5 @@
+use core::fmt;
+use core::fmt::Display;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
@@ -25,6 +27,12 @@ pub struct CommitHash(String);
 impl AsRef<OsStr> for CommitHash {
     fn as_ref(&self) -> &OsStr {
         OsStr::from_bytes(self.0.as_bytes())
+    }
+}
+
+impl Display for CommitHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -114,7 +122,9 @@ pub trait Worktree {
     }
 
     async fn rev_list<S>(&self, range_spec: S) -> anyhow::Result<Vec<CommitHash>>
-    where S: AsRef<OsStr>{
+    where
+        S: AsRef<OsStr>,
+    {
         let output = self
             .git(["rev-list"])
             .arg(range_spec)
@@ -215,6 +225,7 @@ pub trait Worktree {
 // A worktree that is deleted when dropped. This is kind of a dumb API that just happens to fit this
 // project's exact needs. Instead probably Repo::new and this method should return a common trait or
 // something.
+#[derive(Debug)]
 pub struct TempWorktree {
     origin: PathBuf, // Path of repo this was created from.
     temp_dir: TempDir,
