@@ -47,8 +47,11 @@ impl Manager {
         args: Vec<OsString>,
     ) -> Self
     where
-        // TODO: it would be easier to just require that Worktree is Send+Sync. But it feels Wrong.
-        // TODO: I don't really understand why we have 'static here, the compiler suggested it :/
+        // We need to specify 'static here. Just because we have an Arc over the
+        // repo that doesn't mean it automatically satisfies 'static:
+        // https://users.rust-lang.org/t/why-is-t-static-constrained-when-using-arc-t-and-thread-spawn/26262/2
+        // It would be much more convenient to just specify some or all these
+        // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
         W: Worktree + Sync + Send + 'static,
     {
         let (chan_tx, chan_rx) = async_channel::unbounded();
