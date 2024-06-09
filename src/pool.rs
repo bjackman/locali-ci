@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use tokio::sync::{Mutex, Semaphore, SemaphorePermit};
 
 // Static collection of objects that can be temporarily allocated for mutually exclusive ownership.
@@ -29,9 +31,11 @@ pub struct PoolItem<'a, T: std::marker::Send> {
     _permit: SemaphorePermit<'a>,
 }
 
-impl<T: std::marker::Send> AsRef<T> for PoolItem<'_, T> {
-    fn as_ref(&self) -> &T {
-        return &self.obj
+impl<T: std::marker::Send> Deref for PoolItem<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.obj
     }
 }
 
@@ -114,15 +118,15 @@ mod tests {
         //  - Stack order seems more cache-friendly
         //  - Asserting on the specific values is an easy way to check nothing insane is happening.
         let obj3 = pool.get().await;
-        assert_eq!(obj3.obj, 3);
+        assert_eq!(*obj3, 3);
         let obj2 = pool.get().await;
-        assert_eq!(obj2.obj, 2);
+        assert_eq!(*obj2, 2);
         let obj1 = pool.get().await;
-        assert_eq!(obj1.obj, 1);
+        assert_eq!(*obj1, 1);
         let blocked_get = pool.get();
         check_pending(blocked_get).expect("empty pool returned value");
         pool.put(obj2).await;
         let obj2 = pool.get().await;
-        assert_eq!(obj2.obj, 2);
+        assert_eq!(*obj2, 2);
     }
 }
