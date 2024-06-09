@@ -12,6 +12,7 @@ use crate::git::Worktree;
 mod git;
 mod process;
 mod test;
+mod pool;
 
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
