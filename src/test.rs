@@ -83,12 +83,13 @@ impl Manager {
             // We're already testing rev, so we don't need to kick it off below.
             if !to_start.remove(rev) {
                 // This rev is being tested but wasn't in rev_set.
-                cancel_revs.push(rev)
+                cancel_revs.push(rev.clone())
             }
         }
         info!("Starting {:?}, cancelling {:?}", to_start, cancel_revs);
         for rev in cancel_revs {
-            self.job_cts[rev].cancel();
+            self.job_cts[&rev].cancel();
+            self.job_cts.remove(&rev);
         }
 
         for rev in to_start {
