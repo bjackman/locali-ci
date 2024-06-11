@@ -1,13 +1,21 @@
-use std::ops::Deref;
+use std::{mem::ManuallyDrop, ops::Deref, sync::Mutex};
 
-use tokio::sync::{Mutex, Semaphore, SemaphorePermit};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 // Static collection of objects that can be temporarily allocated for mutually exclusive ownership.
+#[derive(Debug)]
 pub struct Pool<T> {
+    // Note this is a NORMAL mutex not an async one. That means that you must not await while
+    // holding it; this could lead to a deadlock. You can think of this a bit like a spinlock in
+    // Linux. This is so that we can modify the vector in non-async code, so that we can call
+    // Pool::put from the destructor of the PoolItem. This seems completely fucked up but actually
+    // it's recommended by the tokio docs:
+    // https://docs.rs/tokio/1.38.0/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     objs: Mutex<Vec<T>>,
     // If you can get this semaphore, items is guaranteed not to be empty.
     // This is a kinda weird workaround for the fact that there's no equivalent
-    // to a Go channel in tokio and no condition variables.
+    // to a Go channel in tokio and no condition variables. This is actually
+    // expected to block for a long time, so this is an async semaphore.
     sem: Semaphore,
 }
 
@@ -27,8 +35,11 @@ impl<T> Pool<T> {
 
 #[derive(Debug)]
 pub struct PoolItem<'a, T: std::marker::Send> {
-    obj: T,
+    // This ManuallyDrop sketchiness is to work around the fact that we want to move out of this
+    // item back to the pool in drop. It means the field must be private.
+    obj: ManuallyDrop<T>,
     _permit: SemaphorePermit<'a>,
+    pool: &'a Pool<T>,
 }
 
 impl<T: std::marker::Send> Deref for PoolItem<'_, T> {
@@ -36,6 +47,17 @@ impl<T: std::marker::Send> Deref for PoolItem<'_, T> {
 
     fn deref(&self) -> &Self::Target {
         &self.obj
+    }
+}
+
+impl<T: std::marker::Send> Drop for PoolItem<'_, T> {
+    fn drop(&mut self) {
+        // SAFETY: This is safe as the field is never accessed again. I think this only works
+        // because the field is private - if it was public then another type could embed this struct
+        // and then access the field in its own Drop implementation, violating this safety.
+        let obj = unsafe { ManuallyDrop::take(&mut self.obj) };
+        self.pool.put(obj);
+        // (Now we drop the semaphore permit, notifying waiters that obj is available).
     }
 }
 
@@ -54,21 +76,21 @@ impl<T: std::marker::Send> Pool<T> {
             .acquire()
             .await
             .expect("Pool bug: semaphore closed");
-        let mut objs = self.objs.lock().await;
+        let mut objs = self.objs.lock().unwrap();
         let obj = objs.pop().expect(
-                "Pool empty when semaphore acquired . \
+            "Pool empty when semaphore acquired . \
                 This probably means a call to Pool::put was missed.",
         );
         PoolItem {
-            obj,
+            obj: ManuallyDrop::new(obj),
             _permit: permit,
+            pool: self,
         }
     }
 
-    // Return an item to the pool.
-    pub async fn put(&self, item: PoolItem<'_, T>) {
-        let PoolItem { obj, _permit } = item;
-        let mut objs = self.objs.lock().await;
+    // Add an item to the pool.
+    fn put(&self, obj: T) {
+        let mut objs = self.objs.lock().unwrap();
         objs.push(obj);
     }
 }
@@ -83,7 +105,7 @@ mod tests {
     use super::*;
 
     // Assert that a future is blocked. Note that panicking directly in assertion helpers like this
-    // is unhelpful because you lose line number info. It seems the proper solution for that is to
+    // is unhelpful because you lose line number debug. It seems the proper solution for that is to
     // make them macros instead of functions. My solution is instead to just return errors and then
     // .expect() them, because I don't know how to make macros.
     fn check_pending<F>(fut: F) -> anyhow::Result<()>
@@ -113,20 +135,24 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_get_some() {
-        let pool = Pool::new([1, 2, 3]);
+        // I originally used ints here, then got really confused when the comiler let me
+        // pool.put(*obj) over and over again. Then I realised it's because ints are Copy. It
+        // doesn't really make any sense to have Pools of a Copy type so we test with Strings here.
+        let pool = Pool::<String>::new(["one", "two", "three"].map(|s| s.to_owned()));
         // We don't actually functionally care about the order of the returned values, but
         //  - Stack order seems more cache-friendly
         //  - Asserting on the specific values is an easy way to check nothing insane is happening.
-        let obj3 = pool.get().await;
-        assert_eq!(*obj3, 3);
-        let obj2 = pool.get().await;
-        assert_eq!(*obj2, 2);
-        let obj1 = pool.get().await;
-        assert_eq!(*obj1, 1);
-        let blocked_get = pool.get();
-        check_pending(blocked_get).expect("empty pool returned value");
-        pool.put(obj2).await;
-        let obj2 = pool.get().await;
-        assert_eq!(*obj2, 2);
+        {
+            let obj3 = pool.get().await;
+            assert_eq!(*obj3, "three");
+            let obj2 = pool.get().await;
+            assert_eq!(*obj2, "two");
+            let obj1 = pool.get().await;
+            assert_eq!(*obj1, "one");
+            let blocked_get = pool.get();
+            check_pending(blocked_get).expect("empty pool returned value");
+        }
+        let obj = pool.get().await;
+        assert_eq!(*obj, "three");
     }
 }
