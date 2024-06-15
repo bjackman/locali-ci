@@ -10,13 +10,12 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use futures::future::{try_join_all, FutureExt};
+use futures::future::{self, try_join_all, Either};
 use log::info;
 use nix::sys::signal::kill;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use tokio::process::Command;
-use tokio::select;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -183,39 +182,35 @@ impl Job {
                 .try_into()
                 .unwrap(),
         );
-        // We'll interrupt the child if we get cancelled, but we must wait for it to finish
-        // regardless before we can release the worktree for another job.
-        // TODO: this whole dance seems pretty ridiculous, would be interesting
-        // to come back to this with some more experience...
-        let mut wait_fut = pin!(child.wait_with_output());
-        let mut cancel_fut = pin!(self.ct.cancelled().fuse());
-        let mut cancelled = false;
-        // Max 2 iterations are possible.
-        loop {
-            select! {
-                result = &mut wait_fut => {
-                    // I think maybe a true Rustacean would write this block as a
-                    // single chain of methods? But it seems ridiculous to me.
-                    let output = result.map_err(anyhow::Error::from)?;
-                    if cancelled {
-                        // Don't care about actual outcome of job.
-                        return Ok(CommitTestResult{
-                            hash: self.rev.to_owned(),
-                            result: TestResult::Canceled
-                        });
-                    } else {
-                        return Ok(CommitTestResult{
-                            hash: self.rev.to_owned(),
-                            result: TestResult::Completed{
-                                exit_code: output.code_not_killed()?
-                            }
-                        });
-                    }
-                },
-                _ = &mut cancel_fut => {
-                    kill(pid, Signal::SIGINT).context("couldn't interrupt child job")?;
-                    cancelled = true;
-                }
+        // Await the child, or cancellation. Because the "right" branch still needs to do work on
+        // the "left" future, tokio::select doesn't grant us any clarity or concision here so we
+        // drop down to the raw function call.
+        let child_fut = pin!(child.wait_with_output());
+        let cancel_fut = pin!(self.ct.cancelled());
+        match future::select(child_fut, cancel_fut).await {
+            Either::Left((result, _)) =>
+            // Test completed, figure out the result. I think maybe a true Rustacean would
+            // write this block as a single chain of methods? But it seems ridiculous to me.
+            {
+                Ok(CommitTestResult {
+                    hash: self.rev.to_owned(),
+                    result: TestResult::Completed {
+                        exit_code: result.map_err(anyhow::Error::from)?.code_not_killed()?,
+                    },
+                })
+            }
+            Either::Right((_, child_fut)) => {
+                // Canceled. Shut down the process.
+                kill(pid, Signal::SIGINT).context("couldn't interrupt child job")?;
+                // We don't care about its result but we
+                // need to wait for it to shut down so that we can safely give back the
+                // worktree.
+                let _ = child_fut.await;
+
+                Ok(CommitTestResult {
+                    hash: self.rev.to_owned(),
+                    result: TestResult::Canceled,
+                })
             }
         }
     }
@@ -230,8 +225,7 @@ mod tests {
     use tempfile::TempDir;
     use test_log;
     use tokio::{
-        fs,
-        time::{interval, sleep},
+        fs, select, time::{interval, sleep}
     };
 
     use crate::git::{CommitHash, Worktree};
