@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Context};
-use tokio::process::Command;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Command as SyncCommand, Output};
+use tokio::process::Command;
 
 pub trait OutputExt {
     // Returns exit code, fails verbosely if the process was killed by a signal.

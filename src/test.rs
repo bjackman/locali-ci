@@ -210,9 +210,17 @@ impl Job {
                     let output = result.map_err(anyhow::Error::from)?;
                     if cancelled {
                         // Don't care about actual outcome of job.
-                        return Ok(CommitTestResult{hash: self.rev.to_owned(), result: TestResult::Canceled});
+                        return Ok(CommitTestResult{
+                            hash: self.rev.to_owned(),
+                            result: TestResult::Canceled
+                        });
                     } else {
-                        return Ok(CommitTestResult{hash: self.rev.to_owned(), result: TestResult::Completed{exit_code: output.status.code().expect("TODO")}});
+                        return Ok(CommitTestResult{
+                            hash: self.rev.to_owned(),
+                            result: TestResult::Completed{
+                                exit_code: output.status.code().expect("TODO")
+                            }
+                        });
                     }
                 },
                 _ = &mut cancel_fut => {
