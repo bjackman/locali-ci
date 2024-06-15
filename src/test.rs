@@ -89,20 +89,20 @@ impl Manager {
 
         for rev in to_start {
             let ct = CancellationToken::new();
-            self.job_cts.insert((*rev).clone(), ct.clone());
-            let rev = rev.to_owned();
-            let job = Job {
+            self.job_cts.insert(rev.to_owned(), ct.clone());
+            let test = Test {
                 ct,
                 program: self.program.clone(),
                 args: self.args.clone(),
+                rev: rev.to_owned(),
             };
             let pool = self.worktree_pool.clone();
             let tx = self.result_tx.clone();
             tokio::spawn(async move {
                 let worktree = pool.get().await;
-                let result = job.run(&rev, worktree.as_ref()).await;
+                let result = test.run(worktree.as_ref()).await;
                 tx.send(Arc::new(CommitTestResult {
-                    hash: rev.to_owned(),
+                    hash: test.rev,
                     result: result,
                 }))
                 .expect("couldn't send result");
@@ -117,6 +117,70 @@ impl Manager {
     // I think the "proper" solution for this is to return a Stream. But I don't understand it.
     pub fn results(&self) -> broadcast::Receiver<Arc<CommitTestResult>> {
         self.result_tx.subscribe()
+    }
+}
+
+// This is not really a proper type, it doesn't really mean anything except as an implementation
+// detail of its user. I tried to get rid of it but then you run into issues with getting references
+// to individual fields while a mutable reference exists to the overall struct. I think this is
+// basically one an instance of "view structs" described in
+// https://smallcultfollowing.com/babysteps/blog/2024/06/02/the-borrow-checker-within/
+struct Test {
+    ct: CancellationToken,
+    // TODO: Unclear if there's a way to avoid the atomic operations incurred by cloning these Arcs.
+    // There is no builtin equivalent to thread::scope for async. If we had that, maybe it would
+    // become possible to convince the compiler that the Manager outlives its Tests. Not sure.
+    program: Arc<OsString>,
+    args: Arc<Vec<OsString>>,
+    rev: CommitHash,
+}
+
+impl Test {
+    async fn run<W>(&self, worktree: &W) -> TestResult
+    where
+        W: Worktree,
+    {
+        worktree.checkout(&self.rev).await?;
+
+        let mut cmd = Command::new(self.program.as_ref());
+        cmd.args(self.args.as_ref())
+            .current_dir(worktree.path());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        let child = cmd.spawn().context("spawning test command")?;
+        // lol wat?
+        let pid = Pid::from_raw(
+            child
+                .id()
+                .ok_or(anyhow!("no PID for child job"))?
+                .try_into()
+                .unwrap(),
+        );
+        // Await the child, or cancellation. Because the "right" branch still needs to do work on
+        // the "left" future, tokio::select doesn't grant us any clarity or concision here so we
+        // drop down to the raw function call.
+        let child_fut = pin!(child.wait_with_output());
+        let cancel_fut = pin!(self.ct.cancelled());
+        match future::select(child_fut, cancel_fut).await {
+            Either::Left((result, _)) =>
+            // Test completed, figure out the result. I think maybe a true Rustacean would
+            // write this block as a single chain of methods? But it seems ridiculous to me.
+            {
+                Ok(TestOutcome::Completed {
+                    exit_code: result.map_err(anyhow::Error::from)?.code_not_killed()?,
+                })
+            }
+            Either::Right((_, child_fut)) => {
+                // Canceled. Shut down the process.
+                kill(pid, Signal::SIGINT).context("couldn't interrupt child job")?;
+                // We don't care about its result but we
+                // need to wait for it to shut down so that we can safely give back the
+                // worktree.
+                let _ = child_fut.await;
+
+                Ok(TestOutcome::Canceled)
+            }
+        }
     }
 }
 
@@ -153,67 +217,6 @@ impl Display for TestOutcome {
         match self {
             Self::Canceled => write!(f, "Cancelled"),
             Self::Completed { exit_code } => write!(f, "Completed - exit code {}", exit_code),
-        }
-    }
-}
-
-// Work item to test a specific revision, that can be cancelled. This is unfornately coupled with
-// the assumption that the task is actually a subprocess, which sucks.
-// TODO: Get rid of this type, it's a hangover from the previous worker
-// architecture.
-struct Job {
-    ct: CancellationToken,
-    // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
-    // just make these references to a value owned by the Manager (basically same comment as for
-    // .rev)
-    program: Arc<OsString>,
-    args: Arc<Vec<OsString>>,
-}
-
-impl Job {
-    async fn run<W>(&self, rev: &CommitHash, worktree: &W) -> TestResult
-    where
-        W: Worktree,
-    {
-        worktree.checkout(rev).await?;
-
-        let mut cmd = Command::new(self.program.as_ref());
-        cmd.args(self.args.as_ref()).current_dir(worktree.path());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-        let child = cmd.spawn().context("spawning test command")?;
-        // lol wat?
-        let pid = Pid::from_raw(
-            child
-                .id()
-                .ok_or(anyhow!("no PID for child job"))?
-                .try_into()
-                .unwrap(),
-        );
-        // Await the child, or cancellation. Because the "right" branch still needs to do work on
-        // the "left" future, tokio::select doesn't grant us any clarity or concision here so we
-        // drop down to the raw function call.
-        let child_fut = pin!(child.wait_with_output());
-        let cancel_fut = pin!(self.ct.cancelled());
-        match future::select(child_fut, cancel_fut).await {
-            Either::Left((result, _)) =>
-            // Test completed, figure out the result. I think maybe a true Rustacean would
-            // write this block as a single chain of methods? But it seems ridiculous to me.
-            {
-                Ok(TestOutcome::Completed {
-                    exit_code: result.map_err(anyhow::Error::from)?.code_not_killed()?,
-                })
-            }
-            Either::Right((_, child_fut)) => {
-                // Canceled. Shut down the process.
-                kill(pid, Signal::SIGINT).context("couldn't interrupt child job")?;
-                // We don't care about its result but we
-                // need to wait for it to shut down so that we can safely give back the
-                // worktree.
-                let _ = child_fut.await;
-
-                Ok(TestOutcome::Canceled)
-            }
         }
     }
 }
@@ -414,15 +417,16 @@ mod tests {
     // CommitTestResults, hopefully good enough for testing...?
     impl PartialEq for CommitTestResult {
         fn eq(&self, other: &Self) -> bool {
-            return self.hash == other.hash && match (&self.result, &other.result) {
-                (Ok(my_outcome), Ok(other_outcome)) => my_outcome == other_outcome,
-                (Err(my_err), Err(other_err)) => my_err.to_string() == other_err.to_string(),
-                _ => false,
-            };
+            return self.hash == other.hash
+                && match (&self.result, &other.result) {
+                    (Ok(my_outcome), Ok(other_outcome)) => my_outcome == other_outcome,
+                    (Err(my_err), Err(other_err)) => my_err.to_string() == other_err.to_string(),
+                    _ => false,
+                };
         }
     }
 
-    impl Eq for CommitTestResult { }
+    impl Eq for CommitTestResult {}
 
     async fn expect_result_1s(
         results: &mut broadcast::Receiver<Arc<CommitTestResult>>,
