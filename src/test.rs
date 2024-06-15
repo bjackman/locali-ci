@@ -179,9 +179,8 @@ impl Job {
             self.rev, worktree
         ))?;
 
-        let mut cmd = Command::new(&*self.program);
-        // TODO: Is that stupid-looking &* a smell that I'm doing something stupid?
-        cmd.args(&*self.args).current_dir(worktree);
+        let mut cmd = Command::new(self.program.as_ref());
+        cmd.args(self.args.as_ref()).current_dir(worktree);
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         let child = cmd.spawn().context("spawning test command")?;
