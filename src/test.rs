@@ -217,7 +217,7 @@ impl Job {
                         return Ok(CommitTestResult{
                             hash: self.rev.to_owned(),
                             result: TestResult::Completed{
-                                exit_code: output.status.code().expect("TODO")
+                                exit_code: output.code_not_killed()?
                             }
                         });
                     }
