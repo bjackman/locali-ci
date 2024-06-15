@@ -4,7 +4,6 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::path::Path;
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -101,7 +100,7 @@ impl Manager {
                 let result = test.run(worktree.as_ref()).await;
                 tx.send(Arc::new(CommitTestResult {
                     hash: test.rev,
-                    result: result,
+                    result,
                 }))
                 .expect("couldn't send result");
             });
@@ -221,7 +220,7 @@ impl Display for TestOutcome {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, thread::panicking, time::Duration};
+    use std::{path::{Path, PathBuf}, thread::panicking, time::Duration};
 
     use futures::Future;
     use log::error;
