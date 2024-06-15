@@ -37,8 +37,6 @@ pub struct Manager {
 
 impl Manager {
     // Starts the workers. You must call close() before dropping it.
-    //
-    // TODO: Too many args. What are the constructor patterns in Rust? Define a ManagerOpts struct?
     pub async fn new<W>(
         num_threads: u32,
         // This needs to be an Arc because we hold onto a reference to it for a
