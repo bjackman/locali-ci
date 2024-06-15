@@ -102,7 +102,7 @@ impl Manager {
             let tx = self.result_tx.clone();
             tokio::spawn(async move {
                 let worktree = pool.get().await;
-                let result = job.run(worktree.path()).await;
+                let result = job.run(worktree.as_ref()).await;
                 tx.send(Arc::new(result)).expect("couldn't send result");
             });
         }
@@ -164,23 +164,14 @@ struct Job {
 }
 
 impl Job {
-    async fn run(&self, worktree: &Path) -> anyhow::Result<CommitTestResult> {
-        // TODO: Move this logic into the git module.
-        let mut checkout_cmd = Command::new("git");
-        (checkout_cmd
-            .arg("checkout")
-            .arg(&self.rev)
-            .current_dir(worktree)
-            .output()
-            .await?
-            .ok())
-        .context(format!(
-            "checking out revision {:?} in {:?}",
-            self.rev, worktree
-        ))?;
+    async fn run<W>(&self, worktree: &W) -> anyhow::Result<CommitTestResult>
+    where
+        W: Worktree,
+    {
+        worktree.checkout(&self.rev).await?;
 
         let mut cmd = Command::new(self.program.as_ref());
-        cmd.args(self.args.as_ref()).current_dir(worktree);
+        cmd.args(self.args.as_ref()).current_dir(worktree.path());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         let child = cmd.spawn().context("spawning test command")?;

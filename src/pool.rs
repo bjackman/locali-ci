@@ -51,6 +51,10 @@ impl<T: Send> Deref for PoolItem<'_, T> {
     }
 }
 
+impl<T: Send> AsRef<T> for PoolItem<'_, T> {
+    fn as_ref(&self) -> &T { &self.obj }
+}
+
 impl<T: Send> Drop for PoolItem<'_, T> {
     fn drop(&mut self) {
         // SAFETY: This is safe as the field is never accessed again.

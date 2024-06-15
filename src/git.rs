@@ -1,5 +1,5 @@
 use core::fmt;
-use core::fmt::Display;
+use core::fmt::{Debug, Display};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
@@ -38,6 +38,7 @@ impl Display for CommitHash {
 
 // Worktree represents a git tree, which might be the "main" worktree (in which case it might be
 // more clearly refrred to by the name Repo) or some other one.
+#[derive(Debug)]
 pub struct PersistentWorktree {
     pub path: PathBuf,
 }
@@ -57,7 +58,7 @@ impl Worktree for PersistentWorktree {
     }
 }
 
-pub trait Worktree {
+pub trait Worktree: Debug {
     fn path(&self) -> &Path;
 
     // Convenience function to create a git command with some pre-filled args.
@@ -146,6 +147,21 @@ pub trait Worktree {
         }
         let out_str: &str = str::from_utf8(&output.stdout).context("non utf-8 rev-list output")?;
         Ok(out_str.lines().map(|l| CommitHash(l.to_owned())).collect())
+    }
+
+    async fn checkout(&self, commit: &CommitHash) -> anyhow::Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("checkout")
+            .arg(commit)
+            .current_dir(self.path())
+            .output()
+            .await?
+            .ok()
+            .context(format!(
+                "checking out revision {:?} in {:?}",
+                commit,
+                self.path()
+            ))
     }
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
