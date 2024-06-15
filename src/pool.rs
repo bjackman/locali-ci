@@ -1,4 +1,5 @@
 use std::{mem::ManuallyDrop, ops::Deref, sync::Mutex};
+use std::marker::Send;
 
 use tokio::sync::{Semaphore, SemaphorePermit};
 
@@ -34,7 +35,7 @@ impl<T> Pool<T> {
 }
 
 #[derive(Debug)]
-pub struct PoolItem<'a, T: std::marker::Send> {
+pub struct PoolItem<'a, T: Send> {
     // This ManuallyDrop sketchiness is to work around the fact that we want to move out of this
     // item back to the pool in drop. It means the field must be private.
     obj: ManuallyDrop<T>,
@@ -42,7 +43,7 @@ pub struct PoolItem<'a, T: std::marker::Send> {
     pool: &'a Pool<T>,
 }
 
-impl<T: std::marker::Send> Deref for PoolItem<'_, T> {
+impl<T: Send> Deref for PoolItem<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -50,7 +51,7 @@ impl<T: std::marker::Send> Deref for PoolItem<'_, T> {
     }
 }
 
-impl<T: std::marker::Send> Drop for PoolItem<'_, T> {
+impl<T: Send> Drop for PoolItem<'_, T> {
     fn drop(&mut self) {
         // SAFETY: This is safe as the field is never accessed again. I think this only works
         // because the field is private - if it was public then another type could embed this struct
@@ -61,7 +62,7 @@ impl<T: std::marker::Send> Drop for PoolItem<'_, T> {
     }
 }
 
-impl<T: std::marker::Send> Pool<T> {
+impl<T: Send> Pool<T> {
     // Get an item from the pool, you must call put on it later. It sucks that it's this easy to
     // leak items. I thought we could just return them on Drop but it seems to be impossible to
     // actually do this in drop, since we need to await the lock. We could just put the cleanup into
