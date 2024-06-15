@@ -29,8 +29,7 @@ use crate::process::OutputExt;
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     job_cts: HashMap<CommitHash, CancellationToken>,
-    // TODO: Fold error case into CommitTestResult, figure out how to do this with ? operator.
-    result_tx: broadcast::Sender<Arc<anyhow::Result<CommitTestResult>>>,
+    result_tx: broadcast::Sender<Arc<CommitTestResult>>,
     program: Arc<OsString>,
     args: Arc<Vec<OsString>>,
     worktree_pool: Arc<Pool<TempWorktree>>,
@@ -91,8 +90,8 @@ impl Manager {
         for rev in to_start {
             let ct = CancellationToken::new();
             self.job_cts.insert((*rev).clone(), ct.clone());
+            let rev = rev.to_owned();
             let job = Job {
-                rev: rev.to_owned(),
                 ct,
                 program: self.program.clone(),
                 args: self.args.clone(),
@@ -101,8 +100,12 @@ impl Manager {
             let tx = self.result_tx.clone();
             tokio::spawn(async move {
                 let worktree = pool.get().await;
-                let result = job.run(worktree.as_ref()).await;
-                tx.send(Arc::new(result)).expect("couldn't send result");
+                let result = job.run(&rev, worktree.as_ref()).await;
+                tx.send(Arc::new(CommitTestResult {
+                    hash: rev.to_owned(),
+                    result: result,
+                }))
+                .expect("couldn't send result");
             });
         }
         Ok(())
@@ -112,12 +115,12 @@ impl Manager {
     // to receive.
     //
     // I think the "proper" solution for this is to return a Stream. But I don't understand it.
-    pub fn results(&self) -> broadcast::Receiver<Arc<anyhow::Result<CommitTestResult>>> {
+    pub fn results(&self) -> broadcast::Receiver<Arc<CommitTestResult>> {
         self.result_tx.subscribe()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct CommitTestResult {
     pub hash: CommitHash,
     pub result: TestResult,
@@ -125,17 +128,27 @@ pub struct CommitTestResult {
 
 impl Display for CommitTestResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Result: {} => {}", self.hash, self.result)
+        write!(f, "Result: {} => ", self.hash)?;
+        match &self.result {
+            Ok(outcome) => write!(f, "{}", outcome),
+            Err(error) => write!(f, "error running test: {}", error),
+        }
     }
 }
 
+// There are three results for tests: error (something went wrong when we were trying to run it),
+// cancellation, and completion. Ideally we woud just have an enum with three variants, but it's
+// really handy for the "error" case to be represented by std::result::Result so that we can use the
+// quesiton mark operator. Thus, we have a two-layered result type... Worth it? I dunno...
+type TestResult = anyhow::Result<TestOutcome>;
+
 #[derive(Debug, PartialEq, Eq)]
-pub enum TestResult {
+pub enum TestOutcome {
     Canceled,
     Completed { exit_code: i32 },
 }
 
-impl Display for TestResult {
+impl Display for TestOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Canceled => write!(f, "Cancelled"),
@@ -146,14 +159,9 @@ impl Display for TestResult {
 
 // Work item to test a specific revision, that can be cancelled. This is unfornately coupled with
 // the assumption that the task is actually a subprocess, which sucks.
+// TODO: Get rid of this type, it's a hangover from the previous worker
+// architecture.
 struct Job {
-    // We just denote the revision as a string and not a stronger type because revisions can
-    // disappear anyway.
-    //
-    // TODO: I made this a String instead of &str, because the lifetime of the str would need to be
-    // the lifetime of the task - but that lifetime is not really visible to the user of the
-    // Manager. Am I being silly here or is this just the practical way?
-    rev: CommitHash,
     ct: CancellationToken,
     // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
     // just make these references to a value owned by the Manager (basically same comment as for
@@ -163,11 +171,11 @@ struct Job {
 }
 
 impl Job {
-    async fn run<W>(&self, worktree: &W) -> anyhow::Result<CommitTestResult>
+    async fn run<W>(&self, rev: &CommitHash, worktree: &W) -> TestResult
     where
         W: Worktree,
     {
-        worktree.checkout(&self.rev).await?;
+        worktree.checkout(rev).await?;
 
         let mut cmd = Command::new(self.program.as_ref());
         cmd.args(self.args.as_ref()).current_dir(worktree.path());
@@ -192,11 +200,8 @@ impl Job {
             // Test completed, figure out the result. I think maybe a true Rustacean would
             // write this block as a single chain of methods? But it seems ridiculous to me.
             {
-                Ok(CommitTestResult {
-                    hash: self.rev.to_owned(),
-                    result: TestResult::Completed {
-                        exit_code: result.map_err(anyhow::Error::from)?.code_not_killed()?,
-                    },
+                Ok(TestOutcome::Completed {
+                    exit_code: result.map_err(anyhow::Error::from)?.code_not_killed()?,
                 })
             }
             Either::Right((_, child_fut)) => {
@@ -207,10 +212,7 @@ impl Job {
                 // worktree.
                 let _ = child_fut.await;
 
-                Ok(CommitTestResult {
-                    hash: self.rev.to_owned(),
-                    result: TestResult::Canceled,
-                })
+                Ok(TestOutcome::Canceled)
             }
         }
     }
@@ -225,7 +227,8 @@ mod tests {
     use tempfile::TempDir;
     use test_log;
     use tokio::{
-        fs, select, time::{interval, sleep}
+        fs, select,
+        time::{interval, sleep},
     };
 
     use crate::git::{CommitHash, Worktree};
@@ -407,17 +410,30 @@ mod tests {
         )
     }
 
+    // anyhow::Error doesn't implement PartialEq. Here's an awkward comparator for
+    // CommitTestResults, hopefully good enough for testing...?
+    impl PartialEq for CommitTestResult {
+        fn eq(&self, other: &Self) -> bool {
+            return self.hash == other.hash && match (&self.result, &other.result) {
+                (Ok(my_outcome), Ok(other_outcome)) => my_outcome == other_outcome,
+                (Err(my_err), Err(other_err)) => my_err.to_string() == other_err.to_string(),
+                _ => false,
+            };
+        }
+    }
+
+    impl Eq for CommitTestResult { }
+
     async fn expect_result_1s(
-        results: &mut broadcast::Receiver<Arc<anyhow::Result<CommitTestResult>>>,
+        results: &mut broadcast::Receiver<Arc<CommitTestResult>>,
         want: CommitTestResult,
     ) -> anyhow::Result<()> {
         let result = timeout_1s(results.recv())
             .await
             .context("didn't get result after 1s")?
             .expect("result channel terminated");
-        // TODO: What the fuck is going on with this double as_ref??
-        let got = result.as_ref().as_ref().expect("failed to test commit");
-        if got != &want {
+        let got = result.as_ref();
+        if *got != want {
             return Err(anyhow!(
                 "Didn't get expected result - got {} want {}",
                 got,
@@ -450,7 +466,7 @@ mod tests {
             &mut results,
             CommitTestResult {
                 hash: hash,
-                result: TestResult::Completed { exit_code: 0 },
+                result: Ok(TestOutcome::Completed { exit_code: 0 }),
             },
         )
         .await
@@ -494,7 +510,7 @@ mod tests {
             &mut results,
             CommitTestResult {
                 hash: hash1,
-                result: TestResult::Canceled,
+                result: Ok(TestOutcome::Canceled),
             },
         )
         .await

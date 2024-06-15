@@ -74,8 +74,7 @@ async fn main() -> anyhow::Result<()> {
                 // AFAICS there is no way to encode a stream that never terminates.
                 let result = result.expect("result stream terminated");
                 // TODO: What the fucking fuck???? I should have used Perl.
-                let result = result.as_ref().as_ref().expect("failed to test!");
-                println!("Result for {}: {}", result.hash, result.result);
+                println!("{}", result);
             }
         )
     }
