@@ -155,7 +155,6 @@ struct Job {
     // the lifetime of the task - but that lifetime is not really visible to the user of the
     // Manager. Am I being silly here or is this just the practical way?
     rev: CommitHash,
-    // TODO: Implement cancellation.
     ct: CancellationToken,
     // TODO: This incurs an atomic operation on setup/shutdown. But presumably there is a way to
     // just make these references to a value owned by the Manager (basically same comment as for
