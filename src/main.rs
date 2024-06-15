@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .await
     .context("setting up test manager")?;
-    let (_watcher, mut revs_stream) = repo.watch_refs(OsStr::new("HEAD^^^..HEAD"))?;
+    let mut revs_stream = repo.watch_refs(OsStr::new("HEAD^^^..HEAD"))?;
     let mut revs_stream = pin!(revs_stream);
     let mut results = m.results();
     loop {

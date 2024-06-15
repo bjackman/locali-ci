@@ -166,17 +166,10 @@ pub trait Worktree: Debug {
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
     // on the channel with the new resolved spec.
-    //
-    // TODO: How do I hide the notify::RecommendedWatcher from the caller? They need to own it
-    // because otherwise it just gets dropped. I think I probably want to just move it into the
-    // object I return that implements Stream.
     fn watch_refs<'a>(
         &'a self,
         range_spec: &'a OsStr,
-    ) -> anyhow::Result<(
-        notify::RecommendedWatcher,
-        impl Stream<Item = anyhow::Result<Vec<CommitHash>>> + 'a,
-    )> {
+    ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Vec<CommitHash>>> + 'a> {
         // Alternatives considered/attempted:
         //
         // - inotify (also fanotify) doesn't support recursively watching directories, whereas the
@@ -210,31 +203,29 @@ pub trait Worktree: Debug {
 
         // This logic "debounces" consecutive events within the same 1s window, to avoid thrashing
         // on the downstream logic as Git works its way through changes.
-        Ok((
-            watcher,
-            try_stream! {
-                // Start with an expired timer.
-                let mut sleep_fut = pin!(Fuse::terminated());
-                loop {
-                    select! {
-                        // Produce an update when the timer expires.
-                        () = sleep_fut =>  yield self.rev_list(range_spec).await?,
-                        // Ensure the timer is set when we see an update.
-                        maybe_result = rx.next() => {
-                            match maybe_result {
-                                Some(_result) => {
-                                    if sleep_fut.is_terminated() {
-                                        sleep_fut.set(sleep(Duration::from_secs(1)).fuse());
-                                    }
-                                },
-                                // TODO: Do I really understand if this can happen? I think maybe not.
-                                None  => break,
-                            }
-                        },
-                    }
+        Ok(try_stream! {
+            let _watcher = watcher; // Capture so it doesn't get dropped
+            // Start with an expired timer.
+            let mut sleep_fut = pin!(Fuse::terminated());
+            loop {
+                select! {
+                    // Produce an update when the timer expires.
+                    () = sleep_fut =>  yield self.rev_list(range_spec).await?,
+                    // Ensure the timer is set when we see an update.
+                    maybe_result = rx.next() => {
+                        match maybe_result {
+                            Some(_result) => {
+                                if sleep_fut.is_terminated() {
+                                    sleep_fut.set(sleep(Duration::from_secs(1)).fuse());
+                                }
+                            },
+                            // TODO: Do I really understand if this can happen? I think maybe not.
+                            None  => break,
+                        }
+                    },
                 }
-            },
-        ))
+            }
+        })
     }
 }
 
