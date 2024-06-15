@@ -53,9 +53,7 @@ impl<T: Send> Deref for PoolItem<'_, T> {
 
 impl<T: Send> Drop for PoolItem<'_, T> {
     fn drop(&mut self) {
-        // SAFETY: This is safe as the field is never accessed again. I think this only works
-        // because the field is private - if it was public then another type could embed this struct
-        // and then access the field in its own Drop implementation, violating this safety.
+        // SAFETY: This is safe as the field is never accessed again.
         let obj = unsafe { ManuallyDrop::take(&mut self.obj) };
         self.pool.put(obj);
         // (Now we drop the semaphore permit, notifying waiters that obj is available).
