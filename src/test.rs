@@ -68,7 +68,7 @@ impl Manager {
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
-    pub async fn set_revisions(&mut self, revs: Vec<CommitHash>) -> anyhow::Result<()> {
+    pub fn set_revisions(&mut self, revs: Vec<CommitHash>) -> anyhow::Result<()> {
         let mut to_start = HashSet::<&CommitHash>::from_iter(revs.iter());
         let mut cancel_revs = Vec::new();
         for rev in self.job_cts.keys() {
@@ -458,7 +458,6 @@ mod tests {
             .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(vec![hash.clone()])
-            .await
             .expect("couldn't set_revisions");
         // TODO: wait until the manager thinks it has no more work to do, using
         // a special "settle" test method.
@@ -488,7 +487,6 @@ mod tests {
             .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(vec![hash1.clone()])
-            .await
             .expect("couldn't set_revisions");
         let started_hash1 = timeout_1s(script.started(&hash1))
             .await
@@ -499,7 +497,6 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         m.set_revisions(vec![hash2.clone()])
-            .await
             .expect("couldn't set_revisions");
         timeout_1s(script.started(&hash2))
             .await
