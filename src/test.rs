@@ -71,7 +71,7 @@ impl Manager {
     pub fn set_revisions<I: IntoIterator<Item = CommitHash>>(
         &mut self,
         revs: I,
-    ) -> anyhow::Result<()> {
+    ) {
         let mut to_start = HashSet::<CommitHash>::from_iter(revs.into_iter());
         let mut cancel_revs = Vec::new();
         for rev in self.job_cts.keys() {
@@ -108,7 +108,6 @@ impl Manager {
                 .expect("couldn't send result");
             });
         }
-        Ok(())
     }
 
     // Streams results back. Note you need to call this _before_ you generate the results you want
@@ -122,7 +121,7 @@ impl Manager {
 
 impl Drop for Manager {
     fn drop(&mut self) {
-        self.set_revisions([]).expect("error cancelling tests in shutdown");
+        self.set_revisions([]);
     }
 }
 
@@ -466,8 +465,7 @@ mod tests {
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
-        m.set_revisions(vec![hash.clone()])
-            .expect("couldn't set_revisions");
+        m.set_revisions(vec![hash.clone()]);
         // TODO: wait until the manager thinks it has no more work to do, using
         // a special "settle" test method.
         // We should get a singular result because we only fed in one revision.
@@ -495,8 +493,7 @@ mod tests {
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
-        m.set_revisions(vec![hash1.clone()])
-            .expect("couldn't set_revisions");
+        m.set_revisions(vec![hash1.clone()]);
         let started_hash1 = timeout_1s(script.started(&hash1))
             .await
             .expect("script did not run for hash1");
@@ -505,8 +502,7 @@ mod tests {
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
-        m.set_revisions(vec![hash2.clone()])
-            .expect("couldn't set_revisions");
+        m.set_revisions(vec![hash2.clone()]);
         timeout_1s(script.started(&hash2))
             .await
             .expect("script did not run for hash2");

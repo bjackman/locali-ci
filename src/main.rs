@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
             revs = revs_stream.next() => {
                 // TODO: figure out if/how this can actually fail.
                 let revs = revs.expect("revset stream terminated");
-                m.set_revisions(revs?)?;
+                m.set_revisions(revs?);
             },
             result = results.recv() => {
                 // https://github.com/rust-lang/futures-rs/issues/1857
