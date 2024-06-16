@@ -72,7 +72,7 @@ impl Manager {
         &mut self,
         revs: I,
     ) {
-        let mut to_start = HashSet::<CommitHash>::from_iter(revs.into_iter());
+        let mut to_start = HashSet::<CommitHash>::from_iter(revs);
         let mut cancel_revs = Vec::new();
         for rev in self.job_cts.keys() {
             // We're already testing rev, so we don't need to kick it off below.
