@@ -9,7 +9,6 @@ pub trait OutputExt {
     // Returns exit code, fails verbosely if the process was killed by a signal.
     fn code_not_killed(&self) -> anyhow::Result<i32>;
     // Fails verbosely unless the command completed successfully
-    // TODO: Is ok a bad name for this? Clashes with Option::ok.
     fn ok(&self) -> anyhow::Result<()>;
 }
 
