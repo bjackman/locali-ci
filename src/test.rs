@@ -68,8 +68,11 @@ impl Manager {
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
-    pub fn set_revisions(&mut self, revs: Vec<CommitHash>) -> anyhow::Result<()> {
-        let mut to_start = HashSet::<&CommitHash>::from_iter(revs.iter());
+    pub fn set_revisions<I: IntoIterator<Item = CommitHash>>(
+        &mut self,
+        revs: I,
+    ) -> anyhow::Result<()> {
+        let mut to_start = HashSet::<CommitHash>::from_iter(revs.into_iter());
         let mut cancel_revs = Vec::new();
         for rev in self.job_cts.keys() {
             // We're already testing rev, so we don't need to kick it off below.
