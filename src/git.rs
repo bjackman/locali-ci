@@ -12,7 +12,7 @@ use anyhow::{anyhow, Context};
 use async_stream::try_stream;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
-use log::{debug, error};
+use log::{debug, error, info};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -177,22 +177,33 @@ pub trait Worktree: Debug {
         // - The notify crate has convenient support for sending stuff directly down std::sync::mpsc
         //   channels, and even has support for debouncing those events. However it seems like you
         //   then need to create a whole additional channel if you wanna "map" the events to
-        //   something else, i.e. like we wannaho call rev_list here.
+        //   something else, i.e. like we wanna call rev_list here.
         //
         // Overall the idea of how to turn this into an async thingy comes from
         // https://github.com/notify-rs/notify/blob/main/examples/async_monitor.rs, I am not sure if
-        // this is "real" or toy code that I should not have followed so literally, in particular I
-        // am not clear on the implications of taking the async send operation and just wrapping it
-        // in futures::executor::block_on. I think I could also use the debouncer even with the
-        // async approach but I think then there would be a lot of unnecessary logic going on under
-        // the hood, like I guess it probably spins up a thread.
+        // this is "real" or toy code that I should not have followed so literally. I do think that
+        // this use of futures::executor::block_on is legit - the notify crate spins up a thread
+        // under the hood so it's fine to block that thread, and block_on seems to be the proper way
+        // to bridge into async code from sync code.
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
 
         let mut watcher = RecommendedWatcher::new(
             move |res| {
                 futures::executor::block_on(async {
-                    // TODO: I am not sure what I am unwrapping here, when does the send fail?
-                    tx.send(res).await.unwrap();
+                    // The documentation is very confusing here, it's hard to figure out why send
+                    // would fail. To be my best understanding it just means that the receiver has
+                    // been dropped. It's extremely non-obvious whether we can expect this to happen
+                    // here. The receiver was declared before the watcher, so the watcher should be
+                    // dropped first, right? But, then presumably we move both of them into the
+                    // stream object. So, which one gets dropped first? No fucking idea. We'll just
+                    // log if an error occurs and maybe it will be helpful for debugging something
+                    // else.
+                    tx.send(res).await.unwrap_or_else(|err| {
+                        info!(
+                            "error in git watcher internal send (probably harmless if shutting down): {}",
+                            err
+                        )
+                    });
                 })
             },
             Config::default(),
