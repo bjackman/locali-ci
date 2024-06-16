@@ -63,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
     let mut results = m.results();
     loop {
         select!(
+            // TODO: It's dumb that we have two different types of communication here (one exposes
+            // the channel, one implements Stream).
             revs = revs_stream.next() => {
                 // TODO: figure out if/how this can actually fail.
                 let revs = revs.expect("revset stream terminated");
