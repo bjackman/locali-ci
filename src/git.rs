@@ -58,6 +58,9 @@ impl Worktree for PersistentWorktree {
     }
 }
 
+// This is a weird kinda inheritance type thing to enable different types of worktree (with
+// different fields and drop behaviours) to share the functionality that users actually care about.
+// Not really sure if this is the Rust Way or not.
 pub trait Worktree: Debug {
     fn path(&self) -> &Path;
 
@@ -270,8 +273,6 @@ impl TempWorktree {
     }
 }
 
-// TODO: this is silly, TempWorktree should really just share logic with Worktree. That should also
-// allow remembering the difference between the repository itself and on of its worktrees.
 impl Worktree for TempWorktree {
     fn path(&self) -> &Path {
         self.temp_dir.path()
