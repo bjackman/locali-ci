@@ -1,5 +1,5 @@
-use std::{mem::ManuallyDrop, ops::Deref, sync::Mutex};
 use std::marker::Send;
+use std::{mem::ManuallyDrop, ops::Deref, sync::Mutex};
 
 use tokio::sync::{Semaphore, SemaphorePermit};
 
@@ -52,7 +52,9 @@ impl<T: Send> Deref for PoolItem<'_, T> {
 }
 
 impl<T: Send> AsRef<T> for PoolItem<'_, T> {
-    fn as_ref(&self) -> &T { &self.obj }
+    fn as_ref(&self) -> &T {
+        &self.obj
+    }
 }
 
 impl<T: Send> Drop for PoolItem<'_, T> {
