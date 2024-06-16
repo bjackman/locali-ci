@@ -8,7 +8,7 @@ use std::process::Command as SyncCommand;
 use std::str;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::{bail, Context};
 use async_stream::try_stream;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
@@ -141,12 +141,12 @@ pub trait Worktree: Debug {
         }
         let code = output.status.code().unwrap();
         if code != 0 {
-            return Err(anyhow!(
+            bail!(
                 "failed with exit code {}. stderr:\n{}\nstdout:\n{}",
                 code,
                 String::from_utf8_lossy(&output.stderr),
                 String::from_utf8_lossy(&output.stdout)
-            ));
+            );
         }
         let out_str: &str = str::from_utf8(&output.stdout).context("non utf-8 rev-list output")?;
         Ok(out_str.lines().map(|l| CommitHash(l.to_owned())).collect())

@@ -413,7 +413,7 @@ mod tests {
         F: Future<Output = T>,
     {
         select!(
-            _ = sleep(Duration::from_secs(1)) => Err(anyhow!("timeout after 1s")),
+            _ = sleep(Duration::from_secs(1)) => bail!("timeout after 1s"),
             output = fut => Ok(output)
         )
     }
@@ -443,11 +443,11 @@ mod tests {
             .expect("result channel terminated");
         let got = result.as_ref();
         if *got != want {
-            return Err(anyhow!(
+            bail!(
                 "Didn't get expected result - got {} want {}",
                 got,
                 want
-            ));
+            );
         }
         Ok(())
     }

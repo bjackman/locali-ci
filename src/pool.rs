@@ -102,7 +102,7 @@ impl<T: Send> Pool<T> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::anyhow;
+    use anyhow::{ bail};
     use std::task::{Context, Poll};
 
     use futures::{pin_mut, task::noop_waker, Future};
@@ -125,10 +125,10 @@ mod tests {
         // Poll the future before it completes
         match fut.as_mut().poll(&mut cx) {
             Poll::Pending => Ok(()),
-            Poll::Ready(res) => Err(anyhow!(
+            Poll::Ready(res) => bail!(
                 "The future should be pending, but it produced {:?}",
                 res
-            )),
+            ),
         }
     }
 
