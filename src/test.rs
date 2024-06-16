@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Context};
 use futures::future::{self, try_join_all, Either};
@@ -16,6 +17,7 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use tokio::process::Command;
 use tokio::sync::broadcast;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
@@ -28,6 +30,7 @@ use crate::process::OutputExt;
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     job_cts: HashMap<CommitHash, CancellationToken>,
+    job_counter: JobCounter,
     result_tx: broadcast::Sender<Arc<CommitTestResult>>,
     program: Arc<OsString>,
     args: Arc<Vec<OsString>>,
@@ -60,6 +63,7 @@ impl Manager {
         Ok(Self {
             result_tx,
             job_cts: HashMap::new(),
+            job_counter: JobCounter::new(),
             program: Arc::new(program),
             args: Arc::new(args),
             worktree_pool: Arc::new(Pool::new(worktrees)),
@@ -68,10 +72,7 @@ impl Manager {
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
-    pub fn set_revisions<I: IntoIterator<Item = CommitHash>>(
-        &mut self,
-        revs: I,
-    ) {
+    pub fn set_revisions<I: IntoIterator<Item = CommitHash>>(&mut self, revs: I) {
         let mut to_start = HashSet::<CommitHash>::from_iter(revs);
         let mut cancel_revs = Vec::new();
         for rev in self.job_cts.keys() {
@@ -95,12 +96,14 @@ impl Manager {
                 program: self.program.clone(),
                 args: self.args.clone(),
                 rev: rev.to_owned(),
+                _token: self.job_counter.get(),
             };
             let pool = self.worktree_pool.clone();
             let tx = self.result_tx.clone();
             tokio::spawn(async move {
                 let worktree = pool.get().await;
                 let result = test.run(worktree.as_ref()).await;
+                // Note: must not drop test until the send is complete, or we would break settled().
                 tx.send(Arc::new(CommitTestResult {
                     hash: test.rev,
                     result,
@@ -117,11 +120,73 @@ impl Manager {
     pub fn results(&self) -> broadcast::Receiver<Arc<CommitTestResult>> {
         self.result_tx.subscribe()
     }
+
+    // Completes once there are no pending jobs or results.
+    #[cfg(test)]
+    pub async fn settled(&self) {
+        self.job_counter.zero().await;
+    }
 }
 
 impl Drop for Manager {
     fn drop(&mut self) {
         self.set_revisions([]);
+    }
+}
+
+// This is a horrible attempt to implement Manager::settled. There is no Condvar in tokio or
+// futures-rs, so we have this weird condvar-like construction using a Tokio watch channel.
+struct JobCounter {
+    // The first item in the pair is the counter; when it goes to zero the Sender will send a
+    // message.
+    pair: Arc<Mutex<(usize, watch::Sender<()>)>>,
+}
+
+impl JobCounter {
+    pub fn new() -> Self {
+        Self {
+            pair: Arc::new(Mutex::new((0, watch::Sender::new(())))),
+        }
+    }
+
+    // Increment the counter. It is decremented when the token is dropped.
+    pub fn get(&self) -> JobToken {
+        let mut guard = self.pair.lock().unwrap();
+        let (ref mut count, _) = &mut *guard;
+        *count += 1;
+        JobToken { pair: self.pair.clone() }
+    }
+
+    #[cfg(test)]
+    // Block until the counter is zero. If it's already zero, return immediately.
+    pub async fn zero(&self) {
+        let mut rx = {
+            let mut guard = self.pair.lock().unwrap();
+            let (count, ref sender) = &mut *guard;
+            if *count == 0 {
+                return;
+            }
+            sender.subscribe()
+
+        };
+        rx.changed().await.expect("sender dropped in job counter");
+    }
+}
+
+struct JobToken {
+    // I'm not sure if there's some way to de-duplicate the contents of this struct against the main
+    // JobCounter?
+    pair: Arc<Mutex<(usize, watch::Sender<()>)>>,
+}
+
+impl Drop for JobToken {
+    fn drop(&mut self) {
+        let mut guard = self.pair.lock().unwrap();
+        let (ref mut count, ref tx) = &mut *guard;
+        *count -= 1;
+        if *count == 0  && tx.receiver_count() > 0 {
+            tx.send(()).expect("receiver err in job counter");
+        }
     }
 }
 
@@ -138,6 +203,7 @@ struct Test {
     program: Arc<OsString>,
     args: Arc<Vec<OsString>>,
     rev: CommitHash,
+    _token: JobToken,
 }
 
 impl Test {
@@ -148,8 +214,7 @@ impl Test {
         worktree.checkout(&self.rev).await?;
 
         let mut cmd = Command::new(self.program.as_ref());
-        cmd.args(self.args.as_ref())
-            .current_dir(worktree.path());
+        cmd.args(self.args.as_ref()).current_dir(worktree.path());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         let child = cmd.spawn().context("spawning test command")?;
@@ -228,7 +293,11 @@ impl Display for TestOutcome {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::{Path, PathBuf}, thread::panicking, time::Duration};
+    use std::{
+        path::{Path, PathBuf},
+        thread::panicking,
+        time::Duration,
+    };
 
     use anyhow::bail;
     use futures::Future;
@@ -444,13 +513,20 @@ mod tests {
             .expect("result channel terminated");
         let got = result.as_ref();
         if *got != want {
-            bail!(
-                "Didn't get expected result - got {} want {}",
-                got,
-                want
-            );
+            bail!("Didn't get expected result - got {} want {}", got, want);
         }
         Ok(())
+    }
+
+    async fn expect_no_more_results(
+        results: &mut broadcast::Receiver<Arc<CommitTestResult>>,
+        m: &Manager,
+    ) -> anyhow::Result<()> {
+        select!(
+            _ = sleep(Duration::from_secs(1)) => bail!("didn't settle after 1s"),
+            result = results.recv() => bail!("unexpected test result received: {:?}", result),
+            _ = m.settled() => Ok(())
+        )
     }
 
     #[test_log::test(tokio::test)]
@@ -467,8 +543,6 @@ mod tests {
             .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(vec![hash.clone()]);
-        // TODO: wait until the manager thinks it has no more work to do, using
-        // a special "settle" test method.
         // We should get a singular result because we only fed in one revision.
         expect_result_1s(
             &mut results,
@@ -479,6 +553,7 @@ mod tests {
         )
         .await
         .expect("bad test result");
+        expect_no_more_results(&mut results, &m).await.unwrap()
     }
 
     #[test_log::test(tokio::test)]
@@ -519,6 +594,8 @@ mod tests {
         )
         .await
         .unwrap();
+        // Can't call expect_no_more_results here; the manager will never settle because we used
+        // Terminate::OnSigint, the test will never comlpete.
     }
 
     // TODO: test with variations of nthreads size and queue depth.
