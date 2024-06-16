@@ -223,15 +223,12 @@ pub trait Worktree: Debug {
                     // Produce an update when the timer expires.
                     () = sleep_fut =>  yield self.rev_list(range_spec).await?,
                     // Ensure the timer is set when we see an update.
-                    maybe_result = rx.next() => {
-                        match maybe_result {
-                            Some(_result) => {
-                                if sleep_fut.is_terminated() {
-                                    sleep_fut.set(sleep(Duration::from_secs(1)).fuse());
-                                }
-                            },
-                            // TODO: Do I really understand if this can happen? I think maybe not.
-                            None  => break,
+                    result = rx.next() => {
+                        // There's a bug if the sender has shut down, we should always receive
+                        // something.
+                        let _ = result.expect("git watcher internal receive error");
+                        if sleep_fut.is_terminated() {
+                            sleep_fut.set(sleep(Duration::from_secs(1)).fuse());
                         }
                     },
                 }
