@@ -120,6 +120,12 @@ impl Manager {
     }
 }
 
+impl Drop for Manager {
+    fn drop(&mut self) {
+        self.set_revisions([]).expect("error cancelling tests in shutdown");
+    }
+}
+
 // This is not really a proper type, it doesn't really mean anything except as an implementation
 // detail of its user. I tried to get rid of it but then you run into issues with getting references
 // to individual fields while a mutable reference exists to the overall struct. I think this is
