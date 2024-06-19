@@ -597,28 +597,6 @@ mod tests {
         expect_no_more_results(&mut results, &m).await.unwrap()
     }
 
-    // This is not actually testing functionality, this is a meta-test, yikes this is
-    // over-engineered.
-    #[test_log::test(tokio::test)]
-    async fn should_not_settle() {
-        let fixture = Fixture::new().await;
-        // First commit's test will block forever.
-        let hash = fixture
-            .repo
-            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
-            .await
-            .expect("couldn't create test commit");
-        let script = TestScript::new();
-        let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args())
-            .await
-            .expect("couldn't set up manager");
-        m.set_revisions([hash]);
-        select!(
-            _ = sleep(Duration::from_secs(1)) => (),
-            _ = m.settled() => panic!("manager settled unexpectedly"),
-        )
-    }
-
     // TODO: test with variations of nthreads size and queue depth.
     // TODO: test starting up on an empty repo?
     // TODO: test only one worker task (I think this is actually broken)
