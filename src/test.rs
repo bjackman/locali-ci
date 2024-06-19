@@ -154,7 +154,9 @@ impl JobCounter {
         let mut guard = self.pair.lock().unwrap();
         let (ref mut count, _) = &mut *guard;
         *count += 1;
-        JobToken { pair: self.pair.clone() }
+        JobToken {
+            pair: self.pair.clone(),
+        }
     }
 
     #[cfg(test)]
@@ -167,7 +169,6 @@ impl JobCounter {
                 return;
             }
             sender.subscribe()
-
         };
         rx.changed().await.expect("sender dropped in job counter");
     }
@@ -184,7 +185,7 @@ impl Drop for JobToken {
         let mut guard = self.pair.lock().unwrap();
         let (ref mut count, ref tx) = &mut *guard;
         *count -= 1;
-        if *count == 0  && tx.receiver_count() > 0 {
+        if *count == 0 && tx.receiver_count() > 0 {
             tx.send(()).expect("receiver err in job counter");
         }
     }
@@ -306,7 +307,7 @@ mod tests {
     use test_log;
     use tokio::{
         fs, select,
-        time::{interval, sleep},
+        time::{interval, sleep, sleep_until, Instant},
     };
 
     use crate::git::{CommitHash, Worktree};
@@ -501,17 +502,32 @@ mod tests {
 
     impl Eq for CommitTestResult {}
 
-    async fn expect_result_1s(
+    async fn expect_results_1s(
         results: &mut broadcast::Receiver<Arc<CommitTestResult>>,
-        want: CommitTestResult,
+        mut want: HashMap<CommitHash, TestOutcome>,
     ) -> anyhow::Result<()> {
-        let result = timeout_1s(results.recv())
-            .await
-            .context("didn't get result after 1s")?
-            .expect("result channel terminated");
-        let got = result.as_ref();
-        if *got != want {
-            bail!("Didn't get expected result - got {} want {}", got, want);
+        let timeout = Instant::now() + Duration::from_secs(1);
+        while want.len() != 0 {
+            let ctr = select!(
+                _ = sleep_until(timeout) => bail!("timeout after 1s"),
+                output = results.recv() => output.context("test result stream terminated")?
+            );
+            let want_outcome = want
+                .get(&ctr.hash)
+                .context(format!("got result for unexpected hash {}", ctr.hash))?;
+            let got_outcome = ctr
+                .result
+                .as_ref()
+                .map_err(|e| anyhow!("error testing {}: {:?}", ctr.hash, e))?;
+            if *got_outcome != *want_outcome {
+                bail!(
+                    "unexpected test result for {}, got {} want {}",
+                    ctr.hash,
+                    got_outcome,
+                    want_outcome
+                );
+            }
+            want.remove(&ctr.hash);
         }
         Ok(())
     }
@@ -542,12 +558,9 @@ mod tests {
         let mut results = m.results();
         m.set_revisions(vec![hash.clone()]);
         // We should get a singular result because we only fed in one revision.
-        expect_result_1s(
+        expect_results_1s(
             &mut results,
-            CommitTestResult {
-                hash: hash,
-                result: Ok(TestOutcome::Completed { exit_code: 0 }),
-            },
+            HashMap::from([(hash, TestOutcome::Completed { exit_code: 0 })]),
         )
         .await
         .expect("bad test result");
@@ -585,12 +598,14 @@ mod tests {
         timeout_1s(started_hash1.siginted())
             .await
             .expect("hash1 test did not get siginted");
-        expect_result_1s(
+        expect_results_1s(
             &mut results,
-            CommitTestResult {
-                hash: hash1,
-                result: Ok(TestOutcome::Canceled),
-            },
+            HashMap::from([
+                (hash1, TestOutcome::Canceled),
+                // This isn't what we're testing here but we need to assert that it comes in so we can
+                // check below that nothing else comes in.
+                (hash2, TestOutcome::Completed { exit_code: 0 }),
+            ]),
         )
         .await
         .unwrap();
