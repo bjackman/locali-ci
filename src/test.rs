@@ -355,20 +355,19 @@ mod tests {
         script: OsString, // Raw content.
     }
 
-    enum Terminate {
-        Immediately,
-        OnSigint,
-    }
-
     impl TestScript {
         const STARTED_FILENAME_PREFIX: &'static str = "started.";
         const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
         const LOCK_FILENAME: &'static str = "lockfile";
         const EXCLUSION_BUG_PATH: &'static str = "exclusion_bug";
 
+        // If this appears in the commit message , the test script will block until SIGINTed,
+        // otherwise it terminates immediately.
+        pub const BLOCK_COMMIT_MSG_TAG: &'static str = "block_this_test";
+
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
-        pub fn new(terminate: Terminate) -> Self {
+        pub fn new() -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
             // The script will touch a special file to notify us that it has been started. On
             // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
@@ -393,16 +392,15 @@ mod tests {
                 fi
                 touch {lockfile_path:?}
                 trap \"rm {lockfile_path:?}\" EXIT
-
-                {maybe_read}",
+                if [[ \"$(git log -n1 --format=%B)\" =~ {block_tag} ]]; then
+                    read
+                fi
+                ",
                 started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
                 lockfile_path = dir.path().join(Self::LOCK_FILENAME),
                 exclusion_bug_path = dir.path().join(Self::EXCLUSION_BUG_PATH),
-                maybe_read = match terminate {
-                    Terminate::Immediately => "",
-                    Terminate::OnSigint => "read",
-                }
+                block_tag = Self::BLOCK_COMMIT_MSG_TAG,
             );
 
             Self {
@@ -537,7 +535,7 @@ mod tests {
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
-        let script = TestScript::new(Terminate::Immediately);
+        let script = TestScript::new();
         let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args())
             .await
             .expect("couldn't set up manager");
@@ -559,12 +557,13 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
         let fixture = Fixture::new().await;
+        // First commit's test will block forever.
         let hash1 = fixture
             .repo
-            .commit("hello,")
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
             .await
             .expect("couldn't create test commit");
-        let script = TestScript::new(Terminate::OnSigint);
+        let script = TestScript::new();
         let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args())
             .await
             .expect("couldn't set up manager");
@@ -573,6 +572,7 @@ mod tests {
         let started_hash1 = timeout_1s(script.started(&hash1))
             .await
             .expect("script did not run for hash1");
+        // Second commit's test will terminate quickly.
         let hash2 = fixture
             .repo
             .commit("hello,")
@@ -594,8 +594,7 @@ mod tests {
         )
         .await
         .unwrap();
-        // Can't call expect_no_more_results here; the manager will never settle because we used
-        // Terminate::OnSigint, the test will never comlpete.
+        expect_no_more_results(&mut results, &m).await.unwrap()
     }
 
     // TODO: test with variations of nthreads size and queue depth.
