@@ -328,9 +328,7 @@ mod tests {
             .expect("couldn't read hash file")
     }
 
-    // TODO: this sucks, find a way to dedupe more. One thing I think we could dedupue is the bash
-    // test command - it could be a struct that has methods like called() that blocks until it's
-    // started,  and finish() that exits successfully and stuff like that.
+    // TODO: this sucks, find a way to dedupe more.
     struct Fixture {
         _temp_dir: TempDir,
         repo: Arc<PersistentWorktree>,
