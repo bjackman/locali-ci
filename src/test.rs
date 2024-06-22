@@ -39,6 +39,11 @@ pub struct Manager {
 
 impl Manager {
     // Starts the workers. You must call close() before dropping it.
+    //
+    // TODO: This doesn't work if there are no commits in the repository. Not sure I care about
+    // this, but the solution would be to create the worktrees ondemand, when we have a revision we
+    // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
+    // just do that for its own sake and leave the empty-repo problem as a nice freebie.
     pub async fn new<W>(
         num_threads: u32,
         // This needs to be an Arc because we hold onto a reference to it for a
@@ -666,7 +671,6 @@ mod tests {
         .unwrap();
     }
 
-    // TODO: test starting up on an empty repo?
     // TODO: test only one worker task (I think this is actually broken)
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
     // to do with panic and drop order I think.
