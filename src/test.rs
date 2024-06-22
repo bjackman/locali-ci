@@ -635,7 +635,37 @@ mod tests {
         )
     }
 
-    // TODO: test with variations of nthreads size and queue depth.
+    #[test_log::test(tokio::test)]
+    async fn should_handle_many_commits() {
+        let fixture = Fixture::new().await;
+        let mut hashes = Vec::new();
+        for _ in 0..100 {
+            hashes.push(
+                fixture
+                    .repo
+                    .commit("el capitán esta in el casa") // tha'ts Español bébé,,,
+                    .await
+                    .expect("couldn't create test commit"),
+            );
+        }
+        let script = TestScript::new();
+        let mut m = Manager::new(4, fixture.repo.clone(), script.program(), script.args())
+            .await
+            .expect("couldn't set up manager");
+        let mut results = m.results();
+        m.set_revisions(hashes.clone());
+        expect_results_1s(
+            &mut results,
+            HashMap::from_iter(
+                hashes
+                    .into_iter()
+                    .map(|h| (h, TestOutcome::Completed { exit_code: 0 })),
+            ),
+        )
+        .await
+        .unwrap();
+    }
+
     // TODO: test starting up on an empty repo?
     // TODO: test only one worker task (I think this is actually broken)
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
