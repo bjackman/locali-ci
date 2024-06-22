@@ -386,18 +386,18 @@ mod tests {
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
                 touch {started_path_prefix:?}$(git rev-parse HEAD)
 
-                if [ -e {lockfile_path:?} ]; then
+                if [ -e ./{lock_filename:?} ]; then
                     touch {exclusion_bug_path:?}
                 fi
-                touch {lockfile_path:?}
-                trap \"rm {lockfile_path:?}\" EXIT
+                touch ./{lock_filename:?}
+                trap \"rm {lock_filename:?}\" EXIT
                 if [[ \"$(git log -n1 --format=%B)\" =~ {block_tag} ]]; then
                     read
                 fi
                 ",
                 started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
-                lockfile_path = dir.path().join(Self::LOCK_FILENAME),
+                lock_filename = Self::LOCK_FILENAME,
                 exclusion_bug_path = dir.path().join(Self::EXCLUSION_BUG_PATH),
                 block_tag = Self::BLOCK_COMMIT_MSG_TAG,
             );
