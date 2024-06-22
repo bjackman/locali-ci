@@ -380,6 +380,12 @@ mod tests {
         // otherwise it terminates immediately.
         pub const BLOCK_COMMIT_MSG_TAG: &'static str = "block_this_test";
 
+        // Generate a tag which, when put in the commit message of a commit, will result in the test
+        // returning the given exit code.
+        pub fn exit_code_tag(code: u32) -> OsString {
+            return format!("exit_code({})", code).into();
+        }
+
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
         pub fn new() -> Self {
@@ -407,9 +413,13 @@ mod tests {
                 fi
                 touch ./{lock_filename:?}
                 trap \"rm {lock_filename:?}\" EXIT
-                if [[ \"$(git log -n1 --format=%B)\" =~ {block_tag} ]]; then
+                commit_msg=\"$(git log -n1 --format=%B)\"
+                if [[ \"$commit_msg\" =~ {block_tag} ]]; then
                     read
                 fi
+                # Extract the exit code and pass it to exit if there is one, otherwise pass 0.
+                exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
+                exit ${{exit_code:-0}}
                 ",
                 started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
@@ -658,20 +668,28 @@ mod tests {
         )
     }
 
-    #[test_case(1 ; "single worktree")]
-    #[test_case(4 ; "multiple worktrees")]
+    #[test_case(1, 1 ; "single worktree, one test")]
+    #[test_case(4, 1 ; "multiple worktrees, one test")]
+    #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
     #[test_log::test(tokio::test)]
-    async fn should_handle_many_commits(num_worktrees: u32) {
+    async fn should_handle_many(num_worktrees: u32, num_tests: usize) {
         let fixture = Fixture::new().await;
         let mut hashes = Vec::new();
-        for _ in 0..100 {
-            hashes.push(
-                fixture
+        let mut want_results = HashMap::new();
+        let mut i = 0;
+        for _ in 0..50 {
+            for _ in 0..num_tests {
+                let hash = fixture
                     .repo
-                    .commit("el capitán esta in el casa") // tha'ts Español bébé,,,
+                    // We'll give each test a unique exit code so we can check they really got
+                    // tested individually.
+                    .commit(TestScript::exit_code_tag(i as u32))
                     .await
-                    .expect("couldn't create test commit"),
-            );
+                    .expect("couldn't create test commit");
+                want_results.insert(hash.clone(), TestOutcome::Completed { exit_code: i });
+                hashes.push(hash);
+                i += 1;
+            }
         }
         let script = TestScript::new();
         let mut m = Manager::new(num_worktrees, fixture.repo.clone(), [script.as_test()])
@@ -679,16 +697,9 @@ mod tests {
             .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(hashes.clone());
-        expect_results_5s(
-            &mut results,
-            HashMap::from_iter(
-                hashes
-                    .into_iter()
-                    .map(|h| (h, TestOutcome::Completed { exit_code: 0 })),
-            ),
-        )
-        .await
-        .expect("bad reuslts");
+        expect_results_5s(&mut results, want_results)
+            .await
+            .expect("bad reuslts");
     }
 
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
