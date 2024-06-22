@@ -8,6 +8,8 @@ use std::process::Command as SyncCommand;
 use std::str;
 use std::time::Duration;
 
+#[cfg(test)]
+use anyhow::anyhow;
 use anyhow::{bail, Context};
 use async_stream::try_stream;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
@@ -298,35 +300,6 @@ impl Drop for TempWorktree {
                 error!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
             });
         debug!("Delorted worktree at {:?}", self.temp_dir.path());
-    }
-}
-
-trait OsStrExt {
-    fn split_lines(&self) -> Vec<&OsStr>;
-}
-
-impl OsStrExt for OsStr {
-    fn split_lines(&self) -> Vec<&OsStr> {
-        let mut start = 0;
-        let mut ret = vec![];
-        let sb = self.as_bytes();
-        let mut in_line = sb[0] != b'\n';
-        // How do i wrote code?
-        for i in 1..sb.len() {
-            if in_line {
-                if sb[i] == b'\n' {
-                    ret.push(OsStr::from_bytes(&sb[start..i]));
-                    in_line = false;
-                }
-            } else if sb[i] != b'\n' {
-                start = i;
-                in_line = true;
-            }
-        }
-        if in_line {
-            ret.push(OsStr::from_bytes(&sb[start..sb.len()]));
-        }
-        ret
     }
 }
 

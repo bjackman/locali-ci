@@ -230,6 +230,7 @@ impl Display for TestOutcome {
 mod tests {
     use std::{path::{Path, PathBuf}, thread::panicking, time::Duration};
 
+    use anyhow::bail;
     use futures::Future;
     use log::error;
     use tempfile::TempDir;
