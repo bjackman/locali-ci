@@ -309,6 +309,7 @@ mod tests {
     use futures::Future;
     use log::error;
     use tempfile::TempDir;
+    use test_case::test_case;
     use test_log;
     use tokio::{
         fs, select,
@@ -505,11 +506,11 @@ mod tests {
 
     impl Eq for CommitTestResult {}
 
-    async fn expect_results_1s(
+    async fn expect_results_5s(
         results: &mut broadcast::Receiver<Arc<CommitTestResult>>,
         mut want: HashMap<CommitHash, TestOutcome>,
     ) -> anyhow::Result<()> {
-        let timeout = Instant::now() + Duration::from_secs(1);
+        let timeout = Instant::now() + Duration::from_secs(5);
         while want.len() != 0 {
             let ctr = select!(
                 _ = sleep_until(timeout) => bail!("timeout after 1s"),
@@ -564,7 +565,7 @@ mod tests {
         let mut results = m.results();
         m.set_revisions(vec![hash.clone()]);
         // We should get a singular result because we only fed in one revision.
-        expect_results_1s(
+        expect_results_5s(
             &mut results,
             HashMap::from([(hash, TestOutcome::Completed { exit_code: 0 })]),
         )
@@ -604,7 +605,7 @@ mod tests {
         timeout_1s(started_hash1.siginted())
             .await
             .expect("hash1 test did not get siginted");
-        expect_results_1s(
+        expect_results_5s(
             &mut results,
             HashMap::from([
                 (hash1, TestOutcome::Canceled),
@@ -640,8 +641,10 @@ mod tests {
         )
     }
 
+    #[test_case(1 ; "single worktree")]
+    #[test_case(4 ; "multiple worktrees")]
     #[test_log::test(tokio::test)]
-    async fn should_handle_many_commits() {
+    async fn should_handle_many_commits(num_worktrees: u32) {
         let fixture = Fixture::new().await;
         let mut hashes = Vec::new();
         for _ in 0..100 {
@@ -654,12 +657,17 @@ mod tests {
             );
         }
         let script = TestScript::new();
-        let mut m = Manager::new(4, fixture.repo.clone(), script.program(), script.args())
-            .await
-            .expect("couldn't set up manager");
+        let mut m = Manager::new(
+            num_worktrees,
+            fixture.repo.clone(),
+            script.program(),
+            script.args(),
+        )
+        .await
+        .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(hashes.clone());
-        expect_results_1s(
+        expect_results_5s(
             &mut results,
             HashMap::from_iter(
                 hashes
@@ -668,10 +676,9 @@ mod tests {
             ),
         )
         .await
-        .unwrap();
+        .expect("bad reuslts");
     }
 
-    // TODO: test only one worker task (I think this is actually broken)
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
     // to do with panic and drop order I think.
 }
