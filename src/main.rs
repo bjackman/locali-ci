@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::Parser as _;
 use futures::StreamExt;
+use test::Test;
 use std::collections;
 use std::ffi::{OsStr, OsString};
 use std::pin::pin;
@@ -53,8 +54,10 @@ async fn main() -> anyhow::Result<()> {
     let mut m = test::Manager::new(
         args.num_threads,
         repo.clone(),
-        OsString::from(cmd.pop_front().unwrap()),
-        cmd.iter().map(OsString::from).collect(),
+        [Test {
+            program: OsString::from(cmd.pop_front().unwrap()),
+            args: cmd.iter().map(OsString::from).collect(),
+        }],
     )
     .await
     .context("setting up test manager")?;

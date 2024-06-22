@@ -27,13 +27,25 @@ use crate::git::{CommitHash, Worktree};
 use crate::pool::Pool;
 use crate::process::OutputExt;
 
+// A test task that will need to be repeated for each commit.
+pub struct Test {
+    pub program: OsString,
+    pub args: Vec<OsString>,
+}
+
+impl Test {
+    fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&self.args);
+        cmd
+    }
+}
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     job_cts: HashMap<CommitHash, CancellationToken>,
     job_counter: JobCounter,
     result_tx: broadcast::Sender<Arc<CommitTestResult>>,
-    program: Arc<OsString>,
-    args: Arc<Vec<OsString>>,
+    tests: Vec<Arc<Test>>,
     worktree_pool: Arc<Pool<TempWorktree>>,
 }
 
@@ -44,13 +56,12 @@ impl Manager {
     // this, but the solution would be to create the worktrees ondemand, when we have a revision we
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
-    pub async fn new<W>(
+    pub async fn new<W, I: IntoIterator<Item = Test>>(
         num_threads: u32,
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
-        program: OsString,
-        args: Vec<OsString>,
+        tests: I,
     ) -> anyhow::Result<Self>
     where
         // We need to specify 'static here. Just because we have an Arc over the
@@ -69,8 +80,7 @@ impl Manager {
             result_tx,
             job_cts: HashMap::new(),
             job_counter: JobCounter::new(),
-            program: Arc::new(program),
-            args: Arc::new(args),
+            tests: tests.into_iter().map(|t| Arc::new(t)).collect(),
             worktree_pool: Arc::new(Pool::new(worktrees)),
         })
     }
@@ -94,27 +104,28 @@ impl Manager {
         }
 
         for rev in to_start {
-            let ct = CancellationToken::new();
-            self.job_cts.insert(rev.to_owned(), ct.clone());
-            let test = Test {
-                ct,
-                program: self.program.clone(),
-                args: self.args.clone(),
-                rev: rev.to_owned(),
-                _token: self.job_counter.get(),
-            };
-            let pool = self.worktree_pool.clone();
-            let tx = self.result_tx.clone();
-            tokio::spawn(async move {
-                let worktree = pool.get().await;
-                let result = test.run(worktree.as_ref()).await;
-                // Note: must not drop test until the send is complete, or we would break settled().
-                tx.send(Arc::new(CommitTestResult {
-                    hash: test.rev,
-                    result,
-                }))
-                .expect("couldn't send result");
-            });
+            for test in self.tests.iter() {
+                let ct = CancellationToken::new();
+                self.job_cts.insert(rev.to_owned(), ct.clone());
+                let test = TestJob {
+                    ct,
+                    test: test.clone(),
+                    rev: rev.to_owned(),
+                    _token: self.job_counter.get(),
+                };
+                let pool = self.worktree_pool.clone();
+                let tx = self.result_tx.clone();
+                tokio::spawn(async move {
+                    let worktree = pool.get().await;
+                    let result = test.run(worktree.as_ref()).await;
+                    // Note: must not drop test until the send is complete, or we would break settled().
+                    tx.send(Arc::new(CommitTestResult {
+                        hash: test.rev,
+                        result,
+                    }))
+                    .expect("couldn't send result");
+                });
+            }
         }
     }
 
@@ -201,28 +212,27 @@ impl Drop for JobToken {
 // to individual fields while a mutable reference exists to the overall struct. I think this is
 // basically one an instance of "view structs" described in
 // https://smallcultfollowing.com/babysteps/blog/2024/06/02/the-borrow-checker-within/
-struct Test {
+struct TestJob {
     ct: CancellationToken,
     // TODO: Unclear if there's a way to avoid the atomic operations incurred by cloning these Arcs.
     // There is no builtin equivalent to thread::scope for async. If we had that, maybe it would
     // become possible to convince the compiler that the Manager outlives its Tests. Not sure.
-    program: Arc<OsString>,
-    args: Arc<Vec<OsString>>,
+    test: Arc<Test>,
     rev: CommitHash,
     _token: JobToken,
 }
 
-impl Test {
+impl TestJob {
     async fn run<W>(&self, worktree: &W) -> TestResult
     where
         W: Worktree,
     {
         worktree.checkout(&self.rev).await?;
 
-        let mut cmd = Command::new(self.program.as_ref());
-        cmd.args(self.args.as_ref()).current_dir(worktree.path());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+        let mut cmd = self.test.command();
+        let cmd = cmd.current_dir(worktree.path());
+        let cmd = cmd.stdout(Stdio::piped());
+        let cmd = cmd.stderr(Stdio::piped());
         let child = cmd.spawn().context("spawning test command")?;
         // lol wat?
         let pid = Pid::from_raw(
@@ -444,6 +454,13 @@ mod tests {
                 hash: hash.to_owned(),
             }
         }
+
+        pub fn as_test(&self) -> Test {
+            Test {
+                program: self.program(),
+                args: self.args(),
+            }
+        }
     }
 
     // Hack to check for stuff that is orthogonal to any particular test, so we
@@ -559,7 +576,7 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::new(2, fixture.repo.clone(), script.program(), script.args())
+        let mut m = Manager::new(2, fixture.repo.clone(), [script.as_test()])
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
@@ -584,7 +601,7 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args())
+        let mut m = Manager::new(1, fixture.repo.clone(), [script.as_test()])
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
@@ -631,7 +648,7 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::new(1, fixture.repo.clone(), script.program(), script.args())
+        let mut m = Manager::new(1, fixture.repo.clone(), [script.as_test()])
             .await
             .expect("couldn't set up manager");
         m.set_revisions([hash]);
@@ -657,14 +674,9 @@ mod tests {
             );
         }
         let script = TestScript::new();
-        let mut m = Manager::new(
-            num_worktrees,
-            fixture.repo.clone(),
-            script.program(),
-            script.args(),
-        )
-        .await
-        .expect("couldn't set up manager");
+        let mut m = Manager::new(num_worktrees, fixture.repo.clone(), [script.as_test()])
+            .await
+            .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(hashes.clone());
         expect_results_5s(
