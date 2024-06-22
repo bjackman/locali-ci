@@ -515,6 +515,9 @@ mod tests {
                 .context(format!("got result for unexpected hash {}", ctr.hash))?;
             let got_outcome = ctr
                 .result
+                // Some weirdness: we get Arcs with Results in them, we cannot just ? them because
+                // anyhow::Error isn't Copy, it also doesn't implement Clone or anything. So, we get
+                // a reference to the error and create a new error from its string representation.
                 .as_ref()
                 .map_err(|e| anyhow!("error testing {}: {:?}", ctr.hash, e))?;
             if *got_outcome != *want_outcome {
