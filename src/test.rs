@@ -230,10 +230,11 @@ impl TestJob {
         worktree.checkout(&self.rev).await?;
 
         let mut cmd = self.test.command();
-        let cmd = cmd.current_dir(worktree.path());
-        let cmd = cmd.stdout(Stdio::piped());
-        let cmd = cmd.stderr(Stdio::piped());
-        let child = cmd.spawn().context("spawning test command")?;
+        let child = cmd
+            .current_dir(worktree.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn().context("spawning test command")?;
         // lol wat?
         let pid = Pid::from_raw(
             child
