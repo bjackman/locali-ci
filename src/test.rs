@@ -234,7 +234,9 @@ impl TestJob {
             .current_dir(worktree.path())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn().context("spawning test command")?;
+            .env("LCI_COMMIT", self.rev.to_string())
+            .spawn()
+            .context("spawning test command")?;
         // lol wat?
         let pid = Pid::from_raw(
             child
