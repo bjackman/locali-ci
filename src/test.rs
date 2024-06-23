@@ -374,7 +374,7 @@ mod tests {
         const STARTED_FILENAME_PREFIX: &'static str = "started.";
         const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
         const LOCK_FILENAME: &'static str = "lockfile";
-        const EXCLUSION_BUG_PATH: &'static str = "exclusion_bug";
+        const BUG_DETECTED_PATH: &'static str = "bug_detected";
 
         // If this appears in the commit message , the test script will block until SIGINTed,
         // otherwise it terminates immediately.
@@ -409,7 +409,7 @@ mod tests {
                 touch {started_path_prefix:?}$(git rev-parse HEAD)
 
                 if [ -e ./{lock_filename:?} ]; then
-                    touch {exclusion_bug_path:?}
+                    echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
                 fi
                 touch ./{lock_filename:?}
                 trap \"rm {lock_filename:?}\" EXIT
@@ -424,7 +424,7 @@ mod tests {
                 started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
                 lock_filename = Self::LOCK_FILENAME,
-                exclusion_bug_path = dir.path().join(Self::EXCLUSION_BUG_PATH),
+                bug_detected_path = dir.path().join(Self::BUG_DETECTED_PATH),
                 block_tag = Self::BLOCK_COMMIT_MSG_TAG,
             );
 
@@ -452,8 +452,8 @@ mod tests {
         }
 
         // If this path exists, two instances of the script used the same worktree at once.
-        fn exclusion_bug_path(&self) -> PathBuf {
-            self.dir.path().join(Self::EXCLUSION_BUG_PATH)
+        fn bug_detected_path(&self) -> PathBuf {
+            self.dir.path().join(Self::BUG_DETECTED_PATH)
         }
 
         // Blocks until the script is started for the given commit hash.
@@ -477,8 +477,11 @@ mod tests {
     // don't wanna have to it in every individual test.
     impl Drop for TestScript {
         fn drop(&mut self) {
-            if self.exclusion_bug_path().exists() {
-                let msg = "Overlapping test script runs used the same worktree";
+            let path = self.bug_detected_path();
+            if path.exists() {
+                let content =
+                    std::fs::read_to_string(path).expect("couldn't read bug-detected path");
+                let msg = format!("The test script detected one or more bugs: {}", content);
                 if panicking() {
                     // If you panic during a panic (i.e. if this fails when the test had already
                     // failed) you get a huge splat. Just log instead.
