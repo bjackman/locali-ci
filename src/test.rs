@@ -80,7 +80,7 @@ impl Manager {
             result_tx,
             job_cts: HashMap::new(),
             job_counter: JobCounter::new(),
-            tests: tests.into_iter().map(|t| Arc::new(t)).collect(),
+            tests: tests.into_iter().map(Arc::new).collect(),
             worktree_pool: Arc::new(Pool::new(worktrees)),
         })
     }
