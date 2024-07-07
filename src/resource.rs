@@ -1,6 +1,7 @@
 use std::marker::Send;
 use std::{mem::ManuallyDrop, ops::Deref, sync::Mutex};
 
+use async_condvar_fair::Condvar;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 // Static collection of objects that can be temporarily allocated for mutually exclusive ownership.
@@ -100,9 +101,78 @@ impl<T: Send> Pool<T> {
     }
 }
 
+#[derive(Debug)]
+// Collection of pools of "tokens" that can be waited for in arbitrary counts.
+pub struct Pools {
+    cond: Condvar,
+    avail: Mutex<Vec<usize>>,
+}
+
+impl Pools {
+    // Create a collection of pools where sizes specifies the initial number of tokens in each
+    // pool.
+    pub fn new<I: IntoIterator<Item = usize>>(sizes: I) -> Self {
+        Self {
+            cond: Condvar::new(),
+            avail: Mutex::new(sizes.into_iter().collect()),
+        }
+    }
+
+    // Get the specified number of tokens from each of the pools, indexes match
+    // the indexes used in new. Panics if the size of counts differs from the number of pools.
+    // The tokens are held until you drop the returned value.
+    pub async fn get<I: IntoIterator<Item = usize>>(&self, counts: I) -> PoolsTokens {
+        let wants: Vec<_> = counts.into_iter().collect();
+        let mut guard = self.avail.lock().unwrap();
+        assert!(wants.len() == (*guard).len());
+        while (*guard)
+            .iter()
+            .zip(wants.iter())
+            .any(|(have, want)| have < want)
+        {
+            guard = self.cond.wait((guard, &self.avail)).await;
+        }
+        *guard = (*guard)
+            .iter()
+            .zip(wants.iter())
+            .map(|(have, want)| have - want)
+            .collect();
+        PoolsTokens {
+            counts: ManuallyDrop::new(wants),
+            pools: self,
+        }
+    }
+
+    fn put<I: IntoIterator<Item = usize>>(&self, counts: I) {
+        let counts: Vec<_> = counts.into_iter().collect();
+        let mut guard = self.avail.lock().unwrap();
+        assert!(counts.len() <= (*guard).len());
+        *guard = (*guard)
+            .iter()
+            .zip(counts.iter())
+            .map(|(a, b)| a + b)
+            .collect();
+    }
+}
+
+#[derive(Debug)]
+// Tokens taken from a Pools.
+pub struct PoolsTokens<'a> {
+    counts: ManuallyDrop<Vec<usize>>,
+    pools: &'a Pools,
+}
+
+impl Drop for PoolsTokens<'_> {
+    fn drop(&mut self) {
+        // SAFETY: This is safe as the field is never accessed again.
+        let counts = unsafe { ManuallyDrop::take(&mut self.counts) };
+        self.pools.put(counts)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use anyhow::{ bail};
+    use anyhow::bail;
     use std::task::{Context, Poll};
 
     use futures::{pin_mut, task::noop_waker, Future};
@@ -125,17 +195,28 @@ mod tests {
         // Poll the future before it completes
         match fut.as_mut().poll(&mut cx) {
             Poll::Pending => Ok(()),
-            Poll::Ready(res) => bail!(
-                "The future should be pending, but it produced {:?}",
-                res
-            ),
+            Poll::Ready(res) => bail!("The future should be pending, but it produced {:?}", res),
         }
     }
 
     #[test_log::test]
-    fn test_empty_blocks() {
+    fn test_pool_empty_blocks() {
         let pool = Pool::<bool>::new([]);
         check_pending(pool.get()).expect("empty pool returned value");
+    }
+
+    #[test_log::test]
+    fn test_pools_one_empty_blocks() {
+        for (desc, sizes, wants) in [
+            ("one empty", vec![0], vec![1]),
+            ("two empty", vec![0, 0], vec![1, 0]),
+            ("two empty, want both", vec![0, 0], vec![1, 1]),
+            ("too many", vec![4], vec![6]),
+        ] {
+            let pool = Pools::new(sizes.clone());
+            check_pending(pool.get(wants.clone()))
+                .expect(format!("{}: {:?}.get({:?}) didn't block", desc, sizes, wants).as_str());
+        }
     }
 
     #[test_log::test(tokio::test)]
@@ -159,5 +240,15 @@ mod tests {
         }
         let obj = pool.get().await;
         assert_eq!(*obj, "three");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_pools_get_some() {
+        let pools = Pools::new([3, 4]);
+        {
+            let _tokens = pools.get(vec![1, 2]).await;
+            check_pending(pools.get(vec![3, 0])).expect("returned too many tokens");
+        }
+        pools.get(vec![3, 0]).await;
     }
 }
