@@ -7,7 +7,6 @@ use std::ffi::OsString;
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use anyhow::{anyhow, Context};
 use futures::future::{self, try_join_all, Either};
@@ -24,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 use crate::git::PersistentWorktree;
 use crate::git::TempWorktree;
 use crate::git::{CommitHash, Worktree};
-use crate::resource::Pool;
 use crate::process::OutputExt;
+use crate::resource::Pool;
 
 // A test task that will need to be repeated for each commit.
 pub struct Test {
@@ -153,57 +152,58 @@ impl Drop for Manager {
 // This is a horrible attempt to implement Manager::settled. There is no Condvar in tokio or
 // futures-rs, so we have this weird condvar-like construction using a Tokio watch channel.
 struct JobCounter {
-    // The first item in the pair is the counter; when it goes to zero the Sender will send a
-    // message.
-    pair: Arc<Mutex<(usize, watch::Sender<()>)>>,
+    w: watch::Sender<usize>,
 }
 
 impl JobCounter {
     pub fn new() -> Self {
         Self {
-            pair: Arc::new(Mutex::new((0, watch::Sender::new(())))),
+            w: watch::Sender::new(0),
         }
     }
 
     // Increment the counter. It is decremented when the token is dropped.
     pub fn get(&self) -> JobToken {
-        let mut guard = self.pair.lock().unwrap();
-        let (ref mut count, _) = &mut *guard;
-        *count += 1;
-        JobToken {
-            pair: self.pair.clone(),
-        }
+        // Hack? We only report that we "modified" the value if it changed its
+        // zeroness, since that's the only thing that waiters care about.
+        self.w.send_if_modified(|count| {
+            let was_zero = *count == 0;
+            *count += 1;
+            was_zero
+        });
+        JobToken { w: self.w.clone() }
     }
 
     #[cfg(test)]
-    // Block until the counter is zero. If it's already zero, return immediately.
+    // Block until the counter is zero. If it's already zero, return immediately. This might miss
+    // transient zeroness but is guaranteed to return eventually if the counter stays zero for some
+    // finite amount of time.
     pub async fn zero(&self) {
         let mut rx = {
-            let mut guard = self.pair.lock().unwrap();
-            let (count, ref sender) = &mut *guard;
-            if *count == 0 {
+            if *self.w.borrow() == 0 {
                 return;
             }
-            sender.subscribe()
+            // Note there's a race here, we've already dropped the Ref from self.w.borrow() so the
+            // counter could change. This doesn't matter because wait_for checks if the value is
+            // already zero before blocking, so missed updates are harmless.
+            self.w.subscribe()
         };
-        rx.changed().await.expect("sender dropped in job counter");
+        rx.wait_for(|count| *count == 0)
+            .await
+            .expect("sender dropped in job counter");
     }
 }
 
 struct JobToken {
-    // I'm not sure if there's some way to de-duplicate the contents of this struct against the main
-    // JobCounter?
-    pair: Arc<Mutex<(usize, watch::Sender<()>)>>,
+    w: watch::Sender<usize>,
 }
 
 impl Drop for JobToken {
     fn drop(&mut self) {
-        let mut guard = self.pair.lock().unwrap();
-        let (ref mut count, ref tx) = &mut *guard;
-        *count -= 1;
-        if *count == 0 && tx.receiver_count() > 0 {
-            tx.send(()).expect("receiver err in job counter");
-        }
+        self.w.send_if_modified(|count| {
+            *count -= 1;
+            *count == 0
+        });
     }
 }
 
