@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 use crate::git::PersistentWorktree;
 use crate::git::TempWorktree;
 use crate::git::{CommitHash, Worktree};
-use crate::pool::Pool;
+use crate::resource::Pool;
 use crate::process::OutputExt;
 
 // A test task that will need to be repeated for each commit.

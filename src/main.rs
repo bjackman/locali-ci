@@ -12,7 +12,7 @@ use tokio::select;
 use crate::git::Worktree;
 
 mod git;
-mod pool;
+mod resource;
 mod process;
 mod test;
 
