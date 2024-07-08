@@ -62,7 +62,7 @@ impl Manager {
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
     pub async fn new<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>>(
-        num_threads: u32,
+        num_worktrees: usize,
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
@@ -78,7 +78,7 @@ impl Manager {
         W: Worktree + Sync + Send + 'static,
     {
         let worktrees =
-            try_join_all((0..num_threads).map(|_| TempWorktree::create_from::<W>(repo.borrow())))
+            try_join_all((0..num_worktrees).map(|_| TempWorktree::create_from::<W>(repo.borrow())))
                 .await
                 .context("setting up temporary worktrees")?;
         let (result_tx, _) = broadcast::channel(32);

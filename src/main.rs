@@ -1,9 +1,8 @@
 use anyhow::Context;
 use clap::Parser as _;
 use futures::StreamExt;
-use test::Test;
-use std::collections;
-use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
+use std::ffi::{OsStr};
 use std::pin::pin;
 use std::str;
 use std::sync::Arc;
@@ -11,6 +10,7 @@ use tokio::select;
 
 use crate::git::Worktree;
 
+mod config;
 mod git;
 mod resource;
 mod process;
@@ -32,8 +32,8 @@ struct Args {
     /// to find the base of the range.
     base: String,
     /// Command to test. Note this is _not_ run via the shell.
-    #[arg(trailing_var_arg = true, required = true)]
-    cmd: Vec<String>,
+    #[arg(short, long, required = true)]
+    config_path: PathBuf,
 }
 
 #[tokio::main]
@@ -49,20 +49,8 @@ async fn main() -> anyhow::Result<()> {
     repo.git_dir()
         .await
         .context(format!("opening repo {}", args.repo_path))?;
-    let mut cmd = collections::VecDeque::from(args.cmd);
     let repo = Arc::new(repo);
-    let mut m = test::Manager::new(
-        args.num_threads,
-        repo.clone(),
-        [Test {
-            program: OsString::from(cmd.pop_front().unwrap()),
-            args: cmd.iter().map(OsString::from).collect(),
-            needs_resource_idxs: vec![],
-        }],
-        [],
-    )
-    .await
-    .context("setting up test manager")?;
+    let mut m = config::create_manager(repo.clone(), &args.config_path).await?;
     let mut revs_stream = repo.watch_refs(OsStr::new("HEAD^^^..HEAD"))?;
     let mut revs_stream = pin!(revs_stream);
     let mut results = m.results();

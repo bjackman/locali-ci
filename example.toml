@@ -1,0 +1,5 @@
+resources = ["my_resource"]
+num_worktrees = 8
+
+[[tests]]
+command = "hello world"
