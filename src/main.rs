@@ -2,7 +2,7 @@ use anyhow::Context;
 use clap::Parser as _;
 use futures::StreamExt;
 use std::path::PathBuf;
-use std::ffi::{OsStr};
+use std::ffi::OsString;
 use std::pin::pin;
 use std::str;
 use std::sync::Arc;
@@ -51,7 +51,8 @@ async fn main() -> anyhow::Result<()> {
         .context(format!("opening repo {}", args.repo_path))?;
     let repo = Arc::new(repo);
     let mut m = config::create_manager(repo.clone(), &args.config_path).await?;
-    let mut revs_stream = repo.watch_refs(OsStr::new("HEAD^^^..HEAD"))?;
+    let range_spec: OsString = format!("{}..HEAD", args.base).into();
+    let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
     let mut results = m.results();
     loop {

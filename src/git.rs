@@ -173,6 +173,8 @@ pub trait Worktree: Debug {
     // on the channel with the new resolved spec.
     fn watch_refs<'a>(
         &'a self,
+        // TODO: Write this in a way where the user doesn't have to deal with converting to OsStr.
+        // (Needs to also work with both owned and reference types I think).
         range_spec: &'a OsStr,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Vec<CommitHash>>> + 'a> {
         // Alternatives considered/attempted:
