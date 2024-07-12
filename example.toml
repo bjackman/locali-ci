@@ -2,4 +2,5 @@ resources = ["my_resource"]
 num_worktrees = 8
 
 [[tests]]
+name = "my_test"
 command = "hello world"

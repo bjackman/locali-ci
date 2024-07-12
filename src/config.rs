@@ -62,6 +62,7 @@ impl Command {
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Test {
+    name: String,
     command: Command,
     resources: Option<Vec<Resource>>,
 }
@@ -111,6 +112,7 @@ pub async fn create_manager(
                 needs_resource_idxs[idx] = resource.count();
             }
             Ok(test::Test {
+                name: t.name.clone(),
                 program: t.command.program(),
                 args: t.command.args(),
                 needs_resource_idxs,

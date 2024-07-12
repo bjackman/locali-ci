@@ -28,6 +28,7 @@ use crate::resource::Pools;
 
 // A test task that will need to be repeated for each commit.
 pub struct Test {
+    pub name: String,
     pub program: OsString,
     pub args: Vec<OsString>,
     // Indexes of pools in the Manager's token_pools from which this test needs
@@ -42,6 +43,13 @@ impl Test {
         cmd
     }
 }
+
+impl Display for Test {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "<test: {:?}>", self.name)
+    }
+}
+
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     job_cts: HashMap<CommitHash, CancellationToken>,
@@ -131,6 +139,7 @@ impl Manager {
                     // settled().
                     tx.send(Arc::new(CommitTestResult {
                         hash: job.rev,
+                        test_name: job.test.name.clone(),
                         result,
                     }))
                     .expect("couldn't send result");
@@ -238,6 +247,8 @@ impl TestJob {
     where
         W: Worktree,
     {
+        info!("Starting {} for rev {}...", self.test.name, self.rev);
+
         worktree.checkout(&self.rev).await?;
 
         let mut cmd = self.test.command();
@@ -287,12 +298,14 @@ impl TestJob {
 #[derive(Debug)]
 pub struct CommitTestResult {
     pub hash: CommitHash,
+    // TODO: Store the whole test?
+    pub test_name: String,
     pub result: TestResult,
 }
 
 impl Display for CommitTestResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Result: {} => ", self.hash)?;
+        write!(f, "Result for {:?}: {} => ", self.test_name, self.hash)?;
         match &self.result {
             Ok(outcome) => write!(f, "{}", outcome),
             Err(error) => write!(f, "error running test: {}", error),
