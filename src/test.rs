@@ -77,10 +77,12 @@ impl Manager {
         // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
         W: Worktree + Sync + Send + 'static,
     {
+        info!("Setting up {num_worktrees} worktrees...");
         let worktrees =
             try_join_all((0..num_worktrees).map(|_| TempWorktree::create_from::<W>(repo.borrow())))
                 .await
                 .context("setting up temporary worktrees")?;
+        info!("Worktree setup done.");
         let (result_tx, _) = broadcast::channel(32);
         Ok(Self {
             result_tx,

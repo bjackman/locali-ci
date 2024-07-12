@@ -1,0 +1,6 @@
+TODOS:
+
+ - Support running tests that don't need worktrees.
+ - Support re-using worktrees.
+ - (Nice to have: avoid creating worktrees if they aren't actually to be used).
+ - (Nice to have: let jobs that don't need worktrees start before worktrees are ready).
