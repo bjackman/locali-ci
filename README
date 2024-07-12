@@ -1,3 +1,7 @@
+BUGS:
+
+ - Worktrees not cleaned up on ctrl-C!
+
 TODOS:
 
  - Support configuring a shell, with the default based on the user's
