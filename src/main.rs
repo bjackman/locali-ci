@@ -1,8 +1,8 @@
 use anyhow::Context;
 use clap::Parser as _;
 use futures::StreamExt;
-use std::path::PathBuf;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::pin::pin;
 use std::str;
 use std::sync::Arc;
@@ -12,8 +12,8 @@ use crate::git::Worktree;
 
 mod config;
 mod git;
-mod resource;
 mod process;
+mod resource;
 mod test;
 
 #[derive(clap::Parser)]
@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let repo = Arc::new(repo);
     let mut m = config::create_manager(repo.clone(), &args.config_path).await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
+    m.set_revisions(repo.rev_list(&range_spec).await.context("couldn't rev-list")?);
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
     let mut results = m.results();
