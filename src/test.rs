@@ -500,6 +500,7 @@ mod tests {
 
         pub fn as_test(&self) -> Test {
             Test {
+                name: "my_test".to_owned(),
                 program: self.program(),
                 args: self.args(),
                 needs_resource_idxs: vec![],
@@ -709,7 +710,7 @@ mod tests {
     #[test_case(4, 1 ; "multiple worktrees, one test")]
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
     #[test_log::test(tokio::test)]
-    async fn should_handle_many(num_worktrees: u32, num_tests: usize) {
+    async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
         let fixture = Fixture::new().await;
         let mut hashes = Vec::new();
         let mut want_results = HashMap::new();
@@ -757,6 +758,7 @@ mod tests {
         let resource_token_counts = [2];
         // And a test that requires one of those tokens.
         let tests = [Test {
+            name: "my_test".to_owned(),
             program: script.program(),
             args: script.args(),
             needs_resource_idxs: vec![1],
