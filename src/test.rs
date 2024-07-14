@@ -407,7 +407,7 @@ mod tests {
     use test_case::test_case;
     use test_log;
     use tokio::{
-         select,
+        select,
         time::{sleep, sleep_until, Instant},
     };
 
