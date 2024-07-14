@@ -75,7 +75,7 @@ impl<W> ManagerBuilder<W> {
 
     // Worktree temp-directories will have their name (not path!) prefixed with this.
     pub fn worktree_prefix(mut self, prefix: &str) -> Self {
-        self.worktree_prefix = prefix.to_owned();
+        prefix.clone_into(&mut self.worktree_prefix);
         self
     }
 
