@@ -106,8 +106,10 @@ impl<W> ManagerBuilder<W> {
                 self.repo.borrow(),
                 // Not doing this async because I assume it's fast, there is no white-glove support,
                 // and the drop will have to be synchronous anyway.
-                TempDir::with_prefix(&self.worktree_prefix).context("creating temp dir for worktree")?,
-            ).await
+                TempDir::with_prefix(&self.worktree_prefix)
+                    .context("creating temp dir for worktree")?,
+            )
+            .await
         }))
         .await
         .context("setting up temporary worktrees")?;
