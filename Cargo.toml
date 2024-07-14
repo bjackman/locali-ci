@@ -27,3 +27,5 @@ toml = "0.8"
 [dev-dependencies]
 test-case = "3.3"
 test-log = "0.2"
+test_bin = "0.4"
+glob = "0.3"

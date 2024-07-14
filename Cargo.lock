@@ -440,6 +440,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ecd4077b5ae9fd2e9e169b102c6c330d0605168eb0e8bf79952b256dbefffd"
 
 [[package]]
+name = "glob"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -548,6 +554,7 @@ dependencies = [
  "env_logger",
  "futures",
  "futures-core",
+ "glob",
  "log",
  "nix",
  "notify",
@@ -556,6 +563,7 @@ dependencies = [
  "tempfile",
  "test-case",
  "test-log",
+ "test_bin",
  "tokio",
  "tokio-util",
  "toml",
@@ -989,6 +997,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "test_bin"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e7a7de15468c6e65dd7db81cf3822c1ec94c71b2a3c1a976ea8e4696c91115c"
 
 [[package]]
 name = "thread_local"
