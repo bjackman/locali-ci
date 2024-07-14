@@ -27,6 +27,9 @@ struct Args {
     /// requires creating a worktree, which is why we don't default to $nproc.
     #[arg(short, long, default_value_t = 8)]
     num_threads: u32,
+    /// Filename prefix for temporary worktrees.
+    #[arg(long, default_value_t = {"local-ci-worktree".to_string()})]
+    worktree_prefix: String,
     /// Command to test. Note this is _not_ run via the shell.
     #[arg(short, long, required = true)]
     config: PathBuf,
@@ -50,10 +53,16 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
-    let mut m = config::create_manager(repo.clone(), &args.config).await?;
+    let manager_builder =
+        config::manager_builder(repo.clone(), &args.config)?.worktree_prefix(&args.worktree_prefix);
+    let mut m = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
     let mut results = m.results();
-    m.set_revisions(repo.rev_list(&range_spec).await.context("couldn't rev-list")?);
+    m.set_revisions(
+        repo.rev_list(&range_spec)
+            .await
+            .context("couldn't rev-list")?,
+    );
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
     loop {

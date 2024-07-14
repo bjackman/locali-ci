@@ -9,7 +9,10 @@ use std::{
 use anyhow::{anyhow, bail, Context as _};
 use serde::Deserialize;
 
-use crate::{git, test};
+use crate::{
+    git::{self, PersistentWorktree},
+    test,
+};
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -75,10 +78,10 @@ pub struct Config {
     tests: Vec<Test>,
 }
 
-pub async fn create_manager(
+pub fn manager_builder(
     repo: Arc<git::PersistentWorktree>,
     config_path: &Path,
-) -> anyhow::Result<test::Manager> {
+) -> anyhow::Result<test::ManagerBuilder<PersistentWorktree>> {
     let config_content = fs::read_to_string(config_path).context("couldn't read config")?;
     let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
 
@@ -136,8 +139,8 @@ pub async fn create_manager(
         resource_token_counts[idx] = resource.count();
     }
 
-    test::Manager::builder(repo.clone(), tests, resource_token_counts)
-        .num_worktrees(config.num_worktrees)
-        .build()
-        .await
+    Ok(
+        test::Manager::builder(repo.clone(), tests, resource_token_counts)
+            .num_worktrees(config.num_worktrees),
+    )
 }

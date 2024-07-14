@@ -15,6 +15,7 @@ use log::info;
 use nix::sys::signal::kill;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
+use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
@@ -52,18 +53,26 @@ impl Display for Test {
 }
 
 #[derive(Default)]
-pub struct ManagerBuilder<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>> {
-    num_worktrees: usize,
+pub struct ManagerBuilder<W> {
     // This needs to be an Arc because we hold onto a reference to it for a
     // while, and create temporary worktrees from it in the background.
     repo: Arc<W>,
-    tests: I,
-    token_pool_sizes: J,
+    tests: Vec<Test>,
+    token_pool_sizes: Vec<usize>,
+
+    num_worktrees: usize,
+    worktree_prefix: String,
 }
 
-impl<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>> ManagerBuilder<W, I, J> {
+impl<W> ManagerBuilder<W> {
     pub fn num_worktrees(mut self, n: usize) -> Self {
         self.num_worktrees = n;
+        self
+    }
+
+    // Worktree temp-directories will have their name (not path!) prefixed with this.
+    pub fn worktree_prefix(mut self, prefix: &str) -> Self {
+        self.worktree_prefix = prefix.to_owned();
         self
     }
 
@@ -83,9 +92,14 @@ impl<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>> ManagerBuil
         W: Worktree + Sync + Send + 'static,
     {
         info!("Setting up {} worktrees...", self.num_worktrees);
-        let worktrees = try_join_all(
-            (0..self.num_worktrees).map(|_| TempWorktree::create_from::<W>(self.repo.borrow())),
-        )
+        let worktrees = try_join_all((0..self.num_worktrees).map(|_| async {
+            TempWorktree::new::<W>(
+                self.repo.borrow(),
+                // Not doing this async because I assume it's fast, there is no white-glove support,
+                // and the drop will have to be synchronous anyway.
+                TempDir::with_prefix(&self.worktree_prefix).context("creating temp dir for worktree")?,
+            ).await
+        }))
         .await
         .context("setting up temporary worktrees")?;
         info!("Worktree setup done.");
@@ -119,12 +133,14 @@ impl Manager {
         repo: Arc<W>,
         tests: I,
         token_pool_sizes: J,
-    ) -> ManagerBuilder<W, I, J> {
+    ) -> ManagerBuilder<W> {
         ManagerBuilder {
-            num_worktrees: 1,
             repo,
-            tests,
-            token_pool_sizes,
+            tests: tests.into_iter().collect(),
+            token_pool_sizes: token_pool_sizes.into_iter().collect(),
+
+            num_worktrees: 1,
+            worktree_prefix: "worktree-".to_owned(),
         }
     }
 
@@ -677,7 +693,7 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::builder( fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
             .num_worktrees(2)
             .build()
             .await
@@ -796,9 +812,9 @@ mod tests {
             args: script.args(),
             needs_resource_idxs: vec![1],
         }];
-        let mut m = Manager::builder( fixture.repo.clone(), tests, resource_token_counts)
-        .num_worktrees(4)
-        .build()
+        let mut m = Manager::builder(fixture.repo.clone(), tests, resource_token_counts)
+            .num_worktrees(4)
+            .build()
             .await
             .expect("couldn't set up manager");
         m.set_revisions(hashes.clone());

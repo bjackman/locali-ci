@@ -254,14 +254,11 @@ pub struct TempWorktree {
 }
 
 impl TempWorktree {
-    pub async fn create_from<W>(origin: &W) -> anyhow::Result<TempWorktree>
+    // Create a worktree based on the origin repo, directly in the temp dir (which should be empty)
+    pub async fn new<W>(origin: &W, temp_dir: TempDir) -> anyhow::Result<TempWorktree>
     where
         W: Worktree,
     {
-        // Not doing this async because I assume it's fast, there is no white-glove support, and the
-        // drop will have to be synchronous anyway.
-        let temp_dir = TempDir::with_prefix("worktree-").context("creating temp dir")?;
-
         origin
             .git(["worktree", "add"])
             .arg(temp_dir.path())
