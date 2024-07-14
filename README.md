@@ -1,6 +1,7 @@
 BUGS:
 
  - Worktrees not cleaned up on ctrl-C!
+ - Panic when I run `RUST_LOG=debug cargo run -- --config example.toml HEAD^^` in this repo.
 
 TODOS:
 
