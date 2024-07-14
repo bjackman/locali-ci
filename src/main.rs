@@ -4,8 +4,8 @@ use futures::StreamExt;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::str;
 use std::sync::Arc;
+use std::{env, str};
 use tokio::select;
 
 use crate::git::Worktree;
@@ -30,6 +30,9 @@ struct Args {
     /// Filename prefix for temporary worktrees.
     #[arg(long, default_value_t = {"local-ci-worktree".to_string()})]
     worktree_prefix: String,
+    /// Directory (must exist) to create temporary worktrees in.
+    #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()})]
+    worktree_dir: String,
     /// Command to test. Note this is _not_ run via the shell.
     #[arg(short, long, required = true)]
     config: PathBuf,
@@ -53,8 +56,9 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
-    let manager_builder =
-        config::manager_builder(repo.clone(), &args.config)?.worktree_prefix(&args.worktree_prefix);
+    let manager_builder = config::manager_builder(repo.clone(), &args.config)?
+        .worktree_prefix(&args.worktree_prefix)
+        .worktree_dir(&args.worktree_dir);
     let mut m = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
     let mut results = m.results();

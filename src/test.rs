@@ -3,7 +3,9 @@ use core::fmt::Display;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -62,6 +64,7 @@ pub struct ManagerBuilder<W> {
 
     num_worktrees: usize,
     worktree_prefix: String,
+    worktree_dir: PathBuf,
 }
 
 impl<W> ManagerBuilder<W> {
@@ -73,6 +76,12 @@ impl<W> ManagerBuilder<W> {
     // Worktree temp-directories will have their name (not path!) prefixed with this.
     pub fn worktree_prefix(mut self, prefix: &str) -> Self {
         self.worktree_prefix = prefix.to_owned();
+        self
+    }
+
+    // Directory to create worktrees in
+    pub fn worktree_dir<P: Into<PathBuf>>(mut self, dir: P) -> Self {
+        self.worktree_dir = dir.into();
         self
     }
 
@@ -141,6 +150,7 @@ impl Manager {
 
             num_worktrees: 1,
             worktree_prefix: "worktree-".to_owned(),
+            worktree_dir: env::temp_dir(),
         }
     }
 
