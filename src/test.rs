@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use futures::future::{self, try_join_all, Either};
+use log::debug;
 use log::error;
 use log::info;
 use nix::sys::signal::kill;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
-use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
@@ -100,16 +100,19 @@ impl<W> ManagerBuilder<W> {
         // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
         W: Worktree + Sync + Send + 'static,
     {
-        info!("Setting up {} worktrees...", self.num_worktrees);
+        info!(
+            "Setting up {} worktrees in {:?}...",
+            self.num_worktrees, self.worktree_dir
+        );
         let worktrees = try_join_all((0..self.num_worktrees).map(|_| async {
-            TempWorktree::new::<W>(
-                self.repo.borrow(),
-                // Not doing this async because I assume it's fast, there is no white-glove support,
-                // and the drop will have to be synchronous anyway.
-                TempDir::with_prefix(&self.worktree_prefix)
-                    .context("creating temp dir for worktree")?,
-            )
-            .await
+            // Not doing this async because I assume it's fast, there is no white-glove support,
+            // and the drop will have to be synchronous anyway.
+            let t = tempfile::Builder::new()
+                .prefix(&self.worktree_prefix)
+                .tempdir_in(&self.worktree_dir)
+                .context("creating temp dir for worktree")?;
+            debug!("Creating worktree: {:?}", t.path());
+            TempWorktree::new::<W>(self.repo.borrow(), t).await
         }))
         .await
         .context("setting up temporary worktrees")?;
