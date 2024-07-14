@@ -51,6 +51,55 @@ impl Display for Test {
     }
 }
 
+#[derive(Default)]
+pub struct ManagerBuilder<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>> {
+    num_worktrees: usize,
+    // This needs to be an Arc because we hold onto a reference to it for a
+    // while, and create temporary worktrees from it in the background.
+    repo: Arc<W>,
+    tests: I,
+    token_pool_sizes: J,
+}
+
+impl<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>> ManagerBuilder<W, I, J> {
+    pub fn num_worktrees(mut self, n: usize) -> Self {
+        self.num_worktrees = n;
+        self
+    }
+
+    // Starts the workers. You must call close() before dropping it.
+    //
+    // TODO: This doesn't work if there are no commits in the repository. Not sure I care about
+    // this, but the solution would be to create the worktrees ondemand, when we have a revision we
+    // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
+    // just do that for its own sake and leave the empty-repo problem as a nice freebie.
+    pub async fn build(self) -> anyhow::Result<Manager>
+    where
+        // We need to specify 'static here. Just because we have an Arc over the
+        // repo that doesn't mean it automatically satisfies 'static:
+        // https://users.rust-lang.org/t/why-is-t-static-constrained-when-using-arc-t-and-thread-spawn/26262/2
+        // It would be much more convenient to just specify some or all these
+        // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
+        W: Worktree + Sync + Send + 'static,
+    {
+        info!("Setting up {} worktrees...", self.num_worktrees);
+        let worktrees = try_join_all(
+            (0..self.num_worktrees).map(|_| TempWorktree::create_from::<W>(self.repo.borrow())),
+        )
+        .await
+        .context("setting up temporary worktrees")?;
+        info!("Worktree setup done.");
+        let (result_tx, _) = broadcast::channel(32);
+        Ok(Manager {
+            result_tx,
+            job_cts: HashMap::new(),
+            job_counter: JobCounter::new(),
+            tests: self.tests.into_iter().map(Arc::new).collect(),
+            resource_pools: Arc::new(Pools::new(self.token_pool_sizes, worktrees)),
+        })
+    }
+}
+
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager {
     job_cts: HashMap<CommitHash, CancellationToken>,
@@ -64,42 +113,19 @@ pub struct Manager {
 }
 
 impl Manager {
-    // Starts the workers. You must call close() before dropping it.
-    //
-    // TODO: This doesn't work if there are no commits in the repository. Not sure I care about
-    // this, but the solution would be to create the worktrees ondemand, when we have a revision we
-    // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
-    // just do that for its own sake and leave the empty-repo problem as a nice freebie.
-    pub async fn new<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>>(
-        num_worktrees: usize,
+    pub fn builder<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>>(
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
         tests: I,
         token_pool_sizes: J,
-    ) -> anyhow::Result<Self>
-    where
-        // We need to specify 'static here. Just because we have an Arc over the
-        // repo that doesn't mean it automatically satisfies 'static:
-        // https://users.rust-lang.org/t/why-is-t-static-constrained-when-using-arc-t-and-thread-spawn/26262/2
-        // It would be much more convenient to just specify some or all these
-        // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
-        W: Worktree + Sync + Send + 'static,
-    {
-        info!("Setting up {num_worktrees} worktrees...");
-        let worktrees =
-            try_join_all((0..num_worktrees).map(|_| TempWorktree::create_from::<W>(repo.borrow())))
-                .await
-                .context("setting up temporary worktrees")?;
-        info!("Worktree setup done.");
-        let (result_tx, _) = broadcast::channel(32);
-        Ok(Self {
-            result_tx,
-            job_cts: HashMap::new(),
-            job_counter: JobCounter::new(),
-            tests: tests.into_iter().map(Arc::new).collect(),
-            resource_pools: Arc::new(Pools::new(token_pool_sizes, worktrees)),
-        })
+    ) -> ManagerBuilder<W, I, J> {
+        ManagerBuilder {
+            num_worktrees: 1,
+            repo,
+            tests,
+            token_pool_sizes,
+        }
     }
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
@@ -624,7 +650,9 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::new(2, fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
+            .num_worktrees(2)
+            .build()
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
@@ -649,7 +677,9 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::new(1, fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder( fixture.repo.clone(), [script.as_test()], [])
+            .num_worktrees(2)
+            .build()
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
@@ -696,7 +726,8 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::new(1, fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
+            .build()
             .await
             .expect("couldn't set up manager");
         m.set_revisions([hash]);
@@ -730,7 +761,9 @@ mod tests {
             }
         }
         let script = TestScript::new();
-        let mut m = Manager::new(num_worktrees, fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
+            .num_worktrees(num_worktrees)
+            .build()
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
@@ -763,7 +796,9 @@ mod tests {
             args: script.args(),
             needs_resource_idxs: vec![1],
         }];
-        let mut m = Manager::new(4, fixture.repo.clone(), tests, resource_token_counts)
+        let mut m = Manager::builder( fixture.repo.clone(), tests, resource_token_counts)
+        .num_worktrees(4)
+        .build()
             .await
             .expect("couldn't set up manager");
         m.set_revisions(hashes.clone());

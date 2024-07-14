@@ -136,5 +136,8 @@ pub async fn create_manager(
         resource_token_counts[idx] = resource.count();
     }
 
-    test::Manager::new(config.num_worktrees, repo.clone(), tests, resource_token_counts).await
+    test::Manager::builder(repo.clone(), tests, resource_token_counts)
+        .num_worktrees(config.num_worktrees)
+        .build()
+        .await
 }
