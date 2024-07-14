@@ -393,41 +393,25 @@ impl Display for TestOutcome {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::{Path, PathBuf},
-        thread::panicking,
-        time::Duration,
-    };
+    use std::{path::PathBuf, thread::panicking, time::Duration};
 
     use anyhow::bail;
     use future::select_all;
-    use futures::Future;
     use log::error;
     use tempfile::TempDir;
     use test_case::test_case;
     use test_log;
     use tokio::{
-        fs, select,
-        time::{interval, sleep, sleep_until, Instant},
+         select,
+        time::{sleep, sleep_until, Instant},
     };
 
-    use crate::git::{CommitHash, Worktree};
+    use crate::{
+        git::{CommitHash, Worktree},
+        test_utils::{path_exists, timeout_1s},
+    };
 
     use super::*;
-
-    // Blocks until file exists, the dumb way, then reads it as a string.
-    async fn await_exists_and_read<P>(path: P) -> String
-    where
-        P: AsRef<Path>,
-    {
-        let mut interval = interval(Duration::from_millis(10));
-        while !path.as_ref().try_exists().unwrap() {
-            interval.tick().await;
-        }
-        fs::read_to_string(path)
-            .await
-            .expect("couldn't read hash file")
-    }
 
     // TODO: this sucks, find a way to dedupe more.
     struct Fixture {
@@ -543,7 +527,7 @@ mod tests {
 
         // Blocks until the script is started for the given commit hash.
         pub async fn started(&self, hash: &CommitHash) -> StartedTestScript {
-            await_exists_and_read(self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)).await;
+            path_exists(self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)).await;
             StartedTestScript {
                 script: &self,
                 hash: hash.to_owned(),
@@ -590,22 +574,12 @@ mod tests {
     impl<'a> StartedTestScript<'a> {
         // Blocks until the script has received a SIGINT.
         pub async fn siginted(&self) {
-            await_exists_and_read(
+            path_exists(
                 self.script
                     .signalling_path(TestScript::SIGINTED_FILENAME_PREFIX, &self.hash),
             )
             .await;
         }
-    }
-
-    async fn timeout_1s<F, T>(fut: F) -> anyhow::Result<T>
-    where
-        F: Future<Output = T>,
-    {
-        select!(
-            _ = sleep(Duration::from_secs(1)) => bail!("timeout after 1s"),
-            output = fut => Ok(output)
-        )
     }
 
     // anyhow::Error doesn't implement PartialEq. Here's an awkward comparator for

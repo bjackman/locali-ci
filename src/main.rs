@@ -16,6 +16,9 @@ mod process;
 mod resource;
 mod test;
 
+#[cfg(test)]
+mod test_utils;
+
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
