@@ -52,10 +52,10 @@ async fn main() -> anyhow::Result<()> {
     let repo = Arc::new(repo);
     let mut m = config::create_manager(repo.clone(), &args.config).await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
+    let mut results = m.results();
     m.set_revisions(repo.rev_list(&range_spec).await.context("couldn't rev-list")?);
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
-    let mut results = m.results();
     loop {
         select!(
             // TODO: It's dumb that we have two different types of communication here (one exposes

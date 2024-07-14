@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use futures::future::{self, try_join_all, Either};
+use log::error;
 use log::info;
 use nix::sys::signal::kill;
 use nix::sys::signal::Signal;
@@ -103,6 +104,8 @@ impl Manager {
 
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
+    // It doesn't make sense to call this function if you don't have a receiver
+    // from already having called [[results]].
     pub fn set_revisions<I: IntoIterator<Item = CommitHash>>(&mut self, revs: I) {
         let mut to_start = HashSet::<CommitHash>::from_iter(revs);
         let mut cancel_revs = Vec::new();
@@ -137,12 +140,14 @@ impl Manager {
                     let result = job.run(worktree).await;
                     // Note: must not drop test until the send is complete, or we would break
                     // settled().
-                    tx.send(Arc::new(CommitTestResult {
+                    let _ = tx.send(Arc::new(CommitTestResult {
                         hash: job.rev,
                         test_name: job.test.name.clone(),
                         result,
                     }))
-                    .expect("couldn't send result");
+                    .map_err(|e|
+                        error!("Dropping a result. Seems nobody is listening to Manager::results(): {}", e)
+                    );
                 });
             }
         }
