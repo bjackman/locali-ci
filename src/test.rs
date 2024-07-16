@@ -219,7 +219,6 @@ impl Manager {
     }
 
     // Completes once there are no pending jobs or results.
-    #[cfg(test)]
     pub async fn settled(&self) {
         self.job_counter.zero().await;
     }
@@ -256,7 +255,6 @@ impl JobCounter {
         JobToken { w: self.w.clone() }
     }
 
-    #[cfg(test)]
     // Block until the counter is zero. If it's already zero, return immediately. This might miss
     // transient zeroness but is guaranteed to return eventually if the counter stays zero for some
     // finite amount of time.

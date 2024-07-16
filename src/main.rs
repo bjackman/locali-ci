@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;
 use std::{env, str};
-use tokio::select;
+use tokio::{select, signal};
 
 use crate::git::Worktree;
 
@@ -87,7 +87,10 @@ async fn main() -> anyhow::Result<()> {
                 let result = result.expect("result stream terminated");
                 // TODO: What the fucking fuck???? I should have used Perl.
                 println!("{}", result);
-            }
+            },
+            _ =  signal::ctrl_c() => break,
         )
     }
+    m.settled().await;
+    Ok(())
 }
