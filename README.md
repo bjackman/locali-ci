@@ -1,7 +1,3 @@
-BUGS:
-
- - Worktrees not cleaned up on ctrl-C!
-
 TODOS:
 
  - Gather overall status and present it readably somehow to the user.
