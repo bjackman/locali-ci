@@ -1,6 +1,8 @@
 TODOS:
 
  - Gather overall status and present it readably somehow to the user.
+   - Present status with git DAG view.
+ - Store output and artifacts, present them to the user in a convenient way.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
  - Provide a way to quickly check that tests in your configuration actually work.
