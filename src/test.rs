@@ -198,8 +198,10 @@ impl Manager {
                     // Note: must not drop test until the send is complete, or we would break
                     // settled().
                     let _ = tx.send(Arc::new(TestResult {
+                        test_case: TestCase {
                         hash: job.rev,
                         test_name: job.test.name.to_owned(),
+                        },
                         result
                     }))
                     .map_err(|e|
@@ -355,21 +357,22 @@ impl TestJob {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct TestCase {
+    pub hash: CommitHash,
+    test_name: String,
+}
+
 #[derive(Debug)]
 pub struct TestResult {
-    pub hash: CommitHash,
+    pub test_case: TestCase,
     // TODO: store more info here.
-    test_name: String,
     result: anyhow::Result<TestOutcome>,
 }
 
 impl Display for TestResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Result for {:?}: {} => ",
-            self.test_name, self.hash
-        )?;
+        write!(f, "Result for {:?} => ", self.test_case)?;
         match &self.result {
             Ok(outcome) => write!(f, "{}", outcome),
             Err(error) => write!(f, "error running test: {}", error),
@@ -591,7 +594,7 @@ mod tests {
     // CommitTestResults, hopefully good enough for testing...?
     impl PartialEq for TestResult {
         fn eq(&self, other: &Self) -> bool {
-            return self.hash == other.hash
+            return self.test_case == other.test_case
                 && match (&self.result, &other.result) {
                     (Ok(my_outcome), Ok(other_outcome)) => my_outcome == other_outcome,
                     (Err(my_err), Err(other_err)) => my_err.to_string() == other_err.to_string(),
@@ -612,25 +615,26 @@ mod tests {
                 _ = sleep_until(timeout) => bail!("timeout after 5s, {} results remaining", want.len()),
                 output = results.recv() => output.context("test result stream terminated")?
             );
-            let want_outcome = want
-                .get(&ctr.hash)
-                .context(format!("got result for unexpected hash {}", ctr.hash))?;
+            let want_outcome = want.get(&ctr.test_case.hash).context(format!(
+                "got result for unexpected hash {}",
+                ctr.test_case.hash
+            ))?;
             let got_outcome = ctr
                 .result
                 // Some weirdness: we get Arcs with Results in them, we cannot just ? them because
                 // anyhow::Error isn't Copy, it also doesn't implement Clone or anything. So, we get
                 // a reference to the error and create a new error from its string representation.
                 .as_ref()
-                .map_err(|e| anyhow!("error testing {}: {:?}", ctr.hash, e))?;
+                .map_err(|e| anyhow!("error testing {}: {:?}", ctr.test_case.hash, e))?;
             if *got_outcome != *want_outcome {
                 bail!(
                     "unexpected test result for {}, got {} want {}",
-                    ctr.hash,
+                    ctr.test_case.hash,
                     got_outcome,
                     want_outcome
                 );
             }
-            want.remove(&ctr.hash);
+            want.remove(&ctr.test_case.hash);
         }
         Ok(())
     }
