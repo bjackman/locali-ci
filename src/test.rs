@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::process::Stdio;
@@ -29,6 +30,22 @@ use crate::git::TempWorktree;
 use crate::git::{CommitHash, Worktree};
 use crate::process::OutputExt;
 use crate::resource::Pools;
+
+pub trait ResultExt {
+    // Log an error if it occurs, prefixed with s, otherwise return nothing.
+    fn or_log_error(&self, s: &str);
+}
+
+impl<T, E> ResultExt for Result<T, E>
+where
+    E: Debug,
+{
+    fn or_log_error(&self, s: &str) {
+        if let Err(e) = self {
+            error!("{} - {:?}", s, e);
+        }
+    }
+}
 
 // A test task that will need to be repeated for each commit.
 pub struct Test {
@@ -117,7 +134,9 @@ impl<W> ManagerBuilder<W> {
         .await
         .context("setting up temporary worktrees")?;
         info!("Worktree setup done.");
-        let (result_tx, _) = broadcast::channel(32);
+        // TODO: If this capacity gets exhausted, data gets lost and we get an error which this code
+        // probably doesn't handle very gracefully. We should instead just block the sender.
+        let (result_tx, _) = broadcast::channel(4096);
         Ok(Manager {
             result_tx,
             job_cts: HashMap::new(),
@@ -132,7 +151,7 @@ impl<W> ManagerBuilder<W> {
 pub struct Manager {
     job_cts: HashMap<CommitHash, CancellationToken>,
     job_counter: JobCounter,
-    result_tx: broadcast::Sender<Arc<TestResult>>,
+    result_tx: broadcast::Sender<Arc<Notification>>,
     tests: Vec<Arc<Test>>,
     // Pools contains sets of intangible arbitrary "resources" that can be used to throttle test
     // jobs, and also tracks access to reused worktrees. The indices of the token-type resources
@@ -189,20 +208,37 @@ impl Manager {
                     rev: rev.to_owned(),
                     _token: self.job_counter.get(),
                 };
-                let pools = self.resource_pools.clone();
+                let test_case = TestCase {
+                    hash: rev.to_owned(),
+                    test_name: test.name.to_owned(),
+                };
+
                 let tx = self.result_tx.clone();
+                tx.send(Arc::new(Notification {
+                    test_case: test_case.clone(),
+                    status: TestStatus::Enqueued,
+                }))
+                .or_log_error("Dropping a notificatoin");
+
+                let pools = self.resource_pools.clone();
                 tokio::spawn(async move {
                     let resources = pools.get(job.test.needs_resource_idxs.clone()).await;
+                    tx.send(Arc::new(Notification {
+                        test_case: test_case.clone(),
+                        status: TestStatus::Started,
+                    }))
+                    .or_log_error("Dropping a notificatoin");
                     let worktree = resources.obj();
                     let result = job.run(worktree).await;
                     // Note: must not drop test until the send is complete, or we would break
                     // settled().
-                    let _ = tx.send(Arc::new(TestResult {
-                        test_case: TestCase {
-                        hash: job.rev,
-                        test_name: job.test.name.to_owned(),
-                        },
-                        result
+                    let _ = tx.send(Arc::new(Notification {
+                        test_case,
+                        status: match result {
+                            Err(err) => TestStatus::Error(err.to_string()),
+                            Ok(None) => TestStatus::Canceled,
+                            Ok(Some(exit_code))  => TestStatus::Completed(exit_code),
+                        }
                     }))
                     .map_err(|e|
                         error!("Dropping a result. Seems nobody is listening to Manager::results(): {}", e)
@@ -216,7 +252,7 @@ impl Manager {
     // to receive.
     //
     // I think the "proper" solution for this is to return a Stream. But I don't understand it.
-    pub fn results(&self) -> broadcast::Receiver<Arc<TestResult>> {
+    pub fn results(&self) -> broadcast::Receiver<Arc<Notification>> {
         self.result_tx.subscribe()
     }
 
@@ -305,7 +341,8 @@ struct TestJob {
 }
 
 impl TestJob {
-    async fn run<W>(&self, worktree: &W) -> anyhow::Result<TestOutcome>
+    // Returns Ok(None) when canceled.
+    async fn run<W>(&self, worktree: &W) -> anyhow::Result<Option<ExitCode>>
     where
         W: Worktree,
     {
@@ -335,13 +372,15 @@ impl TestJob {
         let child_fut = pin!(child.wait_with_output());
         let cancel_fut = pin!(self.ct.cancelled());
         match future::select(child_fut, cancel_fut).await {
-            Either::Left((result, _)) =>
+            Either::Left((wait_result, _)) =>
             // Test completed, figure out the result. I think maybe a true Rustacean would
             // write this block as a single chain of methods? But it seems ridiculous to me.
             {
-                Ok(TestOutcome::Completed {
-                    exit_code: result.map_err(anyhow::Error::from)?.code_not_killed()?,
-                })
+                Ok(Some(
+                    wait_result
+                        .map_err(anyhow::Error::from)?
+                        .code_not_killed()?,
+                ))
             }
             Either::Right((_, child_fut)) => {
                 // Canceled. Shut down the process.
@@ -351,57 +390,67 @@ impl TestJob {
                 // worktree.
                 let _ = child_fut.await;
 
-                Ok(TestOutcome::Canceled)
+                Ok(None)
             }
         }
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TestCase {
     pub hash: CommitHash,
     test_name: String,
 }
+pub type ExitCode = i32;
 
-#[derive(Debug)]
-pub struct TestResult {
-    pub test_case: TestCase,
-    // TODO: store more info here.
-    result: anyhow::Result<TestOutcome>,
-}
-
-impl Display for TestResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Result for {:?} => ", self.test_case)?;
-        match &self.result {
-            Ok(outcome) => write!(f, "{}", outcome),
-            Err(error) => write!(f, "error running test: {}", error),
-        }
-    }
-}
-
-// There are three results for tests: error (something went wrong when we were trying to run it),
-// cancellation, and completion. Ideally we woud just have an enum with three variants, but it's
-// really handy for the "error" case to be represented by std::result::Result so that we can use the
-// quesiton mark operator. Thus, we have a two-layered result type... Worth it? I dunno...
-#[derive(Debug, PartialEq, Eq)]
-pub enum TestOutcome {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestStatus {
+    Enqueued,
+    Started,
     Canceled,
-    Completed { exit_code: i32 },
+    // anyhow::Error doesn't implement Clone. We don't really need the overall
+    // error handling fanciness since this is just part of the normal flow of
+    // the program, so we just define this as a normal case among this enum.
+    Error(String), // This includes the test getting terminated by a signal.
+    Completed(ExitCode),
 }
 
-impl Display for TestOutcome {
+// impl TestStatus {
+//     pub fn is_final(&self) -> bool {
+//         match self {
+//             Self::Canceled => true,
+//             Self::Completed(_) => true,
+//             _ => false,
+//         }
+//     }
+
+//     // This is the first status we shoudl expect to observe for any TestCase.
+//     pub fn initial() -> Self {
+//         Self::Enqueued
+//     }
+// }
+
+impl Display for TestStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Enqueued => write!(f, "Enqueued"),
+            Self::Started => write!(f, "Started"),
             Self::Canceled => write!(f, "Cancelled"),
-            Self::Completed { exit_code } => write!(f, "Completed - exit code {}", exit_code),
+            Self::Error(msg) => write!(f, "Failed testing - {:?}", msg),
+            Self::Completed(exit_code) => write!(f, "Completed - exit code {}", exit_code),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct Notification {
+    pub test_case: TestCase,
+    pub status: TestStatus,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, thread::panicking, time::Duration};
+    use std::{collections::VecDeque, path::PathBuf, thread::panicking, time::Duration};
 
     use anyhow::bail;
     use future::select_all;
@@ -542,9 +591,13 @@ mod tests {
             }
         }
 
+        pub fn test_name(&self) -> &str {
+            "my_test"
+        }
+
         pub fn as_test(&self) -> Test {
             Test {
-                name: "my_test".to_owned(),
+                name: self.test_name().to_owned(),
                 program: self.program(),
                 args: self.args(),
                 needs_resource_idxs: vec![],
@@ -590,57 +643,58 @@ mod tests {
         }
     }
 
-    // anyhow::Error doesn't implement PartialEq. Here's an awkward comparator for
-    // CommitTestResults, hopefully good enough for testing...?
-    impl PartialEq for TestResult {
-        fn eq(&self, other: &Self) -> bool {
-            return self.test_case == other.test_case
-                && match (&self.result, &other.result) {
-                    (Ok(my_outcome), Ok(other_outcome)) => my_outcome == other_outcome,
-                    (Err(my_err), Err(other_err)) => my_err.to_string() == other_err.to_string(),
-                    _ => false,
-                };
+    fn dump_want_statuses(want: &HashMap<TestCase, VecDeque<TestStatus>>) -> String {
+        let mut ret = String::from("");
+        for (test_case, statuses) in want {
+            ret.push_str(&format!("{:?}\n", test_case));
+            for status in statuses {
+                ret.push_str(&format!("\t{:?}\n", status));
+            }
         }
+        ret
     }
-
-    impl Eq for TestResult {}
-
-    async fn expect_results_5s(
-        results: &mut broadcast::Receiver<Arc<TestResult>>,
-        mut want: HashMap<CommitHash, TestOutcome>,
+    // Expect the series of notifications provided for each test case.
+    // case. Also assert that the necessary precursor notifications arrive.
+    // Panics if any of the input series are empty.
+    async fn expect_notifs_5s(
+        results: &mut broadcast::Receiver<Arc<Notification>>,
+        mut want: HashMap<TestCase, VecDeque<TestStatus>>,
     ) -> anyhow::Result<()> {
         let timeout = Instant::now() + Duration::from_secs(5);
         while want.len() != 0 {
-            let ctr = select!(
-                _ = sleep_until(timeout) => bail!("timeout after 5s, {} results remaining", want.len()),
-                output = results.recv() => output.context("test result stream terminated")?
+            let notif = select!(
+                _ = sleep_until(timeout) => {
+                    bail!("timeout after 5s, remaining results:\n{}",
+                        dump_want_statuses(&want));
+                },
+                output = results.recv() => {
+                    output.context(format!(
+                        "test result stream terminated, remaining results:\n{}",
+                        dump_want_statuses(&want)))?
+                }
             );
-            let want_outcome = want.get(&ctr.test_case.hash).context(format!(
-                "got result for unexpected hash {}",
-                ctr.test_case.hash
+            let want_statuses = want.get_mut(&notif.test_case).context(format!(
+                "got result for unexpected case {:?}",
+                notif.test_case
             ))?;
-            let got_outcome = ctr
-                .result
-                // Some weirdness: we get Arcs with Results in them, we cannot just ? them because
-                // anyhow::Error isn't Copy, it also doesn't implement Clone or anything. So, we get
-                // a reference to the error and create a new error from its string representation.
-                .as_ref()
-                .map_err(|e| anyhow!("error testing {}: {:?}", ctr.test_case.hash, e))?;
-            if *got_outcome != *want_outcome {
+            let want_status = want_statuses.pop_front().expect("empty status series");
+            if want_statuses.is_empty() {
+                want.remove(&notif.test_case);
+            }
+            if notif.status != want_status {
                 bail!(
-                    "unexpected test result for {}, got {} want {}",
-                    ctr.test_case.hash,
-                    got_outcome,
-                    want_outcome
+                    "unexpected test notification for {:?}, got {:?} want {:?}",
+                    notif.test_case,
+                    notif.status,
+                    want_status
                 );
             }
-            want.remove(&ctr.test_case.hash);
         }
         Ok(())
     }
 
     async fn expect_no_more_results(
-        results: &mut broadcast::Receiver<Arc<TestResult>>,
+        results: &mut broadcast::Receiver<Arc<Notification>>,
         m: &Manager,
     ) -> anyhow::Result<()> {
         select!(
@@ -667,9 +721,20 @@ mod tests {
         let mut results = m.results();
         m.set_revisions(vec![hash.clone()]);
         // We should get a singular result because we only fed in one revision.
-        expect_results_5s(
+        expect_notifs_5s(
             &mut results,
-            HashMap::from([(hash, TestOutcome::Completed { exit_code: 0 })]),
+            HashMap::from([(
+                TestCase {
+                    hash,
+                    test_name: script.test_name().to_owned(),
+                },
+                vec![
+                    TestStatus::Enqueued,
+                    TestStatus::Started,
+                    TestStatus::Completed(0),
+                ]
+                .into(),
+            )]),
         )
         .await
         .expect("bad test result");
@@ -709,13 +774,36 @@ mod tests {
         timeout_1s(started_hash1.siginted())
             .await
             .expect("hash1 test did not get siginted");
-        expect_results_5s(
+        expect_notifs_5s(
             &mut results,
+            // awu weh, weh mah
             HashMap::from([
-                (hash1, TestOutcome::Canceled),
+                (
+                    TestCase {
+                        hash: hash1,
+                        test_name: script.test_name().to_owned(),
+                    },
+                    vec![
+                        TestStatus::Enqueued,
+                        TestStatus::Started,
+                        TestStatus::Canceled,
+                    ]
+                    .into(),
+                ),
                 // This isn't what we're testing here but we need to assert that it comes in so we can
                 // check below that nothing else comes in.
-                (hash2, TestOutcome::Completed { exit_code: 0 }),
+                (
+                    TestCase {
+                        hash: hash2,
+                        test_name: script.test_name().to_owned(),
+                    },
+                    vec![
+                        TestStatus::Enqueued,
+                        TestStatus::Started,
+                        TestStatus::Completed(0),
+                    ]
+                    .into(),
+                ),
             ]),
         )
         .await
@@ -752,6 +840,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
         let fixture = Fixture::new().await;
+        let script = TestScript::new();
         let mut hashes = Vec::new();
         let mut want_results = HashMap::new();
         let mut i = 0;
@@ -764,12 +853,22 @@ mod tests {
                     .commit(TestScript::exit_code_tag(i as u32))
                     .await
                     .expect("couldn't create test commit");
-                want_results.insert(hash.clone(), TestOutcome::Completed { exit_code: i });
+                want_results.insert(
+                    TestCase {
+                        hash: hash.to_owned(),
+                        test_name: script.test_name().to_owned(),
+                    },
+                    vec![
+                        TestStatus::Enqueued,
+                        TestStatus::Started,
+                        TestStatus::Completed(i),
+                    ]
+                    .into(),
+                );
                 hashes.push(hash);
                 i += 1;
             }
         }
-        let script = TestScript::new();
         let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
             .num_worktrees(num_worktrees)
             .build()
@@ -777,9 +876,9 @@ mod tests {
             .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(hashes.clone());
-        expect_results_5s(&mut results, want_results)
+        expect_notifs_5s(&mut results, want_results)
             .await
-            .expect("bad reuslts");
+            .expect("bad results");
     }
 
     #[test_log::test(tokio::test)]
