@@ -13,3 +13,9 @@ TODOS:
  - Support multiple repos?
  - (Nice to have: avoid creating worktrees if they aren't actually to be used).
  - (Nice to have: let jobs that don't need worktrees start before worktrees are ready).
+
+My janky test command:
+
+```
+RUST_LOG_STYLE=always RUST_LOG=debug cargo watch -- bash -c "cargo test --color=always -- |& less -R -F -c"
+```
