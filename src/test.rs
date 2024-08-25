@@ -462,8 +462,11 @@ mod tests {
     };
 
     use crate::{
-        git::{CommitHash, test_utils::{TempRepo, WorktreeExt}},
-        test_utils::{path_exists, timeout_1s},
+        git::{
+            test_utils::{TempRepo, WorktreeExt},
+            CommitHash,
+        },
+        test_utils::{path_exists, some_time, timeout_1s},
     };
 
     use super::*;
@@ -687,7 +690,7 @@ mod tests {
     async fn should_run_single() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         let hash = repo
-            .commit("hello,")
+            .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
@@ -724,7 +727,7 @@ mod tests {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         // First commit's test will block forever.
         let hash1 = repo
-            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
@@ -740,7 +743,7 @@ mod tests {
             .expect("script did not run for hash1");
         // Second commit's test will terminate quickly.
         let hash2 = repo
-            .commit("hello,")
+            .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
         m.set_revisions(vec![hash2.clone()]);
@@ -794,7 +797,7 @@ mod tests {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         // First commit's test will block forever.
         let hash = repo
-            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
@@ -824,7 +827,7 @@ mod tests {
                 let hash = repo
                     // We'll give each test a unique exit code so we can check they really got
                     // tested individually.
-                    .commit(TestScript::exit_code_tag(i as u32))
+                    .commit(TestScript::exit_code_tag(i as u32), some_time())
                     .await
                     .expect("couldn't create test commit");
                 want_results.insert(
@@ -861,8 +864,7 @@ mod tests {
         let mut hashes = Vec::new();
         for _ in 0..10 {
             hashes.push(
-                repo
-                    .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
+                repo.commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
                     .await
                     .expect("couldn't create test commit"),
             );

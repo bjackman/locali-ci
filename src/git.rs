@@ -254,6 +254,9 @@ impl Drop for TempWorktree {
 
 #[cfg(test)]
 pub mod test_utils {
+
+    use chrono::{DateTime, Utc};
+
     use super::*;
 
     #[derive(Debug)]
@@ -280,13 +283,18 @@ pub mod test_utils {
     }
 
     pub trait WorktreeExt: Worktree {
-        async fn commit<S>(&self, message: S) -> anyhow::Result<CommitHash>
+        // timestamp is used for both committer and author. This ought to make
+        // commit hashes deterministic.
+        async fn commit<S>(&self, message: S, timestamp: DateTime<Utc>) -> anyhow::Result<CommitHash>
         where
             S: AsRef<OsStr>,
         {
+            let ts_is08601 = format!("{}", timestamp.format("%+"));
             self.git(["commit", "-m"])
                 .arg(message)
                 .arg("--allow-empty")
+                .env("GIT_AUTHOR_DATE", ts_is08601.clone())
+                .env("GIT_COMMITTER_DATE", ts_is08601)
                 .execute()
                 .await
                 .context("'git commit' failed")?;

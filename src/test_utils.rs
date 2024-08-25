@@ -1,6 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::bail;
+use chrono::{DateTime, Utc};
 use futures::Future;
 use tokio::{select, time::{interval, sleep}};
 
@@ -23,4 +24,8 @@ where
     while !path.as_ref().try_exists().unwrap() {
         interval.tick().await;
     }
+}
+
+pub fn some_time() -> DateTime<Utc> {
+    "2012-12-12T12:12:12Z".parse().unwrap()
 }
