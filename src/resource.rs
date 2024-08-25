@@ -33,6 +33,9 @@ impl<T: Send> Pools<T> {
     // Get the specified number of tokens from each of the pools, indexes match
     // the indexes used in new. Panics if the size of counts differs from the number of pools.
     // The tokens are held until you drop the returned value.
+    //
+    // https://github.com/rust-lang/rust-clippy/issues/13075
+    #[allow(clippy::await_holding_lock)]
     pub async fn get<I: IntoIterator<Item = usize>>(&self, token_counts: I) -> Resources<T> {
         let wants: Vec<_> = token_counts.into_iter().collect();
         let mut guard = self.resources.lock();
