@@ -77,47 +77,6 @@ pub trait Worktree: Debug {
         Ok(OsStr::from_bytes(&output.stderr).into())
     }
 
-    #[cfg(test)]
-    async fn commit<S>(&self, message: S) -> anyhow::Result<CommitHash>
-    where
-        S: AsRef<OsStr>,
-    {
-        self.git(["commit", "-m"])
-            .arg(message)
-            .arg("--allow-empty")
-            .execute()
-            .await
-            .context("'git commit' failed")?;
-        // Doesn't seem like there's a safer way to do this than commit and then retroactively parse
-        // HEAD and hope nobody else is messing with us.
-        self.rev_parse("HEAD")
-            .await?
-            .ok_or(anyhow!("no HEAD after committing"))
-    }
-
-    #[cfg(test)]
-    // None means we successfully looked it up but it didn't exist.
-    async fn rev_parse<S>(&self, rev_spec: S) -> anyhow::Result<Option<CommitHash>>
-    where
-        S: AsRef<OsStr>,
-    {
-        let output = self
-            .git(["rev-parse"])
-            .arg(rev_spec)
-            .execute()
-            .await
-            .context("'git rev-parse' failed")?;
-        // Hack: empirically, rev-parse returns 128 when the range is invalid, it's not documented
-        // but hopefully this is stable behaviour that we're supposed to be able to rely on for
-        // this...?
-        if output.code_not_killed()? == 128 {
-            return Ok(None);
-        }
-        let out_string =
-            String::from_utf8(output.stdout).context("reading git rev-parse output")?;
-        Ok(Some(CommitHash(out_string.trim().to_owned())))
-    }
-
     async fn rev_list<S>(&self, range_spec: S) -> anyhow::Result<Vec<CommitHash>>
     where
         S: AsRef<OsStr>,
@@ -319,6 +278,49 @@ pub mod test_utils {
             self.temp_dir.path()
         }
     }
+
+    pub trait WorktreeExt: Worktree {
+        async fn commit<S>(&self, message: S) -> anyhow::Result<CommitHash>
+        where
+            S: AsRef<OsStr>,
+        {
+            self.git(["commit", "-m"])
+                .arg(message)
+                .arg("--allow-empty")
+                .execute()
+                .await
+                .context("'git commit' failed")?;
+            // Doesn't seem like there's a safer way to do this than commit and then retroactively parse
+            // HEAD and hope nobody else is messing with us.
+            self.rev_parse("HEAD")
+                .await?
+                .ok_or(anyhow!("no HEAD after committing"))
+        }
+
+        // None means we successfully looked it up but it didn't exist.
+        async fn rev_parse<S>(&self, rev_spec: S) -> anyhow::Result<Option<CommitHash>>
+        where
+            S: AsRef<OsStr>,
+        {
+            let output = self
+                .git(["rev-parse"])
+                .arg(rev_spec)
+                .execute()
+                .await
+                .context("'git rev-parse' failed")?;
+            // Hack: empirically, rev-parse returns 128 when the range is invalid, it's not documented
+            // but hopefully this is stable behaviour that we're supposed to be able to rely on for
+            // this...?
+            if output.code_not_killed()? == 128 {
+                return Ok(None);
+            }
+            let out_string =
+                String::from_utf8(output.stdout).context("reading git rev-parse output")?;
+            Ok(Some(CommitHash(out_string.trim().to_owned())))
+        }
+    }
+
+    impl<W: Worktree> WorktreeExt for W { }
 }
 
 #[cfg(test)]
