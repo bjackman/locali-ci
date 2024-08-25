@@ -24,8 +24,6 @@ use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(test)]
-use crate::git::PersistentWorktree;
 use crate::git::TempWorktree;
 use crate::git::{CommitHash, Worktree};
 use crate::process::OutputExt;
@@ -464,30 +462,11 @@ mod tests {
     };
 
     use crate::{
-        git::{CommitHash, Worktree},
+        git::{CommitHash, test_utils::TempRepo},
         test_utils::{path_exists, timeout_1s},
     };
 
     use super::*;
-
-    // TODO: this sucks, find a way to dedupe more.
-    struct Fixture {
-        _temp_dir: TempDir,
-        repo: Arc<PersistentWorktree>,
-    }
-
-    impl Fixture {
-        async fn new() -> Self {
-            let temp_dir = TempDir::with_prefix("fixture-").expect("couldn't make tempdir");
-            let repo = PersistentWorktree::create(temp_dir.path().into())
-                .await
-                .expect("couldn't init test repo");
-            Self {
-                _temp_dir: temp_dir,
-                repo: Arc::new(repo),
-            }
-        }
-    }
 
     // A script that can be used as the test command for a Manager, with utilities for testing the
     // manager. The script won't terminate until told to.
@@ -706,14 +685,13 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
-        let fixture = Fixture::new().await;
-        let hash = fixture
-            .repo
+        let repo = Arc::new(TempRepo::new().await.unwrap());
+        let hash = repo
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
             .num_worktrees(2)
             .build()
             .await
@@ -743,15 +721,14 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
-        let fixture = Fixture::new().await;
+        let repo = Arc::new(TempRepo::new().await.unwrap());
         // First commit's test will block forever.
-        let hash1 = fixture
-            .repo
+        let hash1 = repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
             .num_worktrees(2)
             .build()
             .await
@@ -762,8 +739,7 @@ mod tests {
             .await
             .expect("script did not run for hash1");
         // Second commit's test will terminate quickly.
-        let hash2 = fixture
-            .repo
+        let hash2 = repo
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
@@ -815,15 +791,14 @@ mod tests {
     // over-engineered.
     #[test_log::test(tokio::test)]
     async fn should_not_settle() {
-        let fixture = Fixture::new().await;
+        let repo = Arc::new(TempRepo::new().await.unwrap());
         // First commit's test will block forever.
-        let hash = fixture
-            .repo
+        let hash = repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
             .await
             .expect("couldn't create test commit");
         let script = TestScript::new();
-        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
             .build()
             .await
             .expect("couldn't set up manager");
@@ -839,15 +814,14 @@ mod tests {
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
     #[test_log::test(tokio::test)]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
-        let fixture = Fixture::new().await;
+        let repo = Arc::new(TempRepo::new().await.unwrap());
         let script = TestScript::new();
         let mut hashes = Vec::new();
         let mut want_results = HashMap::new();
         let mut i = 0;
         for _ in 0..50 {
             for _ in 0..num_tests {
-                let hash = fixture
-                    .repo
+                let hash = repo
                     // We'll give each test a unique exit code so we can check they really got
                     // tested individually.
                     .commit(TestScript::exit_code_tag(i as u32))
@@ -869,7 +843,7 @@ mod tests {
                 i += 1;
             }
         }
-        let mut m = Manager::builder(fixture.repo.clone(), [script.as_test()], [])
+        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
             .num_worktrees(num_worktrees)
             .build()
             .await
@@ -883,12 +857,11 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_respect_resource_limits() {
-        let fixture = Fixture::new().await;
+        let repo = Arc::new(TempRepo::new().await.unwrap());
         let mut hashes = Vec::new();
         for _ in 0..10 {
             hashes.push(
-                fixture
-                    .repo
+                repo
                     .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
                     .await
                     .expect("couldn't create test commit"),
@@ -904,7 +877,7 @@ mod tests {
             args: script.args(),
             needs_resource_idxs: vec![1],
         }];
-        let mut m = Manager::builder(fixture.repo.clone(), tests, resource_token_counts)
+        let mut m = Manager::builder(repo.clone(), tests, resource_token_counts)
             .num_worktrees(4)
             .build()
             .await

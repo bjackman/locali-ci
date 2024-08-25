@@ -45,15 +45,6 @@ pub struct PersistentWorktree {
     pub path: PathBuf,
 }
 
-impl PersistentWorktree {
-    #[cfg(test)]
-    pub async fn create(path: PathBuf) -> anyhow::Result<Self> {
-        let zelf = Self { path }; // https://www.youtube.com/watch?v=_MwboA5NIVA
-        zelf.git(["init"]).execute().await?;
-        Ok(zelf)
-    }
-}
-
 impl Worktree for PersistentWorktree {
     fn path(&self) -> &Path {
         &self.path
@@ -299,6 +290,34 @@ impl Drop for TempWorktree {
                 error!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
             });
         debug!("Delorted worktree at {:?}", self.temp_dir.path());
+    }
+}
+
+#[cfg(test)]
+pub mod test_utils {
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct TempRepo {
+        temp_dir: TempDir,
+    }
+
+    // Empty repository in a temporary directory, torn down on drop.
+    impl TempRepo {
+        pub async fn new() -> anyhow::Result<Self> {
+            // https://www.youtube.com/watch?v=_MwboA5NIVA
+            let zelf = Self {
+                temp_dir: TempDir::with_prefix("fixture-").expect("couldn't make tempdir"),
+            };
+            zelf.git(["init"]).execute().await?;
+            Ok(zelf)
+        }
+    }
+
+    impl Worktree for TempRepo {
+        fn path(&self) -> &Path {
+            self.temp_dir.path()
+        }
     }
 }
 
