@@ -105,10 +105,8 @@ pub trait Worktree: Debug {
     }
 
     async fn checkout(&self, commit: &CommitHash) -> anyhow::Result<()> {
-        let mut cmd = Command::new("git");
-        cmd.arg("checkout")
+        self.git(["checkout"])
             .arg(commit)
-            .current_dir(self.path())
             .output()
             .await?
             .ok()
