@@ -2,7 +2,12 @@ TODOS:
 
  - Gather overall status and present it readably somehow to the user.
    - Present status with git DAG view.
- - Store output and artifacts, present them to the user in a convenient way.
+ - Store output and artifacts. WIP but:
+   - Location of this should be configurable.
+   - Need to figure out how to represent internal errors and signals.
+   - Probably need to split it up by tested repo.
+   - Need to present it to the user in some convenient way
+ - Cache results, configurable whether this is by commit or by tree.
  - Support bailing out more quickly if the worktree teardown is too slow.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).

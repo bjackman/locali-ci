@@ -8,7 +8,6 @@ use std::ffi::OsString;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -28,6 +27,8 @@ use crate::git::TempWorktree;
 use crate::git::{CommitHash, Worktree};
 use crate::process::OutputExt;
 use crate::resource::Pools;
+use crate::result::CommitOutput;
+use crate::result::Database;
 
 pub trait ResultExt {
     // Log an error if it occurs, prefixed with s, otherwise return nothing.
@@ -141,6 +142,7 @@ impl<W> ManagerBuilder<W> {
             job_counter: JobCounter::new(),
             tests: self.tests.into_iter().map(Arc::new).collect(),
             resource_pools: Arc::new(Pools::new(self.token_pool_sizes, worktrees)),
+            result_db: Database::create_or_open_user()?,
         })
     }
 }
@@ -155,6 +157,7 @@ pub struct Manager {
     // jobs, and also tracks access to reused worktrees. The indices of the token-type resources
     // will be referenced by Test::needs_resource_idx values.
     resource_pools: Arc<Pools<TempWorktree>>,
+    result_db: Database,
 }
 
 impl Manager {
@@ -180,7 +183,10 @@ impl Manager {
     // not already tested or being tested.
     // It doesn't make sense to call this function if you don't have a receiver
     // from already having called [[results]].
-    pub fn set_revisions<I: IntoIterator<Item = CommitHash>>(&mut self, revs: I) {
+    pub fn set_revisions<I>(&mut self, revs: I) -> anyhow::Result<()>
+    where
+        I: IntoIterator<Item = CommitHash>,
+    {
         let mut to_start = HashSet::<CommitHash>::from_iter(revs);
         let mut cancel_revs = Vec::new();
         for rev in self.job_cts.keys() {
@@ -200,11 +206,12 @@ impl Manager {
             for test in self.tests.iter() {
                 let ct = CancellationToken::new();
                 self.job_cts.insert(rev.to_owned(), ct.clone());
-                let job = TestJob {
+                let mut job = TestJob {
                     ct,
                     test: test.clone(),
                     rev: rev.to_owned(),
                     _token: self.job_counter.get(),
+                    output: self.result_db.job_output(&rev, &test.name)?,
                 };
                 let test_case = TestCase {
                     hash: rev.to_owned(),
@@ -244,6 +251,7 @@ impl Manager {
                 });
             }
         }
+        Ok(())
     }
 
     // Streams results back. Note you need to call this _before_ you generate the results you want
@@ -262,7 +270,8 @@ impl Manager {
 
 impl Drop for Manager {
     fn drop(&mut self) {
-        self.set_revisions([]);
+        self.set_revisions([])
+            .or_log_error("couldn't cancel test jobs on shutdown");
     }
 }
 
@@ -336,11 +345,12 @@ struct TestJob {
     test: Arc<Test>,
     rev: CommitHash,
     _token: JobToken,
+    output: CommitOutput,
 }
 
 impl TestJob {
     // Returns Ok(None) when canceled.
-    async fn run<W>(&self, worktree: &W) -> anyhow::Result<Option<ExitCode>>
+    async fn run<W>(&mut self, worktree: &W) -> anyhow::Result<Option<ExitCode>>
     where
         W: Worktree,
     {
@@ -351,8 +361,8 @@ impl TestJob {
         let mut cmd = self.test.command();
         let child = cmd
             .current_dir(worktree.path())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(self.output.stdout().context("no stdout handle available")?)
+            .stderr(self.output.stderr().context("no stdout handle available")?)
             .env("LCI_COMMIT", self.rev.to_string())
             .spawn()
             .context("spawning test command")?;
@@ -374,11 +384,11 @@ impl TestJob {
             // Test completed, figure out the result. I think maybe a true Rustacean would
             // write this block as a single chain of methods? But it seems ridiculous to me.
             {
-                Ok(Some(
-                    wait_result
+                let exit_code = wait_result
                         .map_err(anyhow::Error::from)?
-                        .code_not_killed()?,
-                ))
+                        .code_not_killed()?;
+                self.output.set_exit_code(exit_code)?;
+                Ok(Some(exit_code))
             }
             Either::Right((_, child_fut)) => {
                 // Canceled. Shut down the process.

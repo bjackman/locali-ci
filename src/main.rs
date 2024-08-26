@@ -15,6 +15,7 @@ mod git;
 mod process;
 mod resource;
 mod test;
+mod result;
 
 #[cfg(test)]
 mod test_utils;
@@ -69,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         repo.rev_list(&range_spec)
             .await
             .context("couldn't rev-list")?,
-    );
+    )?;
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
     loop {
@@ -79,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
             revs = revs_stream.next() => {
                 // TODO: figure out if/how this can actually fail.
                 let revs = revs.expect("revset stream terminated");
-                m.set_revisions(revs?);
+                m.set_revisions(revs?)?;
             },
             result = results.recv() => {
                 // https://github.com/rust-lang/futures-rs/issues/1857
