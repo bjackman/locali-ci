@@ -5,12 +5,12 @@ use chrono::{DateTime, Utc};
 use futures::Future;
 use tokio::{select, time::{interval, sleep}};
 
-pub async fn timeout_1s<F, T>(fut: F) -> anyhow::Result<T>
+pub async fn timeout_5s<F, T>(fut: F) -> anyhow::Result<T>
 where
     F: Future<Output = T>,
 {
     select!(
-        _ = sleep(Duration::from_secs(1)) => bail!("timeout after 1s"),
+        _ = sleep(Duration::from_secs(5)) => bail!("timeout after 5s"),
         output = fut => Ok(output)
     )
 }

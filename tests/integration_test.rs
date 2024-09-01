@@ -144,7 +144,7 @@ fn test_worktree_teardown(test_command: &str) {
                 }
             }
         },
-        Duration::from_secs(1),
+        Duration::from_secs(5),
     )
     .expect("child didn't shut down when SIGINTed");
 

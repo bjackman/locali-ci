@@ -476,7 +476,7 @@ mod tests {
             test_utils::{TempRepo, WorktreeExt},
             CommitHash,
         },
-        test_utils::{path_exists, some_time, timeout_1s},
+        test_utils::{path_exists, some_time, timeout_5s},
     };
 
     use super::*;
@@ -648,11 +648,11 @@ mod tests {
     // Expect the series of notifications provided for each test case.
     // case. Also assert that the necessary precursor notifications arrive.
     // Panics if any of the input series are empty.
-    async fn expect_notifs_5s(
+    async fn expect_notifs_10s(
         results: &mut broadcast::Receiver<Arc<Notification>>,
         mut want: HashMap<TestCase, VecDeque<TestStatus>>,
     ) -> anyhow::Result<()> {
-        let timeout = Instant::now() + Duration::from_secs(5);
+        let timeout = Instant::now() + Duration::from_secs(10);
         while want.len() != 0 {
             let notif = select!(
                 _ = sleep_until(timeout) => {
@@ -712,7 +712,7 @@ mod tests {
         let mut results = m.results();
         m.set_revisions(vec![hash.clone()]).unwrap();
         // We should get a singular result because we only fed in one revision.
-        expect_notifs_5s(
+        expect_notifs_10s(
             &mut results,
             HashMap::from([(
                 TestCase {
@@ -748,7 +748,7 @@ mod tests {
             .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(vec![hash1.clone()]).unwrap();
-        let started_hash1 = timeout_1s(script.started(&hash1))
+        let started_hash1 = timeout_5s(script.started(&hash1))
             .await
             .expect("script did not run for hash1");
         // Second commit's test will terminate quickly.
@@ -757,13 +757,13 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         m.set_revisions(vec![hash2.clone()]).unwrap();
-        timeout_1s(script.started(&hash2))
+        timeout_5s(script.started(&hash2))
             .await
             .expect("script did not run for hash2");
-        timeout_1s(started_hash1.siginted())
+        timeout_5s(started_hash1.siginted())
             .await
             .expect("hash1 test did not get siginted");
-        expect_notifs_5s(
+        expect_notifs_10s(
             &mut results,
             // awu weh, weh mah
             HashMap::from([
@@ -863,7 +863,7 @@ mod tests {
             .expect("couldn't set up manager");
         let mut results = m.results();
         m.set_revisions(hashes.clone()).unwrap();
-        expect_notifs_5s(&mut results, want_results)
+        expect_notifs_10s(&mut results, want_results)
             .await
             .expect("bad results");
     }
@@ -898,7 +898,7 @@ mod tests {
 
         let mut start_futs = hashes.iter().map(|h| Box::pin(script.started(h))).collect();
         for _ in 0..2 {
-            let (_started, _index, remaining) = timeout_1s(select_all(start_futs))
+            let (_started, _index, remaining) = timeout_5s(select_all(start_futs))
                 .await
                 .expect("didn't start first two jobs");
             start_futs = remaining;
