@@ -1,5 +1,6 @@
 TODOS:
 
+ - Still getting some `cargo stress` failures that need to be debugged.
  - Gather overall status and present it readably somehow to the user.
    - Present status with git DAG view.
  - Store output and artifacts. WIP but:
