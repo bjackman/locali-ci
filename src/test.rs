@@ -8,6 +8,7 @@ use std::ffi::OsString;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::pin::pin;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -60,6 +61,15 @@ impl Test {
     fn command(&self) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
+        // Ensure we don't pass random nonsense to the test command and create
+        // confusing behaviour. This is kinda annoying because IIUC this gives
+        // you a fd that is immediately closed, which is likely to be different
+        // from the environment where you're testing your scripts (i.e. a shell
+        // prompt). You'd think just using Stdio::piped() would give a stdin
+        // that is open but has nothing on it, but that isn't th behavoiur I've
+        // observed, I'm not too sure why but don't wanna keep debugging this
+        // forever.
+        cmd.stdin(Stdio::null());
         cmd
     }
 }
@@ -240,13 +250,13 @@ impl Manager {
                     let _ = tx.send(Arc::new(Notification {
                         test_case,
                         status: match result {
-                            Err(err) => TestStatus::Error(err.to_string()),
+                            Err(ref err) => TestStatus::Error(err.to_string()),
                             Ok(None) => TestStatus::Canceled,
                             Ok(Some(exit_code))  => TestStatus::Completed(exit_code),
                         }
                     }))
                     .map_err(|e|
-                        error!("Dropping a result. Seems nobody is listening to Manager::results(): {}", e)
+                        error!("Dropping a result ({result:?}. Seems nobody is listening to Manager::results(): {}", e)
                     );
                 });
             }
@@ -533,7 +543,11 @@ mod tests {
                 trap \"rm {lock_filename:?}\" EXIT
                 commit_msg=\"$(git log -n1 --format=%B)\"
                 if [[ \"$commit_msg\" =~ {block_tag} ]]; then
-                    read
+                    # sleep is not a builtin so we won't handle SIGINT while
+                    # that's running. Hack suggested by ChatGPT: just spawn it
+                    # then use wait, which is a builtin.
+                    sleep infinity &
+                    wait $!
                 fi
                 # Extract the exit code and pass it to exit if there is one, otherwise pass 0.
                 exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
@@ -815,7 +829,10 @@ mod tests {
             .build()
             .await
             .expect("couldn't set up manager");
-        m.set_revisions([hash]).unwrap();
+        m.set_revisions([hash.clone()]).unwrap();
+        timeout_5s(script.started(&hash))
+            .await
+            .expect("script did not start");
         select!(
             _ = sleep(Duration::from_secs(1)) => (),
             _ = m.settled() => panic!("manager settled unexpectedly"),
