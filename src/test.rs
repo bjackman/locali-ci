@@ -710,7 +710,7 @@ mod tests {
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
-        m.set_revisions(vec![hash.clone()]);
+        m.set_revisions(vec![hash.clone()]).unwrap();
         // We should get a singular result because we only fed in one revision.
         expect_notifs_5s(
             &mut results,
@@ -747,7 +747,7 @@ mod tests {
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
-        m.set_revisions(vec![hash1.clone()]);
+        m.set_revisions(vec![hash1.clone()]).unwrap();
         let started_hash1 = timeout_1s(script.started(&hash1))
             .await
             .expect("script did not run for hash1");
@@ -756,7 +756,7 @@ mod tests {
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        m.set_revisions(vec![hash2.clone()]);
+        m.set_revisions(vec![hash2.clone()]).unwrap();
         timeout_1s(script.started(&hash2))
             .await
             .expect("script did not run for hash2");
@@ -815,7 +815,7 @@ mod tests {
             .build()
             .await
             .expect("couldn't set up manager");
-        m.set_revisions([hash]);
+        m.set_revisions([hash]).unwrap();
         select!(
             _ = sleep(Duration::from_secs(1)) => (),
             _ = m.settled() => panic!("manager settled unexpectedly"),
@@ -862,7 +862,7 @@ mod tests {
             .await
             .expect("couldn't set up manager");
         let mut results = m.results();
-        m.set_revisions(hashes.clone());
+        m.set_revisions(hashes.clone()).unwrap();
         expect_notifs_5s(&mut results, want_results)
             .await
             .expect("bad results");
@@ -894,7 +894,7 @@ mod tests {
             .build()
             .await
             .expect("couldn't set up manager");
-        m.set_revisions(hashes.clone());
+        m.set_revisions(hashes.clone()).unwrap();
 
         let mut start_futs = hashes.iter().map(|h| Box::pin(script.started(h))).collect();
         for _ in 0..2 {
