@@ -1,8 +1,5 @@
 use std::{
-    io::Write,
-    ops::{Deref, DerefMut},
-    process::{Child, Stdio},
-    time::{Duration, Instant},
+    io::Write, ops::{Deref, DerefMut}, os::unix::process::ExitStatusExt, process::{Child, Stdio}, time::{Duration, Instant}
 };
 
 use anyhow::{bail, Context as _};
@@ -120,10 +117,21 @@ fn test_worktree_teardown() {
     child.signal(Signal::SIGINT).unwrap();
     wait_for(
         || {
-            Ok(child
-                .try_wait()
-                .context("couldn't check child status")?
-                .is_some())
+            let exit_status = child.try_wait().context("couldn't check child status")?;
+            match exit_status {
+                None => Ok(false), // Still running
+                Some(exit_status) => {
+                    if exit_status.success() {
+                        Ok(true)
+                    } else {
+                        bail!(
+                            "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}",
+                            exit_status.code(),
+                            exit_status.signal()
+                        )
+                    }
+                }
+            }
         },
         Duration::from_secs(1),
     )
