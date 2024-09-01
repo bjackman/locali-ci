@@ -71,6 +71,9 @@ impl ChildExt for Child {
 fn test_worktree_teardown() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = get_test_bin("local-ci");
+    // TODO: This uses this code's repo as a test input, so maybe we can break
+    // this test by just commiting changes. Should probably have a special test
+    // repo as input.
     let cmd = cmd
         .args([
             "HEAD^",
