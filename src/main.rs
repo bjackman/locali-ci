@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::Parser as _;
 use futures::StreamExt;
+use tokio_util::sync::CancellationToken;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -52,6 +53,18 @@ async fn main() -> anyhow::Result<()> {
 
     env_logger::init();
 
+    // Set up shutdown first, to ensure we correctly handle early signals.
+    // As well as doing it early, it seems to be important that we do this with
+    // a single global signal::ctrl_c call, if I call this in the select loop I
+    // occasionally observe that SIGINT kills the program instead of triggering
+    // Tokio's signal handler.
+    let cancellation_token = CancellationToken::new();
+    let token = cancellation_token.clone();
+    tokio::spawn(async move {
+        signal::ctrl_c().await.expect("error listening for ctrl-C");
+        token.cancel()
+    });
+
     let repo = git::PersistentWorktree {
         path: args.repo.to_owned().into(),
     };
@@ -89,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
                 // TODO: What the fucking fuck???? I should have used Perl.
                 println!("{:?}", result);
             },
-            _ =  signal::ctrl_c() => break,
+            _ =  cancellation_token.cancelled() => break,
         )
     }
     m.settled().await;
