@@ -18,6 +18,8 @@ TODOS:
  - Support multiple repos?
  - (Nice to have: avoid creating worktrees if they aren't actually to be used).
  - (Nice to have: let jobs that don't need worktrees start before worktrees are ready).
+ - Unimportant bug: some tests get run twice by `cargo test`, because of
+   `test_log`/`test_case` interaction.
 
 My janky test command:
 
