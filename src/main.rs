@@ -56,8 +56,14 @@ async fn main() -> anyhow::Result<()> {
     // Set up shutdown first, to ensure we correctly handle early signals.
     // As well as doing it early, it seems to be important that we do this with
     // a single global signal::ctrl_c call, if I call this in the select loop I
-    // occasionally observe that SIGINT kills the program instead of triggering
-    // Tokio's signal handler.
+    // would occasionally observe that SIGINT kills the program instead of
+    // triggering Tokio's signal handler, this is because we require the ctrl_c
+    // future to get polled before we do any work, since that's where it
+    // installs the signal handler.
+    // TOOD: this still seems racy though, because in theory we could get all
+    // the way into the setup below before the task here ever gets to polling
+    // the future. It seems like this just means the ctrl_c design is bad and we
+    // should probably just not use it.
     let cancellation_token = CancellationToken::new();
     let token = cancellation_token.clone();
     tokio::spawn(async move {
