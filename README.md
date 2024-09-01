@@ -7,9 +7,6 @@ TODOS:
    - Need to figure out how to represent internal errors and signals.
    - Probably need to split it up by tested repo.
    - Need to present it to the user in some convenient way
- - We should probably never shut down if test jobs are still running. At present
-   they get leaked (at least) if they don't respond properly to SIGINT. We
-   should have an integration test for this.
  - Cache results, configurable whether this is by commit or by tree.
  - Support bailing out more quickly if the worktree teardown is too slow.
  - Support configuring a shell, with the default based on the user's
