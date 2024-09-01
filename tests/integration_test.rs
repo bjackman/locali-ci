@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context as _, Result};
 use glob::glob;
 use log::error;
 use nix::{
@@ -69,90 +69,95 @@ impl ChildExt for Child {
     }
 }
 
+// An instance of the binary, running as a child process.
+struct LocalCiChild {
+    temp_dir: TempDir,
+    child: ChildKilledOnDrop,
+}
+
+impl LocalCiChild {
+    fn new(config: String) -> Result<Self> {
+        let temp_dir = TempDir::new()?;
+        let mut cmd = get_test_bin("local-ci");
+        // TODO: This uses this code's repo as a test input, so maybe we can break
+        // this test by just commiting changes. Should probably have a special test
+        // repo as input.
+        let cmd = cmd
+            .args([
+                "HEAD^",
+                "--config",
+                "/dev/stdin",
+                "--worktree-dir",
+                temp_dir.path().to_str().unwrap(),
+                "--worktree-prefix",
+                "test-worktree-",
+            ])
+            .stdin(Stdio::piped());
+        let mut child = ChildKilledOnDrop(cmd.spawn().unwrap());
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(config.as_bytes()).unwrap();
+        Ok(Self { temp_dir, child })
+    }
+
+    // Returns true if any worktree of this child currently exists.
+    fn has_worktrees(&mut self) -> Result<bool> {
+        let mut pattern = self.temp_dir.path().to_owned();
+        pattern.push("test-worktree-*");
+        Ok(!glob(pattern.to_string_lossy().as_ref())?
+            .collect::<Vec<_>>()
+            .is_empty())
+    }
+
+    fn terminate(&mut self) -> Result<()> {
+        self.child.signal(Signal::SIGINT).unwrap();
+        wait_for(
+            || {
+                let exit_status = self
+                    .child
+                    .try_wait()
+                    .context("couldn't check child status")?;
+                match exit_status {
+                    None => Ok(false), // Still running
+                    Some(exit_status) => {
+                        if exit_status.success() {
+                            Ok(true)
+                        } else {
+                            bail!(
+                                "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}",
+                                exit_status.code(),
+                                exit_status.signal()
+                            )
+                        }
+                    }
+                }
+            },
+            Duration::from_secs(5),
+        )
+    }
+}
+
 #[test_case("echo hello world"; "clean worktree")]
 #[test_case("echo hello world > file.txt"; "dirty worktree")]
 #[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
 #[test_log::test]
 fn test_worktree_teardown(test_command: &str) {
-    let temp_dir = TempDir::new().unwrap();
-    let mut cmd = get_test_bin("local-ci");
-    // TODO: This uses this code's repo as a test input, so maybe we can break
-    // this test by just commiting changes. Should probably have a special test
-    // repo as input.
-    let cmd = cmd
-        .args([
-            "HEAD^",
-            "--config",
-            "/dev/stdin",
-            "--worktree-dir",
-            temp_dir.path().to_str().unwrap(),
-            "--worktree-prefix",
-            "test-worktree-",
-        ])
-        .stdin(Stdio::piped());
-    let mut child = ChildKilledOnDrop(cmd.spawn().unwrap());
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        stdin
-            .write_all(
-                format!(
-                    r##"
-                num_worktrees = 1
-                [[tests]]
-                name = "my_test"
-                command = {test_command:?}
-            "##,
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-    }
+    let mut lci = LocalCiChild::new(format!(
+        r##"
+        num_worktrees = 1
+        [[tests]]
+        name = "my_test"
+        command = {test_command:?}
+    "##
+    ))
+    .unwrap();
 
-    // Wait until the worktree exists.
-    let mut pattern = temp_dir.path().to_owned();
-    pattern.push("test-worktree-*");
-    wait_for(
-        || {
-            if let Some(status) = child.try_wait().expect("couldn't check child status") {
-                bail!("child terminated unexpectedly, status: {}", status);
-            }
+    wait_for(|| lci.has_worktrees(), Duration::from_secs(5))
+        .expect(&format!("worktree not found after 5s"));
 
-            Ok(!glob(pattern.to_string_lossy().as_ref())?
-                .collect::<Vec<_>>()
-                .is_empty())
-        },
-        Duration::from_secs(5),
-    )
-    .expect(&format!("worktree not found at {:?} after 5s", pattern));
-
-    child.signal(Signal::SIGINT).unwrap();
-    wait_for(
-        || {
-            let exit_status = child.try_wait().context("couldn't check child status")?;
-            match exit_status {
-                None => Ok(false), // Still running
-                Some(exit_status) => {
-                    if exit_status.success() {
-                        Ok(true)
-                    } else {
-                        bail!(
-                            "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}",
-                            exit_status.code(),
-                            exit_status.signal()
-                        )
-                    }
-                }
-            }
-        },
-        Duration::from_secs(5),
-    )
-    .expect("child didn't shut down when SIGINTed");
+    lci.terminate().expect("couldn't shut down child");
 
     assert!(
-        glob(pattern.to_string_lossy().as_ref())
-            .expect("couldn't check glob status")
-            .collect::<Vec<_>>()
-            .is_empty(),
+        !lci.has_worktrees().unwrap(),
         "worktrees not cleaned up on SIGINT"
-    )
+    );
 }
