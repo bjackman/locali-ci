@@ -1,5 +1,9 @@
 use std::{
-    io::Write, ops::{Deref, DerefMut}, os::unix::process::ExitStatusExt, process::{Child, Stdio}, time::{Duration, Instant}
+    io::Write,
+    ops::{Deref, DerefMut},
+    os::unix::process::ExitStatusExt,
+    process::{Child, Stdio},
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context as _};
@@ -11,6 +15,7 @@ use nix::{
 };
 use tempfile::TempDir;
 use test_bin::get_test_bin;
+use test_case::test_case;
 use test_log;
 
 fn wait_for<F>(mut predicate: F, timeout: Duration) -> anyhow::Result<()>
@@ -64,8 +69,11 @@ impl ChildExt for Child {
     }
 }
 
+#[test_case("echo hello world"; "clean worktree")]
+#[test_case("echo hello world > file.txt"; "dirty worktree")]
+#[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
 #[test_log::test]
-fn test_worktree_teardown() {
+fn test_worktree_teardown(test_command: &str) {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = get_test_bin("local-ci");
     // TODO: This uses this code's repo as a test input, so maybe we can break
@@ -87,12 +95,15 @@ fn test_worktree_teardown() {
         let mut stdin = child.stdin.take().unwrap();
         stdin
             .write_all(
-                br##"
+                format!(
+                    r##"
                 num_worktrees = 1
                 [[tests]]
                 name = "my_test"
-                command = "echo hello world"
+                command = {test_command:?}
             "##,
+                )
+                .as_bytes(),
             )
             .unwrap();
     }

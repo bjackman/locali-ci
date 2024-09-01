@@ -239,7 +239,7 @@ impl Drop for TempWorktree {
             );
             return;
         }
-        cmd.args(["worktree", "remove"])
+        cmd.args(["worktree", "remove", "--force"])
             .arg(self.temp_dir.path())
             .current_dir(&self.origin)
             .execute()
