@@ -1,5 +1,14 @@
 use std::{
-    fs, io::Write, ops::{Deref, DerefMut}, os::unix::process::ExitStatusExt, path::Path, process::{Child, Stdio}, str::FromStr, time::{Duration, Instant}
+    fs,
+    io::{Read as _, Write},
+    ops::{Deref, DerefMut},
+    os::unix::process::ExitStatusExt,
+    path::Path,
+    process::{Child, Stdio},
+    str::FromStr,
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context as _, Result};
@@ -70,6 +79,7 @@ impl ChildExt for Child {
 struct LocalCiChild {
     temp_dir: TempDir,
     child: ChildKilledOnDrop,
+    stderr_buf: Arc<Mutex<String>>
 }
 
 impl LocalCiChild {
@@ -89,11 +99,34 @@ impl LocalCiChild {
                 "--worktree-prefix",
                 "test-worktree-",
             ])
-            .stdin(Stdio::piped());
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = ChildKilledOnDrop(cmd.spawn().unwrap());
         let mut stdin = child.stdin.take().unwrap();
+
+        let mut stderr = child.stderr.take().unwrap();
+        let stderr_buf = Arc::new(Mutex::new(String::new()));
+        let stderr_buf_clone = stderr_buf.clone();
+        thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buffer).unwrap() {
+                    0 => break, // EOF
+                    n => {
+                        let new_str = String::from_utf8_lossy(&buffer[..n]);
+                        stderr_buf_clone.lock().unwrap().push_str(&new_str);
+                    }
+                }
+            }
+        });
+
         stdin.write_all(config.as_bytes()).unwrap();
-        Ok(Self { temp_dir, child })
+        Ok(Self { temp_dir, child, stderr_buf })
+    }
+
+    // Gets all stderr collected so far.
+    fn stderr(&self) -> String {
+        self.stderr_buf.lock().unwrap().clone()
     }
 
     // Returns true if any worktree of this child currently exists.
@@ -120,9 +153,10 @@ impl LocalCiChild {
                             Ok(true)
                         } else {
                             bail!(
-                                "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}",
+                                "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}, stderr:\n{}",
                                 exit_status.code(),
-                                exit_status.signal()
+                                exit_status.signal(),
+                                self.stderr(),
                             )
                         }
                     }
@@ -160,7 +194,7 @@ fn test_worktree_teardown(test_command: &str) {
 }
 
 fn pid_running(pid: pid_t) -> bool {
-    return Path::new(&format!("/proc/{pid}")).exists()
+    return Path::new(&format!("/proc/{pid}")).exists();
 }
 
 #[test_log::test]
