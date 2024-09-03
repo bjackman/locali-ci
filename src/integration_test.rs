@@ -1,19 +1,15 @@
 use std::{
     fs,
-    io::{Read as _, Write},
-    ops::{Deref, DerefMut},
     os::unix::process::ExitStatusExt,
     path::Path,
-    process::{Child, Stdio},
+    process::Stdio,
     str::FromStr,
     sync::{Arc, Mutex},
-    thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context as _, Result};
 use glob::glob;
-use log::error;
 use nix::{
     libc::pid_t,
     sys::signal::{kill, Signal},
@@ -23,6 +19,10 @@ use tempfile::TempDir;
 use test_bin::get_test_bin;
 use test_case::test_case;
 use test_log;
+use tokio::{
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    process::{Child, Command},
+};
 
 fn wait_for<F>(mut predicate: F, timeout: Duration) -> anyhow::Result<()>
 where
@@ -38,31 +38,6 @@ where
     bail!("timeout after {:?}", timeout)
 }
 
-struct ChildKilledOnDrop(Child);
-
-impl Drop for ChildKilledOnDrop {
-    fn drop(&mut self) {
-        let _ = self
-            .0
-            .kill()
-            .map_err(|e| error!("Couldn't kill child on shutdown: {}", e));
-    }
-}
-
-impl Deref for ChildKilledOnDrop {
-    type Target = Child;
-
-    fn deref(&self) -> &Child {
-        &self.0
-    }
-}
-
-impl DerefMut for ChildKilledOnDrop {
-    fn deref_mut(&mut self) -> &mut Child {
-        &mut self.0
-    }
-}
-
 // Add a reasonable method for sending general signals, Rust only provides a method to SIGKILL.
 pub trait ChildExt {
     fn signal(&self, sig: Signal) -> anyhow::Result<()>;
@@ -70,7 +45,12 @@ pub trait ChildExt {
 
 impl ChildExt for Child {
     fn signal(&self, sig: Signal) -> anyhow::Result<()> {
-        let pid = Pid::from_raw(self.id().try_into().context("couldnt parse child PID")?);
+        let pid = Pid::from_raw(
+            self.id()
+                .context("no PID for child")?
+                .try_into()
+                .context("couldnt parse child PID")?,
+        );
         kill(pid, sig).context("couldn't signal child")
     }
 }
@@ -78,14 +58,14 @@ impl ChildExt for Child {
 // An instance of the binary, running as a child process.
 struct LocalCiChild {
     temp_dir: TempDir,
-    child: ChildKilledOnDrop,
-    stderr_buf: Arc<Mutex<String>>
+    child: Child,
+    stderr_buf: Arc<Mutex<String>>,
 }
 
 impl LocalCiChild {
-    fn new(config: String) -> Result<Self> {
+    async fn new(config: String) -> Result<Self> {
         let temp_dir = TempDir::new()?;
-        let mut cmd = get_test_bin("local-ci");
+        let mut cmd: Command = get_test_bin("local-ci").into();
         // TODO: This uses this code's repo as a test input, so maybe we can break
         // this test by just commiting changes. Should probably have a special test
         // repo as input.
@@ -100,17 +80,18 @@ impl LocalCiChild {
                 "test-worktree-",
             ])
             .stdin(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = ChildKilledOnDrop(cmd.spawn().unwrap());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
 
         let mut stderr = child.stderr.take().unwrap();
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let stderr_buf_clone = stderr_buf.clone();
-        thread::spawn(move || {
+        tokio::spawn(async move {
             let mut buffer = [0u8; 4096];
             loop {
-                match stderr.read(&mut buffer).unwrap() {
+                match stderr.read(&mut buffer).await.unwrap() {
                     0 => break, // EOF
                     n => {
                         let new_str = String::from_utf8_lossy(&buffer[..n]);
@@ -120,8 +101,12 @@ impl LocalCiChild {
             }
         });
 
-        stdin.write_all(config.as_bytes()).unwrap();
-        Ok(Self { temp_dir, child, stderr_buf })
+        stdin.write_all(config.as_bytes()).await.unwrap();
+        Ok(Self {
+            temp_dir,
+            child,
+            stderr_buf,
+        })
     }
 
     // Gets all stderr collected so far.
@@ -170,8 +155,8 @@ impl LocalCiChild {
 #[test_case("echo hello world"; "clean worktree")]
 #[test_case("echo hello world > file.txt"; "dirty worktree")]
 #[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
-#[test_log::test]
-fn test_worktree_teardown(test_command: &str) {
+#[test_log::test(tokio::test)]
+async fn test_worktree_teardown(test_command: &str) {
     let mut lci = LocalCiChild::new(format!(
         r##"
         num_worktrees = 1
@@ -180,6 +165,7 @@ fn test_worktree_teardown(test_command: &str) {
         command = {test_command:?}
     "##
     ))
+    .await
     .unwrap();
 
     wait_for(|| lci.has_worktrees(), Duration::from_secs(5))
@@ -197,8 +183,8 @@ fn pid_running(pid: pid_t) -> bool {
     return Path::new(&format!("/proc/{pid}")).exists();
 }
 
-#[test_log::test]
-fn shouldnt_leak_jobs() {
+#[test_log::test(tokio::test)]
+async fn shouldnt_leak_jobs() {
     let temp_dir = TempDir::new().unwrap();
 
     // This config has a test that does not respect SIGINT. We should not leak
@@ -213,6 +199,7 @@ fn shouldnt_leak_jobs() {
     "##,
         temp_dir.path().to_string_lossy()
     ))
+    .await
     .unwrap();
 
     // Wait for test to start up
