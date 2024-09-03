@@ -82,12 +82,8 @@ impl LocalCiChild {
         let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
 
-
         stdin.write_all(config.as_bytes()).await.unwrap();
-        Ok(Self {
-            temp_dir,
-            child,
-        })
+        Ok(Self { temp_dir, child })
     }
 
     // Returns true if any worktree of this child currently exists.
@@ -155,7 +151,7 @@ async fn test_worktree_teardown(test_command: &str) {
 }
 
 fn pid_running(pid: pid_t) -> bool {
-    return Path::new(&format!("/proc/{pid}")).exists()
+    return Path::new(&format!("/proc/{pid}")).exists();
 }
 
 #[test_log::test(tokio::test)]
