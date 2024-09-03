@@ -1,6 +1,5 @@
 use std::{
     fs,
-    os::unix::process::ExitStatusExt,
     path::Path,
     process::Stdio,
     str::FromStr,
@@ -99,21 +98,17 @@ impl LocalCiChild {
         self.child.signal(Signal::SIGINT).unwrap();
         wait_for(
             || {
-                let exit_status = self
+                match self
                     .child
                     .try_wait()
-                    .context("couldn't check child status")?;
-                match exit_status {
+                    .context("couldn't check child status")?
+                {
                     None => Ok(false), // Still running
                     Some(exit_status) => {
                         if exit_status.success() {
                             Ok(true)
                         } else {
-                            bail!(
-                                "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}",
-                                exit_status.code(),
-                                exit_status.signal()
-                            )
+                            bail!("test binary failed ({exit_status:?})")
                         }
                     }
                 }
