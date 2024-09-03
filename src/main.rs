@@ -4,6 +4,7 @@ use futures::StreamExt;
 use log::info;
 use tokio_util::sync::CancellationToken;
 use std::ffi::OsString;
+use std::io::stdout;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ mod config;
 mod git;
 mod process;
 mod resource;
+mod status;
 mod test;
 mod result;
 
@@ -89,14 +91,10 @@ async fn main() -> anyhow::Result<()> {
     let manager_builder = config::manager_builder(repo.clone(), &args.config)?
         .worktree_prefix(&args.worktree_prefix)
         .worktree_dir(&args.worktree_dir);
-    let mut m = manager_builder.build().await?;
+    let mut test_manager = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
-    let mut results = m.results();
-    m.set_revisions(
-        repo.rev_list(&range_spec)
-            .await
-            .context("couldn't rev-list")?,
-    )?;
+    let mut notifs = test_manager.results();
+    let mut status_tracker = status::Tracker::new(repo.clone(), stdout());
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
     loop {
@@ -105,23 +103,28 @@ async fn main() -> anyhow::Result<()> {
             // the channel, one implements Stream).
             revs = revs_stream.next() => {
                 // TODO: figure out if/how this can actually fail.
-                let revs = revs.expect("revset stream terminated");
-                m.set_revisions(revs?)?;
+                let revs = revs.expect("revset stream terminated")?;
+                // Paying for a pointless clone here so we can do set_revisions
+                // (mostly just kicks off background stuff) before awaiting the
+                // status tracker reset (does synchronhous work).
+                test_manager.set_revisions(revs.clone())?;
+                status_tracker.set_range(&range_spec).await.context("resetting status tracker")?;
+                status_tracker.repaint().context("error painting status to stdout")?;
             },
-            result = results.recv() => {
+            notif = notifs.recv() => {
                 // https://github.com/rust-lang/futures-rs/issues/1857
                 // AFAICS there is no way to encode a stream that never terminates.
-                let result = result.expect("result stream terminated");
-                // TODO: What the fucking fuck???? I should have used Perl.
-                println!("{:?}", result);
+                let notif = notif.expect("notification stream terminated");
+                status_tracker.update(notif);
+                status_tracker.repaint().context("error painting status to stdout")?;
             },
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");
-                m.set_revisions([])?;
+                test_manager.set_revisions([])?;
                 break;
             }
         )
     }
-    m.settled().await;
+    test_manager.settled().await;
     Ok(())
 }

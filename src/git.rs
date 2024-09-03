@@ -1,7 +1,7 @@
 use core::fmt;
 use core::fmt::{Debug, Display};
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt as _;
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::Command as SyncCommand;
@@ -12,6 +12,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::{bail, Context};
 use async_stream::try_stream;
+use colored::control::SHOULD_COLORIZE;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
 use log::{debug, error, info};
@@ -24,7 +25,7 @@ use crate::process::CommandExt;
 use crate::process::{OutputExt, SyncCommandExt};
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
-pub struct CommitHash(String);
+pub struct CommitHash(pub String);
 
 impl AsRef<OsStr> for CommitHash {
     fn as_ref(&self) -> &OsStr {
@@ -64,7 +65,9 @@ pub trait Worktree: Debug {
         S: AsRef<OsStr>,
     {
         let mut cmd = Command::new("git");
-        cmd.current_dir(self.path()).args(args);
+        cmd.current_dir(self.path());
+        cmd.args(["-c", &format!("color.ui={}", SHOULD_COLORIZE.should_colorize())]);
+        cmd.args(args);
         cmd
     }
 
@@ -115,6 +118,48 @@ pub trait Worktree: Debug {
                 commit,
                 self.path()
             ))
+    }
+
+    async fn log_graph<S, T>(&self, range_spec: S, format_spec: T) -> anyhow::Result<OsString>
+    where
+        S: AsRef<OsStr>,
+        T: AsRef<OsStr>,
+    {
+        let mut format_arg = OsString::from("--format=");
+        format_arg.push(format_spec.as_ref());
+        let stdout = self
+            .git(["log", "--graph"])
+            .args([&format_arg, range_spec.as_ref()])
+            .execute()
+            .await
+            .context(format!(
+                "getting graph log for {:?} with format {:?}",
+                range_spec.as_ref(),
+                format_spec.as_ref(),
+            ))?
+            .stdout;
+        Ok(OsString::from_vec(stdout))
+    }
+
+    async fn log_n1<S, T>(&self, rev_spec: S, format_spec: T) -> anyhow::Result<OsString>
+    where
+        S: AsRef<OsStr>,
+        T: AsRef<OsStr>,
+    {
+        let mut format_arg = OsString::from("--format=");
+        format_arg.push(format_spec.as_ref());
+        let stdout = self
+            .git(["log", "-n1"])
+            .args([&format_arg, rev_spec.as_ref()])
+            .execute()
+            .await
+            .context(format!(
+                "getting -n1 log for {:?} with format {:?}",
+                rev_spec.as_ref(),
+                format_spec.as_ref(),
+            ))?
+            .stdout;
+        Ok(OsString::from_vec(stdout))
     }
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
@@ -171,6 +216,10 @@ pub trait Worktree: Debug {
         // on the downstream logic as Git works its way through changes.
         Ok(try_stream! {
             let _watcher = watcher; // Capture so it doesn't get dropped
+
+            // Produce an initial update.
+            yield self.rev_list(range_spec).await?;
+
             // Start with an expired timer.
             let mut sleep_fut = pin!(Fuse::terminated());
             loop {
@@ -324,9 +373,25 @@ pub mod test_utils {
                 String::from_utf8(output.stdout).context("reading git rev-parse output")?;
             Ok(Some(CommitHash(out_string.trim().to_owned())))
         }
+
+        async fn merge(
+            &self,
+            parents: &[CommitHash],
+            timestamp: DateTime<Utc>,
+        ) -> anyhow::Result<()> {
+            let ts_is08601 = format!("{}", timestamp.format("%+"));
+            self.git(["merge", "-m", "merge commit"])
+                .args(parents)
+                .env("GIT_AUTHOR_DATE", ts_is08601.clone())
+                .env("GIT_COMMITTER_DATE", ts_is08601)
+                .execute()
+                .await
+                .context("'git commit' failed")?;
+            Ok(())
+        }
     }
 
-    impl<W: Worktree> WorktreeExt for W { }
+    impl<W: Worktree> WorktreeExt for W {}
 }
 
 #[cfg(test)]
