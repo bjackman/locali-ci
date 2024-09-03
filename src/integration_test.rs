@@ -4,7 +4,6 @@ use std::{
     path::Path,
     process::Stdio,
     str::FromStr,
-    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -20,7 +19,7 @@ use test_bin::get_test_bin;
 use test_case::test_case;
 use test_log;
 use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    io::AsyncWriteExt as _,
     process::{Child, Command},
 };
 
@@ -59,7 +58,6 @@ impl ChildExt for Child {
 struct LocalCiChild {
     temp_dir: TempDir,
     child: Child,
-    stderr_buf: Arc<Mutex<String>>,
 }
 
 impl LocalCiChild {
@@ -80,38 +78,16 @@ impl LocalCiChild {
                 "test-worktree-",
             ])
             .stdin(Stdio::piped())
-            .stderr(Stdio::piped())
             .kill_on_drop(true);
         let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
 
-        let mut stderr = child.stderr.take().unwrap();
-        let stderr_buf = Arc::new(Mutex::new(String::new()));
-        let stderr_buf_clone = stderr_buf.clone();
-        tokio::spawn(async move {
-            let mut buffer = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buffer).await.unwrap() {
-                    0 => break, // EOF
-                    n => {
-                        let new_str = String::from_utf8_lossy(&buffer[..n]);
-                        stderr_buf_clone.lock().unwrap().push_str(&new_str);
-                    }
-                }
-            }
-        });
 
         stdin.write_all(config.as_bytes()).await.unwrap();
         Ok(Self {
             temp_dir,
             child,
-            stderr_buf,
         })
-    }
-
-    // Gets all stderr collected so far.
-    fn stderr(&self) -> String {
-        self.stderr_buf.lock().unwrap().clone()
     }
 
     // Returns true if any worktree of this child currently exists.
@@ -138,10 +114,9 @@ impl LocalCiChild {
                             Ok(true)
                         } else {
                             bail!(
-                                "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}, stderr:\n{}",
+                                "test binary failed ({exit_status:?} exit code {:?} exit signal {:?}",
                                 exit_status.code(),
-                                exit_status.signal(),
-                                self.stderr(),
+                                exit_status.signal()
                             )
                         }
                     }
@@ -180,7 +155,7 @@ async fn test_worktree_teardown(test_command: &str) {
 }
 
 fn pid_running(pid: pid_t) -> bool {
-    return Path::new(&format!("/proc/{pid}")).exists();
+    return Path::new(&format!("/proc/{pid}")).exists()
 }
 
 #[test_log::test(tokio::test)]
