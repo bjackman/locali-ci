@@ -475,7 +475,9 @@ impl Display for TestStatus {
 
 #[derive(Debug)]
 pub struct Notification {
+    #[allow(dead_code)]
     pub test_case: TestCase,
+    #[allow(dead_code)]
     pub status: TestStatus,
 }
 
