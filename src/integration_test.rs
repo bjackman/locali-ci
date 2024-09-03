@@ -121,7 +121,7 @@ impl LocalCiChild {
 #[test_case("echo hello world"; "clean worktree")]
 #[test_case("echo hello world > file.txt"; "dirty worktree")]
 #[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
-#[test_log::test(tokio::test)]
+#[tokio::test]
 async fn test_worktree_teardown(test_command: &str) {
     let mut lci = LocalCiChild::new(format!(
         r##"
