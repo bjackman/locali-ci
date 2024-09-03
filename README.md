@@ -1,9 +1,5 @@
 TODOS:
 
- - Still getting some `cargo stress` failures that need to be debugged. I think
-   these are due to the TODO in integration_test.rs about how we reuse the
-   actaul project repo for integration testing, in combination with the notify
-   crate not handling file deletion happening concurrently with setup.
  - Shutdown still does not happen cleanly on my kernel repo. Probably because:
    When you cancel a bunch of jobs, a bunch of not-yet-cancelled jobs also
    suddenly gain their resources and get unblocked and start running. So it looks

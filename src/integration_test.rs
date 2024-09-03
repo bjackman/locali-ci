@@ -22,6 +22,14 @@ use tokio::{
     process::{Child, Command},
 };
 
+use crate::{
+    git::{
+        test_utils::{TempRepo, WorktreeExt as _},
+        Worktree as _,
+    },
+    test_utils::some_time,
+};
+
 fn wait_for<F>(mut predicate: F, timeout: Duration) -> anyhow::Result<()>
 where
     F: FnMut() -> anyhow::Result<bool>,
@@ -57,15 +65,18 @@ impl ChildExt for Child {
 struct LocalCiChild {
     temp_dir: TempDir,
     child: Child,
+    _repo: TempRepo,
 }
 
 impl LocalCiChild {
     async fn new(config: String) -> Result<Self> {
+        let repo = TempRepo::new().await.unwrap();
+        for _ in 0..5 {
+            repo.commit("hello", some_time()).await.unwrap();
+        }
+
         let temp_dir = TempDir::new()?;
         let mut cmd: Command = get_test_bin("local-ci").into();
-        // TODO: This uses this code's repo as a test input, so maybe we can break
-        // this test by just commiting changes. Should probably have a special test
-        // repo as input.
         let cmd = cmd
             .args([
                 "HEAD^",
@@ -75,6 +86,8 @@ impl LocalCiChild {
                 temp_dir.path().to_str().unwrap(),
                 "--worktree-prefix",
                 "test-worktree-",
+                "--repo",
+                repo.path().to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
             .kill_on_drop(true);
@@ -82,7 +95,7 @@ impl LocalCiChild {
         let mut stdin = child.stdin.take().unwrap();
 
         stdin.write_all(config.as_bytes()).await.unwrap();
-        Ok(Self { temp_dir, child })
+        Ok(Self { temp_dir, child, _repo: repo })
     }
 
     // Returns true if any worktree of this child currently exists.
