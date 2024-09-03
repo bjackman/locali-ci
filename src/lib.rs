@@ -13,20 +13,13 @@ use tokio::{select, signal};
 use crate::git::Worktree;
 
 mod config;
-mod git;
+mod git; // Public for use by integration tests
 mod process;
 mod resource;
 mod test;
 mod result;
 
-#[cfg(test)]
-mod test_utils;
-
-// You can't import code from your own crate if you have your integration tests
-// in a separate crate. But we want to use our git and process utilitities in
-// the tests, so we just treat them as normal unit tests.
-#[cfg(test)]
-mod integration_test;
+pub mod test_utils;
 
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
@@ -54,8 +47,7 @@ struct Args {
     base: String,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     env_logger::init();
