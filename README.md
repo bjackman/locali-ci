@@ -1,5 +1,7 @@
 TODOS:
 
+ - `Manager::set_revisions` urgently needs refactoring.
+ - Need tests for cancellation of not-yet-started jobs.
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT.
  - Bug: Sometimes "Cancelled" test statuses get cached.

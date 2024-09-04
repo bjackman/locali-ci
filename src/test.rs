@@ -302,31 +302,34 @@ impl<W: Worktree> Manager<W> {
 
                 let pools = self.resource_pools.clone();
                 tokio::spawn(async move {
-                    let resources = pools.get(job.test.needs_resource_idxs.clone()).await;
-                    tx.send(Arc::new(Notification {
-                        test_case: test_case.clone(),
-                        status: TestStatus::Started,
-                    }))
-                    .or_log_error("Dropping a notification");
-                    let worktree = resources.obj();
-                    let result = job.run(worktree).await;
-                    let status = match result {
-                        Err(ref err) => TestStatus::Error(err.to_string()),
-                        Ok(None) => TestStatus::Canceled,
-                        Ok(Some(exit_code)) => TestStatus::Completed(exit_code),
-                    };
-                    job.output
-                        .set_status(&status)
-                        .or_log_error("couldn't save job status");
-                    // Note: must not drop test until the send is complete, or we would break
-                    // settled().
-                    let _ = tx.send(Arc::new(Notification {
-                        test_case,
-                        status,
-                    }))
-                    .map_err(|e|
-                        error!("Dropping a result ({result:?}. Seems nobody is listening to Manager::results(): {}", e)
-                    );
+                    select!(
+                            _ = job.ct.cancelled() => (),
+                            resources = pools.get(job.test.needs_resource_idxs.clone()) =>  {
+                        tx.send(Arc::new(Notification {
+                            test_case: test_case.clone(),
+                            status: TestStatus::Started,
+                        }))
+                        .or_log_error("Dropping a notification");
+                        let worktree = resources.obj();
+                        let result = job.run(worktree).await;
+                        let status = match result {
+                            Err(ref err) => TestStatus::Error(err.to_string()),
+                            Ok(None) => TestStatus::Canceled,
+                            Ok(Some(exit_code)) => TestStatus::Completed(exit_code),
+                        };
+                        job.output
+                            .set_status(&status)
+                            .or_log_error("couldn't save job status");
+                        // Note: must not drop test until the send is complete, or we would break
+                        // settled().
+                        let _ = tx.send(Arc::new(Notification {
+                            test_case,
+                            status,
+                        }))
+                        .map_err(|e|
+                            error!("Dropping a result ({result:?}. Seems nobody is listening to Manager::results(): {}", e)
+                        );
+                    });
                 });
             }
         }
