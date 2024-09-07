@@ -10,11 +10,11 @@ command = "cargo fmt --check"
 name = "build"
 # Agh dunno if this is enough coverage.
 # Ideally just want 'cargo check' with https://github.com/rust-lang/cargo/issues/8424
-command = "cargo rustc -- -D warnings"
+command = "cargo rustc --target-dir $LCI_ORIGIN/target -- -D warnings"
 
 [[tests]]
 name = "test"
-command = "cargo test"
+command = "cargo test --target-dir $LCI_ORIGIN/target"
 
 [[tests]]
 name = "clippy"
