@@ -158,6 +158,7 @@ impl<W> ManagerBuilder<W> {
             tests: self.tests.into_iter().map(Arc::new).collect(),
             resource_pools: Arc::new(Pools::new(self.token_pool_sizes, worktrees)),
             result_db: Database::create_or_open_user()?,
+            origin_path: Arc::new(self.repo.path().to_owned()),
         })
     }
 }
@@ -173,6 +174,8 @@ pub struct Manager {
     // will be referenced by Test::needs_resource_idx values.
     resource_pools: Arc<Pools<TempWorktree>>,
     result_db: Database,
+    // Path of original repo.
+    origin_path: Arc<PathBuf>,
 }
 
 impl Manager {
@@ -227,6 +230,7 @@ impl Manager {
                     rev: rev.to_owned(),
                     _token: self.job_counter.get(),
                     output: self.result_db.job_output(&rev, &test.name)?,
+                    origin_path: self.origin_path.clone(),
                 };
                 let test_case = TestCase {
                     hash: rev.to_owned(),
@@ -361,6 +365,8 @@ struct TestJob {
     rev: CommitHash,
     _token: JobToken,
     output: CommitOutput,
+    // Path of original repo we are testing (not our worktree).
+    origin_path: Arc<PathBuf>,
 }
 
 impl TestJob {
@@ -379,6 +385,7 @@ impl TestJob {
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
             .env("LCI_COMMIT", self.rev.to_string())
+            .env("LCI_ORIGIN", self.origin_path.as_os_str())
             // Killing on drop is not what we want. We really want this job to
             // get awaited so that the worktree can be safely reused and we can
             // be sure the test script has cleaned up after itself. But, in case
@@ -489,7 +496,7 @@ pub struct Notification {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, path::PathBuf, thread::panicking, time::Duration};
+    use std::{collections::VecDeque, fs, path::PathBuf, thread::panicking, time::Duration};
 
     use anyhow::bail;
     use future::select_all;
@@ -950,6 +957,47 @@ mod tests {
             _ = select_all(start_futs) => panic!("extra jobs started, resource limits not respected"),
         )
     }
+
+    #[test_log::test(tokio::test)]
+    async fn test_job_env() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo = Arc::new(TempRepo::new().await.unwrap());
+        let hash = repo
+            .commit("hello,", some_time())
+            .await
+            .expect("couldn't create test commit");
+        let mut m = Manager::builder(
+            repo.clone(),
+            [Test {
+                name: "my_test".to_owned(),
+                program: OsString::from("bash"),
+                args: vec![
+                    "-c".into(),
+                    OsString::from(format!(
+                        "echo $LCI_ORIGIN >> {:?}/lci_origin",
+                        temp_dir.path()
+                    )),
+                ],
+                needs_resource_idxs: vec![],
+                shutdown_grace_period: Duration::from_secs(5),
+            }],
+            [],
+        )
+        .build()
+        .await
+        .expect("couldn't set up manager");
+
+        m.set_revisions([hash]).expect("set_revisions failed");
+        m.settled().await;
+
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("lci_origin"))
+                .expect("couldn't read lci_origin from test script")
+                .trim(),
+            repo.path().to_string_lossy()
+        );
+    }
+
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
     // to do with panic and drop order I think.
 }
