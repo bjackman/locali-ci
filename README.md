@@ -1,14 +1,6 @@
 TODOS:
 
- - Shutdown still does not happen cleanly on my kernel repo. Probably because:
-   When you cancel a bunch of jobs, a bunch of not-yet-cancelled jobs also
-   suddenly gain their resources and get unblocked and start running. So it looks
-   like we just need to respect cancellation more properly. In particular
-   cancelled jobs still take owenership of the worktree, check out their revision,
-   and spawn their child process before noticing that they are cancelled.
-   This also seems to mean that if you momentarily create a very large number of
-   to-test commits, all of them get enqueued and we need to check out every
-   single commit before moving ahead.
+ - Shutdown still does not happen cleanly on my kernel repo.
  - Bug: I don't see any "Started" statuses in my status render. Not sure if this
    is a status tracking bug or if the system is stuck somehow.
  - Bug: Test/fix behaviour when range under test is empty.
