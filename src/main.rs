@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
                 // Paying for a pointless clone here so we can do set_revisions
                 // (mostly just kicks off background stuff) before awaiting the
                 // status tracker reset (does synchronhous work).
-                test_manager.set_revisions(revs.clone())?;
+                test_manager.set_revisions(revs.clone()).context("setting revisions to test")?;
                 status_tracker.set_range(&range_spec).await.context("resetting status tracker")?;
                 status_tracker.repaint().context("error painting status to stdout")?;
             },
@@ -120,7 +120,7 @@ async fn main() -> anyhow::Result<()> {
             },
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");
-                test_manager.set_revisions([])?;
+                test_manager.set_revisions([]).context("cancelling tests")?;
                 break;
             }
         )
