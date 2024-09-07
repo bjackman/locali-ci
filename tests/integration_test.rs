@@ -94,7 +94,8 @@ impl LocalCiChild {
                 .args(&["commit", "--allow-empty", "-m", "lohs geht's buebe"])
                 .status()
                 .await?
-                .check_exit_ok().context("git commit")?;
+                .check_exit_ok()
+                .context("git commit")?;
         }
 
         let mut cmd: Command = get_test_bin("local-ci").into();
