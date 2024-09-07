@@ -266,7 +266,6 @@ mod tests {
     use core::str;
     use std::{io::BufWriter, sync::Arc};
 
-    use colored::control::SHOULD_COLORIZE;
     use googletest::{expect_that, prelude::eq};
 
     use crate::{
@@ -276,26 +275,9 @@ mod tests {
 
     use super::*;
 
-    struct DisableColorize {}
-
-    impl DisableColorize {
-        fn new() -> Self {
-            SHOULD_COLORIZE.set_override(false);
-            Self {}
-        }
-    }
-
-    impl Drop for DisableColorize {
-        fn drop(&mut self) {
-            SHOULD_COLORIZE.unset_override();
-        }
-    }
-
     #[googletest::test]
     #[test_log::test(tokio::test)]
     async fn output_buffer_smoke() {
-        let _disable_colorize = DisableColorize::new();
-
         let repo = Arc::new(TempRepo::new().await.unwrap());
         repo.commit("1", some_time()).await.unwrap();
         let hash2 = repo.commit("2", some_time()).await.unwrap();
@@ -326,7 +308,13 @@ mod tests {
             .expect("OutputBuffer::render failed");
 
         expect_that!(
-            str::from_utf8(&buf.into_inner().unwrap()).unwrap(),
+            // The colored crate does not have any useful way to disable it from
+            // this test code, only globally. This clashes with parallel testing.
+            // At first I thought about just having tests take a global lock but
+            // then realied that if one test failed, the other would panic
+            // holding the lock. Also parallelism is nice. So, we just ignore
+            // the color.
+            *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
             eq("* 08e80af 3\n\
                 | my_test1: Enqueued my_test2: success \n\
                 * b29043f 2\n".to_owned() +
@@ -336,8 +324,6 @@ mod tests {
     #[googletest::test]
     #[test_log::test(tokio::test)]
     async fn output_buffer_octopus() {
-        let _disable_colorize = DisableColorize::new();
-
         let repo = Arc::new(TempRepo::new().await.unwrap());
         let base_hash = repo.commit("base", some_time()).await.unwrap();
         repo.commit("join", some_time()).await.unwrap();
@@ -376,7 +362,7 @@ mod tests {
         // Also note it's a kinda weird input because we haven't provided any
         // statuses all of the commits (this does momentarily happen IRL).
         expect_that!(
-            str::from_utf8(&buf.into_inner().unwrap()).unwrap(),
+            *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
             eq("*-.   05d10f7 merge commit\n\
                 |\\ \\  \n\
                 | | | \n\
