@@ -24,12 +24,6 @@ mod test;
 #[cfg(test)]
 mod test_utils;
 
-// You can't import code from your own crate if you have your integration tests
-// in a separate crate. But we want to use our git and process utilitities in
-// the tests, so we just treat them as normal unit tests.
-#[cfg(test)]
-mod integration_test;
-
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
