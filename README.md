@@ -1,5 +1,9 @@
 TODOS:
 
+ - integration_test fails if you haven't already built the binary, because the
+   test_bin package I'm using assumes it's already been built, because it
+   assumes that it's being run as an integration test (in which case Cargo would
+   take care of building the binary).
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT.
  - Bug: I don't see any "Started" statuses in my status render. Not sure if this
