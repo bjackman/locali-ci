@@ -1,6 +1,7 @@
 TODOS:
 
- - Shutdown still does not happen cleanly on my kernel repo.
+ - Shutdown still does not happen cleanly on my kernel repo. At least one reason
+   for this seems to be that child processes inherit the SIGINT.
  - Bug: I don't see any "Started" statuses in my status render. Not sure if this
    is a status tracking bug or if the system is stuck somehow.
  - Bug: Test/fix behaviour when range under test is empty.
