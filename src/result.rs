@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 
 use crate::{git::CommitHash, test::ExitCode};
 
@@ -33,46 +33,65 @@ impl Database {
         )
     }
 
+    // Prepare to create the output directory for a job output, but don't actually create it yet.
+    // It's created once you use one of the methods of CommitOutput for writing data.
     pub fn job_output(&self, hash: &CommitHash, test_name: &str) -> anyhow::Result<CommitOutput> {
-        CommitOutput::create(&self.base_dir.join(hash.as_ref()).join(test_name))
+        CommitOutput::new(self.base_dir.join(hash.as_ref()).join(test_name))
     }
 }
 
 // Output for an individual commit.
 pub struct CommitOutput {
-    stdout: Option<File>,
-    stderr: Option<File>,
-    exit_code_path: PathBuf,
+    base_dir: PathBuf,
+    stdout_opened: bool,
+    stderr_opened: bool,
+    exit_code_written: bool,
 }
 
 impl CommitOutput {
-    pub fn create(base_dir: &Path) -> anyhow::Result<Self> {
-        create_dir_all(base_dir).context(format!(
-            "creating commit result dir at {}",
-            base_dir.display()
-        ))?;
+    pub fn new(base_dir: PathBuf) -> anyhow::Result<Self> {
         Ok(Self {
-            stdout: Some(File::create(base_dir.join("stdout.txt"))?),
-            stderr: Some(File::create(base_dir.join("stderr.txt"))?),
-            exit_code_path: base_dir.join("exit_code.txt"),
+            base_dir,
+            stdout_opened: false,
+            stderr_opened: false,
+            exit_code_written: false,
         })
     }
 
-    // Returns a value just once.
-    pub fn stdout(&mut self) -> Option<File> {
-        self.stdout.take()
+    // Create and return base directory
+    fn get_base_dir(&self) -> Result<&Path> {
+        create_dir_all(&self.base_dir).context(format!(
+            "creating commit result dir at {}",
+            self.base_dir.display()
+        ))?;
+        Ok(&self.base_dir)
     }
 
-    // Returns a value just once.
-    pub fn stderr(&mut self) -> Option<File> {
-        self.stderr.take()
+    // Panics if called more than once.
+    pub fn stdout(&mut self) -> Result<File> {
+        assert!(!self.stdout_opened);
+        self.stdout_opened = true;
+        Ok(File::create(self.get_base_dir()?.join("stdout.txt"))?)
+    }
+
+    // Panics if called more than once.
+    pub fn stderr(&mut self) -> Result<File> {
+        assert!(!self.stderr_opened);
+        self.stderr_opened = true;
+        Ok(File::create(self.get_base_dir()?.join("stderr.txt"))?)
     }
 
     // Note this is called "exitcode" instead of "returncode" because it really
     // only gets set when the child process exits.
     // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
-    pub fn set_exit_code(&self, exit_code: ExitCode) -> anyhow::Result<()> {
-        Ok(fs::write(&self.exit_code_path, format!("{}", exit_code))?)
+    // Panics if called more than once.
+    pub fn set_exit_code(&mut self, exit_code: ExitCode) -> anyhow::Result<()> {
+        assert!(!self.exit_code_written);
+        self.exit_code_written = true;
+        Ok(fs::write(
+            self.get_base_dir()?.join("exit_code.txt"),
+            format!("{}", exit_code),
+        )?)
     }
 }
 
