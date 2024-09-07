@@ -3,7 +3,10 @@ use std::{path::Path, time::Duration};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
-use tokio::{select, time::{interval, sleep}};
+use tokio::{
+    select,
+    time::{interval, sleep},
+};
 
 pub async fn timeout_5s<F, T>(fut: F) -> anyhow::Result<T>
 where

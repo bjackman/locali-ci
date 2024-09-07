@@ -2,7 +2,6 @@ use anyhow::Context;
 use clap::Parser as _;
 use futures::StreamExt;
 use log::info;
-use tokio_util::sync::CancellationToken;
 use std::ffi::OsString;
 use std::io::stdout;
 use std::path::PathBuf;
@@ -10,6 +9,7 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::{env, str};
 use tokio::{select, signal};
+use tokio_util::sync::CancellationToken;
 
 use crate::git::Worktree;
 
@@ -17,9 +17,9 @@ mod config;
 mod git;
 mod process;
 mod resource;
+mod result;
 mod status;
 mod test;
-mod result;
 
 #[cfg(test)]
 mod test_utils;

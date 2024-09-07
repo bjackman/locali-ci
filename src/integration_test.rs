@@ -95,7 +95,11 @@ impl LocalCiChild {
         let mut stdin = child.stdin.take().unwrap();
 
         stdin.write_all(config.as_bytes()).await.unwrap();
-        Ok(Self { temp_dir, child, _repo: repo })
+        Ok(Self {
+            temp_dir,
+            child,
+            _repo: repo,
+        })
     }
 
     // Returns true if any worktree of this child currently exists.

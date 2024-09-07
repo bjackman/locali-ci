@@ -317,8 +317,10 @@ mod tests {
             *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
             eq("* 08e80af 3\n\
                 | my_test1: Enqueued my_test2: success \n\
-                * b29043f 2\n".to_owned() +
-                "  my_test1: oh no my_test2: Started \n\n"));
+                * b29043f 2\n"
+                .to_owned()
+                + "  my_test1: oh no my_test2: Started \n\n")
+        );
     }
 
     #[googletest::test]
@@ -332,7 +334,9 @@ mod tests {
         let hash2 = repo.commit("2", some_time()).await.unwrap();
         repo.checkout(&base_hash).await.unwrap();
         let hash3 = repo.commit("3", some_time()).await.unwrap();
-        repo.merge(&[hash1, hash2.clone(), hash3.clone()], some_time()).await.unwrap();
+        repo.merge(&[hash1, hash2.clone(), hash3.clone()], some_time())
+            .await
+            .unwrap();
 
         let ob = OutputBuffer::new(&repo, format!("{base_hash}..HEAD"), "%h %s")
             .await
@@ -372,7 +376,9 @@ mod tests {
                 | | \n\
                 | * 7de308a join\n\
                 |   \n\
-                * 02ad53b 3\n".to_owned() +
-                "  my_test1: Enqueued my_test2: success \n\n"));
+                * 02ad53b 3\n"
+                .to_owned()
+                + "  my_test1: Enqueued my_test2: success \n\n")
+        );
     }
 }

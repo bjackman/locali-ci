@@ -66,7 +66,10 @@ pub trait Worktree: Debug {
     {
         let mut cmd = Command::new("git");
         cmd.current_dir(self.path());
-        cmd.args(["-c", &format!("color.ui={}", SHOULD_COLORIZE.should_colorize())]);
+        cmd.args([
+            "-c",
+            &format!("color.ui={}", SHOULD_COLORIZE.should_colorize()),
+        ]);
         cmd.args(args);
         cmd
     }
@@ -332,7 +335,11 @@ pub mod test_utils {
     pub trait WorktreeExt: Worktree {
         // timestamp is used for both committer and author. This ought to make
         // commit hashes deterministic.
-        async fn commit<S>(&self, message: S, timestamp: DateTime<Utc>) -> anyhow::Result<CommitHash>
+        async fn commit<S>(
+            &self,
+            message: S,
+            timestamp: DateTime<Utc>,
+        ) -> anyhow::Result<CommitHash>
         where
             S: AsRef<OsStr>,
         {
