@@ -379,6 +379,12 @@ impl TestJob {
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
             .env("LCI_COMMIT", self.rev.to_string())
+            // Killing on drop is not what we want. We really want this job to
+            // get awaited so that the worktree can be safely reused and we can
+            // be sure the test script has cleaned up after itself. But, in case
+            // local-ci shuts down unexpectedly we'll try to at least limit the
+            // damage.
+            .kill_on_drop(true)
             .spawn()
             .context("spawning test command")?;
         // lol wat?
