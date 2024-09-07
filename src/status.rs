@@ -264,7 +264,7 @@ impl OutputBuffer {
                     }
                 }
             }
-            output.write_all(&[b'\n'])?;
+            output.write_all(b"\n")?;
         }
         Ok(self.lines.len())
     }
