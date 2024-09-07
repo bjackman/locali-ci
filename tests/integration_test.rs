@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::Path,
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -59,9 +59,44 @@ struct LocalCiChild {
     child: Child,
 }
 
+trait ExitStatusExt {
+    fn check_exit_ok(&self) -> anyhow::Result<()>;
+}
+
+impl ExitStatusExt for ExitStatus {
+    fn check_exit_ok(&self) -> anyhow::Result<()> {
+        if self.success() {
+            Ok(())
+        } else {
+            bail!("command failed: {self:?}")
+        }
+    }
+}
+
 impl LocalCiChild {
     async fn new(config: String) -> Result<Self> {
         let temp_dir = TempDir::new()?;
+
+        Command::new("git")
+            .stderr(Stdio::null())
+            .stderr(Stdio::null())
+            .arg("init")
+            .current_dir(temp_dir.path())
+            .status()
+            .await?
+            .check_exit_ok()
+            .context("git init")?;
+        for _ in 0..5 {
+            Command::new("git")
+                .stderr(Stdio::null())
+                .stderr(Stdio::null())
+                .current_dir(temp_dir.path())
+                .args(&["commit", "--allow-empty", "-m", "lohs geht's buebe"])
+                .status()
+                .await?
+                .check_exit_ok().context("git commit")?;
+        }
+
         let mut cmd: Command = get_test_bin("local-ci").into();
         // TODO: This uses this code's repo as a test input, so maybe we can break
         // this test by just commiting changes. Should probably have a special test

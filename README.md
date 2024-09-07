@@ -1,15 +1,7 @@
 TODOS:
 
- - integration_test fails if you haven't already built the binary, because the
-   test_bin package I'm using assumes it's already been built, because it
-   assumes that it's being run as an integration test (in which case Cargo would
-   take care of building the binary).
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT.
- - Still getting some `cargo stress` failures that need to be debugged. I think
-   these are due to the TODO in integration_test.rs about how we reuse the
-   actaul project repo for integration testing, in combination with the notify
-   crate not handling file deletion happening concurrently with setup.
  - Bug: I don't see any "Started" statuses in my status render. Not sure if this
    is a status tracking bug or if the system is stuck somehow.
  - Bug: Status output doesn't seem to get updated when tested range shrinks?
