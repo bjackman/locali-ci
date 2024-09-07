@@ -974,7 +974,7 @@ mod tests {
                 args: vec![
                     "-c".into(),
                     OsString::from(format!(
-                        "echo $LCI_ORIGIN >> {:?}/lci_origin",
+                        "echo $LCI_ORIGIN >> {0:?}/lci_origin && echo $LCI_COMMIT >> {0:?}/lci_commit",
                         temp_dir.path()
                     )),
                 ],
@@ -987,7 +987,8 @@ mod tests {
         .await
         .expect("couldn't set up manager");
 
-        m.set_revisions([hash]).expect("set_revisions failed");
+        m.set_revisions([hash.clone()])
+            .expect("set_revisions failed");
         m.settled().await;
 
         assert_eq!(
@@ -995,6 +996,15 @@ mod tests {
                 .expect("couldn't read lci_origin from test script")
                 .trim(),
             repo.path().to_string_lossy()
+        );
+        assert_eq!(
+            CommitHash(
+                fs::read_to_string(temp_dir.path().join("lci_commit"))
+                    .expect("couldn't read lci_origin from test script")
+                    .trim()
+                    .to_owned()
+            ),
+            hash,
         );
     }
 
