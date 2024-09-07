@@ -132,6 +132,7 @@ impl OutputBuffer {
             // OsStr doesn't have a proper API, luckily we can expect utf-8.
             .into_string()
             .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?;
+        let graph_buf = graph_buf.trim();
 
         // Each chunk is a Vec of lines.
         let mut cur_chunk = Vec::<&str>::new();
@@ -143,7 +144,9 @@ impl OutputBuffer {
             }
             cur_chunk.push(line);
         }
-        chunks.push(cur_chunk);
+        if !cur_chunk.is_empty() {
+            chunks.push(cur_chunk);
+        }
 
         let mut lines = Vec::new();
         let mut status_commits = HashMap::new();
@@ -317,9 +320,8 @@ mod tests {
             *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
             eq("* 08e80af 3\n\
                 | my_test1: Enqueued my_test2: success \n\
-                * b29043f 2\n"
-                .to_owned()
-                + "  my_test1: oh no my_test2: Started \n\n")
+                * b29043f 2\n\
+                | my_test1: oh no my_test2: Started \n")
         );
     }
 
@@ -376,9 +378,8 @@ mod tests {
                 | | \n\
                 | * 7de308a join\n\
                 |   \n\
-                * 02ad53b 3\n"
-                .to_owned()
-                + "  my_test1: Enqueued my_test2: success \n\n")
+                * 02ad53b 3\n\
+                | my_test1: Enqueued my_test2: success \n")
         );
     }
 }
