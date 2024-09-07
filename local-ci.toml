@@ -1,0 +1,17 @@
+# local-ci config for local-ci itself
+
+num_worktrees = 4
+
+[[tests]]
+name = "fmt"
+command = "cargo fmt --check"
+
+[[tests]]
+name = "build"
+# Agh dunno if this is enough coverage.
+# Ideally just want 'cargo check' with https://github.com/rust-lang/cargo/issues/8424
+command = "cargo rustc -- -D warnings"
+
+[[tests]]
+name = "test"
+command = "cargo test"
