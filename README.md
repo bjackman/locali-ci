@@ -4,9 +4,6 @@ TODOS:
    for this seems to be that child processes inherit the SIGINT.
  - Bug: I don't see any "Started" statuses in my status render. Not sure if this
    is a status tracking bug or if the system is stuck somehow.
- - Bug: Test/fix behaviour when range under test is empty.
- - Bug: Status output doesn't seem to get updated when tested range shrinks?
- - Bug: Test/fix behaviour when range under test is empty.
  - Bug: Status output doesn't seem to get updated when tested range shrinks?
  - Gather overall status and present it readably somehow to the user.
    - Present status with git DAG view.

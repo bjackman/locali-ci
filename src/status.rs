@@ -142,7 +142,9 @@ impl OutputBuffer {
             if line.contains('*') && !cur_chunk.is_empty() {
                 chunks.push(mem::take(&mut cur_chunk));
             }
-            cur_chunk.push(line);
+            if !line.is_empty() {
+                cur_chunk.push(line);
+            }
         }
         if !cur_chunk.is_empty() {
             chunks.push(cur_chunk);
@@ -232,6 +234,10 @@ impl OutputBuffer {
         output: &mut impl Write,
         statuses: &HashMap<CommitHash, HashMap<String, TestStatus>>,
     ) -> anyhow::Result<usize> {
+        if self.lines.is_empty() {
+            output.write_all(b"[range empty]\n")?;
+            return Ok(1);
+        }
         for (i, line) in self.lines.iter().enumerate() {
             output.write_all(line.as_bytes())?;
             if let Some(hash) = self.status_commits.get(&i) {
@@ -380,6 +386,51 @@ mod tests {
                 |   \n\
                 * 02ad53b 3\n\
                 | my_test1: Enqueued my_test2: success \n")
+        );
+    }
+
+    #[googletest::test]
+    #[test_log::test(tokio::test)]
+    async fn output_buffer_empty() {
+        let repo = Arc::new(TempRepo::new().await.unwrap());
+        let base_hash = repo.commit("base", some_time()).await.unwrap();
+        repo.commit("join", some_time()).await.unwrap();
+        let hash1 = repo.commit("1", some_time()).await.unwrap();
+        repo.checkout(&base_hash).await.unwrap();
+        let hash2 = repo.commit("2", some_time()).await.unwrap();
+        repo.checkout(&base_hash).await.unwrap();
+        let hash3 = repo.commit("3", some_time()).await.unwrap();
+        repo.merge(&[hash1, hash2.clone(), hash3.clone()], some_time())
+            .await
+            .unwrap();
+
+        let ob = OutputBuffer::new(&repo, format!("{base_hash}..{base_hash}"), "%h %s")
+            .await
+            .expect("failed to build OutputBuffer");
+        let statuses = HashMap::from([
+            (
+                hash3,
+                HashMap::from([
+                    ("my_test1".to_owned(), TestStatus::Enqueued),
+                    ("my_test2".to_owned(), TestStatus::Completed(0)),
+                ]),
+            ),
+            (
+                hash2,
+                HashMap::from([
+                    ("my_test1".to_owned(), TestStatus::Error("oh no".to_owned())),
+                    ("my_test2".to_owned(), TestStatus::Started),
+                ]),
+            ),
+        ]);
+
+        let mut buf = BufWriter::new(Vec::new());
+        ob.render(&mut buf, &statuses)
+            .expect("OutputBuffer::render failed");
+
+        expect_that!(
+            *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
+            eq("[range empty]\n".to_owned())
         );
     }
 }
