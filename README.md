@@ -2,6 +2,8 @@ TODOS:
 
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT.
+ - Bug: Sometimes "Cancelled" test statuses get cached.
+ - Bug: SIGINT from local-ci shutdown gets cached.
  - Bug: I don't see any "Started" statuses in my status render. Not sure if this
    is a status tracking bug or if the system is stuck somehow.
  - Bug: Status output doesn't seem to get updated when tested range shrinks?

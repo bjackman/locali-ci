@@ -1,12 +1,12 @@
 use std::{
-    ffi::OsStr,
     fs::{self, create_dir_all, File},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
 
-use crate::{git::CommitHash, test::ExitCode};
+use crate::git::Hash;
+use crate::test::TestStatus;
 
 // Result database similar to the design described in
 // https://github.com/bjackman/git-brisect?tab=readme-ov-file#the-result-directory
@@ -34,28 +34,54 @@ impl Database {
         )
     }
 
+    fn result_path(&self, hash: &Hash, test_name: impl Into<String>) -> PathBuf {
+        self.base_dir.join(hash.as_ref()).join(test_name.into())
+    }
+
+    pub fn cached_result(
+        &self,
+        hash: &Hash,
+        test_name: impl Into<String>,
+    ) -> Result<Option<TestStatus>> {
+        let result_path = self.result_path(hash, test_name).join("result.json");
+        if result_path.exists() {
+            Ok(Some(
+                serde_json::from_str(
+                    &fs::read_to_string(result_path).context("reading result JSON")?,
+                )
+                .context("parsing result JSON")?,
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
     // Prepare to create the output directory for a job output, but don't actually create it yet.
     // It's created once you use one of the methods of CommitOutput for writing data.
-    pub fn job_output(&self, hash: &CommitHash, test_name: &str) -> anyhow::Result<CommitOutput> {
-        CommitOutput::new(self.base_dir.join::<&OsStr>(hash.as_ref()).join(test_name))
+    pub fn create_output(
+        &self,
+        hash: &Hash,
+        test_name: impl Into<String>,
+    ) -> anyhow::Result<TestCaseOutput> {
+        TestCaseOutput::new(self.result_path(hash, test_name))
     }
 }
 
 // Output for an individual commit.
-pub struct CommitOutput {
+pub struct TestCaseOutput {
     base_dir: PathBuf,
     stdout_opened: bool,
     stderr_opened: bool,
-    exit_code_written: bool,
+    status_written: bool,
 }
 
-impl CommitOutput {
+impl TestCaseOutput {
     pub fn new(base_dir: PathBuf) -> anyhow::Result<Self> {
         Ok(Self {
             base_dir,
             stdout_opened: false,
             stderr_opened: false,
-            exit_code_written: false,
+            status_written: false,
         })
     }
 
@@ -86,12 +112,12 @@ impl CommitOutput {
     // only gets set when the child process exits.
     // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
     // Panics if called more than once.
-    pub fn set_exit_code(&mut self, exit_code: ExitCode) -> anyhow::Result<()> {
-        assert!(!self.exit_code_written);
-        self.exit_code_written = true;
+    pub fn set_status(&mut self, status: &TestStatus) -> anyhow::Result<()> {
+        assert!(!self.status_written);
+        self.status_written = true;
         Ok(fs::write(
-            self.get_base_dir()?.join("exit_code.txt"),
-            format!("{}", exit_code),
+            self.get_base_dir()?.join("result.json"),
+            serde_json::to_vec(status).expect("failed to serialize TestStatus"),
         )?)
     }
 }

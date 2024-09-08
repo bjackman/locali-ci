@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::{
     git::{self, PersistentWorktree},
     result::Database,
-    test,
+    test::{self, CachePolicy},
 };
 
 #[derive(Deserialize, Debug)]
@@ -76,6 +76,16 @@ pub struct Test {
     /// the overall shutdown of local-ci so do not set this to longer than you are
     /// willing to wait when you terminate this program.
     shutdown_grace_period_s: u64,
+    #[serde(default = "default_cache_policy")]
+    cache: CachePolicy,
+}
+
+fn default_cache_policy() -> CachePolicy {
+    // Hard to choose a default here. Rationale for this choice: It's weird not
+    // to want any caching at all. Almost all of the time you want ByTree, but
+    // ByCommit will give you 80% of the value, and lots of people don't think
+    // about the difference between tree and commit anyway.
+    CachePolicy::ByCommit
 }
 
 fn default_shutdown_grace_period() -> u64 {
@@ -132,6 +142,7 @@ pub fn manager_builder(
                 args: t.command.args(),
                 needs_resource_idxs,
                 shutdown_grace_period: Duration::from_secs(t.shutdown_grace_period_s),
+                cache_policy: t.cache,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;

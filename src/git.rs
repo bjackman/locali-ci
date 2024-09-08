@@ -97,7 +97,6 @@ impl Display for CommitHash {
 pub struct TreeHash(Hash);
 
 impl TreeHash {
-    #[expect(dead_code)]
     pub fn new(s: impl Into<String>) -> Self {
         Self(Hash::new(s))
     }
@@ -259,6 +258,16 @@ pub trait Worktree: Debug {
             ))?
             .stdout;
         Ok(OsString::from_vec(stdout))
+    }
+
+    async fn commit_tree(&self, hash: CommitHash) -> anyhow::Result<TreeHash> {
+        // Not sure why Git has such a weird interface for this.
+        Ok(TreeHash::new(
+            self.log_n1(hash, "%T")
+                .await?
+                .into_string()
+                .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?,
+        ))
     }
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event

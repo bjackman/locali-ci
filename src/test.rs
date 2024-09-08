@@ -21,6 +21,8 @@ use log::warn;
 use nix::sys::signal::kill;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::process::Command;
 use tokio::select;
 use tokio::sync::broadcast;
@@ -29,11 +31,11 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use crate::git::TempWorktree;
-use crate::git::{CommitHash, Worktree};
+use crate::git::{CommitHash, Hash, Worktree};
 use crate::process::OutputExt;
 use crate::resource::Pools;
-use crate::result::CommitOutput;
 use crate::result::Database;
+use crate::result::TestCaseOutput;
 
 pub trait ResultExt {
     // Log an error if it occurs, prefixed with s, otherwise return nothing.
@@ -51,6 +53,14 @@ where
     }
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum CachePolicy {
+    NoCaching,
+    ByCommit,
+    ByTree,
+}
+
 // A test task that will need to be repeated for each commit.
 pub struct Test {
     pub name: String,
@@ -60,6 +70,7 @@ pub struct Test {
     // a resource-token before it can begin.
     pub needs_resource_idxs: Vec<usize>,
     pub shutdown_grace_period: Duration,
+    pub cache_policy: CachePolicy,
 }
 
 impl Test {
@@ -122,7 +133,7 @@ impl<W> ManagerBuilder<W> {
     // this, but the solution would be to create the worktrees ondemand, when we have a revision we
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
-    pub async fn build(self) -> anyhow::Result<Manager>
+    pub async fn build(self) -> anyhow::Result<Manager<W>>
     where
         // We need to specify 'static here. Just because we have an Arc over the
         // repo that doesn't mean it automatically satisfies 'static:
@@ -152,19 +163,21 @@ impl<W> ManagerBuilder<W> {
         // probably doesn't handle very gracefully. We should instead just block the sender.
         let (result_tx, _) = broadcast::channel(4096);
         Ok(Manager {
+            origin_path: Arc::new(self.repo.path().to_owned()),
+            repo: self.repo,
             result_tx,
             job_cts: HashMap::new(),
             job_counter: JobCounter::new(),
             tests: self.tests.into_iter().map(Arc::new).collect(),
             resource_pools: Arc::new(Pools::new(self.token_pool_sizes, worktrees)),
             result_db: self.result_db,
-            origin_path: Arc::new(self.repo.path().to_owned()),
         })
     }
 }
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
-pub struct Manager {
+pub struct Manager<W: Worktree> {
+    repo: Arc<W>,
     job_cts: HashMap<CommitHash, CancellationToken>,
     job_counter: JobCounter,
     result_tx: broadcast::Sender<Arc<Notification>>,
@@ -178,8 +191,8 @@ pub struct Manager {
     origin_path: Arc<PathBuf>,
 }
 
-impl Manager {
-    pub fn builder<W, I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>>(
+impl<W: Worktree> Manager<W> {
+    pub fn builder<I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>>(
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
@@ -227,6 +240,47 @@ impl Manager {
 
         for rev in to_start {
             for test in self.tests.iter() {
+                let test_case = TestCase {
+                    hash: rev.to_owned(),
+                    test_name: test.name.to_owned(),
+                };
+                let tx = self.result_tx.clone();
+
+                let cache_hash = match test.cache_policy {
+                    CachePolicy::NoCaching => None::<Hash>,
+                    CachePolicy::ByCommit => Some(rev.clone().into()),
+                    CachePolicy::ByTree => Some(
+                        self.repo
+                            .commit_tree(rev.clone())
+                            .await
+                            .context("looking up tree from commit")?
+                            .into(),
+                    ),
+                };
+
+                if let Some(ref hash) = cache_hash {
+                    match self
+                        .result_db
+                        .cached_result(hash, &test_case.test_name)
+                        .context("reading cached test result")
+                    {
+                        Ok(Some(status)) => {
+                            tx.send(Arc::new(Notification { test_case, status }))
+                                .or_log_error("dropping a cached result notification");
+                            continue;
+                        }
+                        Err(err) => {
+                            error!("Failed to read cached test result, will overwrite: {err:?}");
+                        }
+                        Ok(None) => (),
+                    }
+                }
+
+                // If we're caching by tree, store the result by tree. If we're
+                // caching by commit, store by commit. If we aren't caching,
+                // also store by commit.
+                let storage_hash = cache_hash.unwrap_or(rev.clone().into());
+
                 let ct = CancellationToken::new();
                 self.job_cts.insert(rev.to_owned(), ct.clone());
                 let mut job = TestJob {
@@ -234,15 +288,12 @@ impl Manager {
                     test: test.clone(),
                     rev: rev.to_owned(),
                     _token: self.job_counter.get(),
-                    output: self.result_db.job_output(&rev, &test.name)?,
+                    output: self
+                        .result_db
+                        .create_output(&storage_hash, &test_case.test_name)?,
                     origin_path: self.origin_path.clone(),
                 };
-                let test_case = TestCase {
-                    hash: rev.to_owned(),
-                    test_name: test.name.to_owned(),
-                };
 
-                let tx = self.result_tx.clone();
                 tx.send(Arc::new(Notification {
                     test_case: test_case.clone(),
                     status: TestStatus::Enqueued,
@@ -259,15 +310,19 @@ impl Manager {
                     .or_log_error("Dropping a notification");
                     let worktree = resources.obj();
                     let result = job.run(worktree).await;
+                    let status = match result {
+                        Err(ref err) => TestStatus::Error(err.to_string()),
+                        Ok(None) => TestStatus::Canceled,
+                        Ok(Some(exit_code)) => TestStatus::Completed(exit_code),
+                    };
+                    job.output
+                        .set_status(&status)
+                        .or_log_error("couldn't save job status");
                     // Note: must not drop test until the send is complete, or we would break
                     // settled().
                     let _ = tx.send(Arc::new(Notification {
                         test_case,
-                        status: match result {
-                            Err(ref err) => TestStatus::Error(err.to_string()),
-                            Ok(None) => TestStatus::Canceled,
-                            Ok(Some(exit_code))  => TestStatus::Completed(exit_code),
-                        }
+                        status,
                     }))
                     .map_err(|e|
                         error!("Dropping a result ({result:?}. Seems nobody is listening to Manager::results(): {}", e)
@@ -362,7 +417,7 @@ struct TestJob {
     test: Arc<Test>,
     rev: CommitHash,
     _token: JobToken,
-    output: CommitOutput,
+    output: TestCaseOutput,
     // Path of original repo we are testing (not our worktree).
     origin_path: Arc<PathBuf>,
 }
@@ -413,7 +468,6 @@ impl TestJob {
                 let exit_code = wait_result
                     .map_err(anyhow::Error::from)?
                     .code_not_killed()?;
-                self.output.set_exit_code(exit_code)?;
                 Ok(Some(exit_code))
             }
             Either::Right((_, child_fut)) => {
@@ -445,7 +499,7 @@ pub struct TestCase {
 }
 pub type ExitCode = i32;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TestStatus {
     Enqueued,
     Started,
@@ -492,7 +546,15 @@ pub struct Notification {
 
 #[cfg(test)]
 mod tests {
-    use std::{array, collections::VecDeque, fs, path::PathBuf, thread::panicking, time::Duration};
+    use std::{
+        array,
+        collections::VecDeque,
+        fs::{self, File},
+        io::{self, BufRead as _},
+        path::PathBuf,
+        thread::panicking,
+        time::Duration,
+    };
 
     use anyhow::bail;
     use future::select_all;
@@ -523,6 +585,7 @@ mod tests {
     }
 
     impl TestScript {
+        // Each time the script gets started it echoes a line to this file.
         const STARTED_FILENAME_PREFIX: &'static str = "started.";
         const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
         const LOCK_FILENAME: &'static str = "lockfile";
@@ -558,7 +621,7 @@ mod tests {
             // need more Bash hackery to ensure that the signal gets forwarded to it.
             let script = format!(
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
-                touch {started_path_prefix:?}$(git rev-parse HEAD)
+                echo >> {started_path_prefix:?}$(git rev-parse HEAD)
 
                 if [ -e ./{lock_filename:?} ]; then
                     echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
@@ -621,17 +684,31 @@ mod tests {
             }
         }
 
+        // Number of times the script has been successfully spawned for this commit.
+        pub fn num_runs(&self, hash: &CommitHash) -> usize {
+            let path = self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash);
+            if !path.exists() {
+                return 0;
+            }
+            // Awkward: it's probably still possible to return 0 here, we can
+            // probably observe the file whe it exists but doesn't have any content yet.
+            io::BufReader::new(File::open(path).expect("couldn't open TestScript signalling file"))
+                .lines()
+                .count()
+        }
+
         pub fn test_name(&self) -> &str {
             "my_test"
         }
 
-        pub fn as_test(&self) -> Test {
+        pub fn as_test(&self, cache_policy: CachePolicy) -> Test {
             Test {
                 name: self.test_name().to_owned(),
                 program: self.program(),
                 args: self.args(),
                 needs_resource_idxs: vec![],
                 shutdown_grace_period: Duration::from_secs(5),
+                cache_policy,
             }
         }
     }
@@ -726,7 +803,7 @@ mod tests {
 
     async fn expect_no_more_results(
         results: &mut broadcast::Receiver<Arc<Notification>>,
-        m: &Manager,
+        m: &Manager<TempRepo>,
     ) -> anyhow::Result<()> {
         select!(
             _ = sleep(Duration::from_secs(1)) => bail!("didn't settle after 1s"),
@@ -739,11 +816,18 @@ mod tests {
         _db_dir: TempDir,
         repo: Arc<TempRepo>,
         scripts: [TestScript; NUM_TESTS],
-        manager: Manager,
+        manager: Manager<TempRepo>,
     }
 
     impl<const NUM_TESTS: usize> TestScriptFixture<NUM_TESTS> {
-        async fn new_with_worktrees(num_worktrees: usize) -> Self {
+        // Agh, it's really hard to make an ergonomic API for configuring these
+        // fixtures. Do we need a builder struct? Yuck. For now we just have one
+        // really ugly "verbose" constructor and then others that call this one.
+        // It's like C!
+        async fn new_verbose(
+            num_worktrees: usize,
+            cache_policies: [CachePolicy; NUM_TESTS],
+        ) -> Self {
             let repo = Arc::new(TempRepo::new().await.unwrap());
             // TODO: We need to have a commit in the repo otherwise manager
             // setup will fail. This is a bug.
@@ -755,7 +839,10 @@ mod tests {
             let manager = Manager::builder(
                 repo.clone(),
                 Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-                scripts.iter().map(|s| s.as_test()),
+                scripts
+                    .iter()
+                    .zip(cache_policies)
+                    .map(|(s, c)| s.as_test(c)),
                 [],
             )
             .num_worktrees(num_worktrees)
@@ -768,6 +855,14 @@ mod tests {
                 repo,
                 _db_dir: db_dir,
             }
+        }
+
+        async fn new_with_worktrees(num_worktrees: usize) -> Self {
+            Self::new_verbose(num_worktrees, [CachePolicy::ByCommit; NUM_TESTS]).await
+        }
+
+        async fn new_with_cache_policies(cache_policies: [CachePolicy; NUM_TESTS]) -> Self {
+            Self::new_verbose(2, cache_policies).await
         }
 
         async fn new() -> Self {
@@ -895,6 +990,71 @@ mod tests {
         )
     }
 
+    #[test_log::test(tokio::test)]
+    async fn should_cache_results() {
+        let mut f = TestScriptFixture::new_with_cache_policies([
+            CachePolicy::NoCaching,
+            CachePolicy::ByCommit,
+            CachePolicy::ByTree,
+        ])
+        .await;
+        f.repo
+            .commit("yarp", some_time())
+            .await
+            .expect("couldn't create test commit");
+
+        // Set up two commits to test. Note this is a bit of an odd test case.
+        // The real world case we are thinking of here is probably swiching
+        // between two branches with a common base rather than two ranges with
+        // an ancestry relation. But to do that we'd need more helpers in our
+        // Git library. So we just take advantage of our knowledge that this
+        // weirdness of the test case is irrelevant given how the implementation
+        // works (it doesn't know about the structure of the history).
+        let orig_hash = f
+            .repo
+            .commit("yarp", some_time())
+            .await
+            .expect("couldn't create test commit");
+        // This one has a different commit hash but the same tree.
+        let same_tree = f
+            .repo
+            .commit("darp", some_time())
+            .await
+            .expect("couldn't create test commit");
+
+        // Test the first commit and wait for it to be complete.
+        f.manager
+            .set_revisions(vec![orig_hash.clone()])
+            .await
+            .unwrap();
+        f.manager.settled().await;
+        // Sanity check that the scripts actually got run.
+        assert_eq!(f.scripts[0].num_runs(&orig_hash), 1);
+        assert_eq!(f.scripts[1].num_runs(&orig_hash), 1);
+        assert_eq!(f.scripts[2].num_runs(&orig_hash), 1);
+
+        f.manager
+            .set_revisions(vec![same_tree.clone()])
+            .await
+            .unwrap();
+        f.manager.settled().await;
+        // Without caching the script should get run every time.
+        assert_eq!(f.scripts[0].num_runs(&same_tree), 1);
+        // Commit has has changed so new commit should get retested for ByCommit.
+        assert_eq!(f.scripts[1].num_runs(&same_tree), 1);
+        // But not for ByTree
+        assert_eq!(f.scripts[2].num_runs(&same_tree), 0);
+
+        f.manager
+            .set_revisions(vec![orig_hash.clone()])
+            .await
+            .unwrap();
+        f.manager.settled().await;
+        assert_eq!(f.scripts[0].num_runs(&orig_hash), 2);
+        assert_eq!(f.scripts[1].num_runs(&orig_hash), 1);
+        assert_eq!(f.scripts[2].num_runs(&orig_hash), 1);
+    }
+
     #[test_case(1, 1 ; "single worktree, one test")]
     #[test_case(4, 1 ; "multiple worktrees, one test")]
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
@@ -957,6 +1117,7 @@ mod tests {
             args: script.args(),
             needs_resource_idxs: vec![1],
             shutdown_grace_period: Duration::from_secs(5),
+            cache_policy: CachePolicy::ByCommit,
         }];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let mut m = Manager::builder(
@@ -1010,6 +1171,7 @@ mod tests {
                 ],
                 needs_resource_idxs: vec![],
                 shutdown_grace_period: Duration::from_secs(5),
+                cache_policy: CachePolicy::ByCommit,
             }],
             [],
         )
