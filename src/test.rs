@@ -206,7 +206,7 @@ impl Manager {
     // not already tested or being tested.
     // It doesn't make sense to call this function if you don't have a receiver
     // from already having called [[results]].
-    pub fn set_revisions<I>(&mut self, revs: I) -> anyhow::Result<()>
+    pub async fn set_revisions<I>(&mut self, revs: I) -> anyhow::Result<()>
     where
         I: IntoIterator<Item = CommitHash>,
     {
@@ -289,13 +289,6 @@ impl Manager {
     // Completes once there are no pending jobs or results.
     pub async fn settled(&self) {
         self.job_counter.zero().await;
-    }
-}
-
-impl Drop for Manager {
-    fn drop(&mut self) {
-        self.set_revisions([])
-            .or_log_error("couldn't cancel test jobs on shutdown");
     }
 }
 
@@ -791,7 +784,7 @@ mod tests {
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        f.manager.set_revisions(vec![hash.clone()]).unwrap();
+        f.manager.set_revisions(vec![hash.clone()]).await.unwrap();
         // We should get a singular result because we only fed in one revision.
         expect_notifs_10s(
             &mut results,
@@ -825,7 +818,7 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let mut results = f.manager.results();
-        f.manager.set_revisions(vec![hash1.clone()]).unwrap();
+        f.manager.set_revisions(vec![hash1.clone()]).await.unwrap();
         let started_hash1 = timeout_5s(f.scripts[0].started(&hash1))
             .await
             .expect("script did not run for hash1");
@@ -835,7 +828,7 @@ mod tests {
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        f.manager.set_revisions(vec![hash2.clone()]).unwrap();
+        f.manager.set_revisions(vec![hash2.clone()]).await.unwrap();
         timeout_5s(f.scripts[0].started(&hash2))
             .await
             .expect("f.scripts[0] did not run for hash2");
@@ -892,7 +885,7 @@ mod tests {
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
-        f.manager.set_revisions([hash.clone()]).unwrap();
+        f.manager.set_revisions([hash.clone()]).await.unwrap();
         timeout_5s(f.scripts[0].started(&hash))
             .await
             .expect("script did not start");
@@ -937,7 +930,7 @@ mod tests {
             }
         }
         let mut results = f.manager.results();
-        f.manager.set_revisions(hashes.clone()).unwrap();
+        f.manager.set_revisions(hashes.clone()).await.unwrap();
         expect_notifs_10s(&mut results, want_results)
             .await
             .expect("bad results");
@@ -976,7 +969,7 @@ mod tests {
         .build()
         .await
         .expect("couldn't set up manager");
-        m.set_revisions(hashes.clone()).unwrap();
+        m.set_revisions(hashes.clone()).await.unwrap();
 
         let mut start_futs = hashes.iter().map(|h| Box::pin(script.started(h))).collect();
         for _ in 0..2 {
@@ -1025,6 +1018,7 @@ mod tests {
         .expect("couldn't set up manager");
 
         m.set_revisions([hash.clone()])
+            .await
             .expect("set_revisions failed");
         m.settled().await;
 
