@@ -251,7 +251,7 @@ impl Manager {
                         test_case: test_case.clone(),
                         status: TestStatus::Started,
                     }))
-                    .or_log_error("Dropping a notificatoin");
+                    .or_log_error("Dropping a notification");
                     let worktree = resources.obj();
                     let result = job.run(worktree).await;
                     // Note: must not drop test until the send is complete, or we would break
