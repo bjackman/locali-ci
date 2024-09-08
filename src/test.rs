@@ -610,7 +610,7 @@ mod tests {
         fn signalling_path(&self, filename_prefix: &str, hash: &CommitHash) -> PathBuf {
             // Argh I dunno this is annoying.
             let mut filename = OsString::from(filename_prefix);
-            filename.push(hash.as_ref());
+            filename.push(hash);
             self.dir.path().join(filename)
         }
 
@@ -1035,11 +1035,10 @@ mod tests {
             repo.path().to_string_lossy()
         );
         assert_eq!(
-            CommitHash(
+            CommitHash::new(
                 fs::read_to_string(temp_dir.path().join("lci_commit"))
                     .expect("couldn't read lci_origin from test script")
                     .trim()
-                    .to_owned()
             ),
             hash,
         );

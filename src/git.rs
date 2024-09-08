@@ -1,6 +1,7 @@
 use core::fmt;
 use core::fmt::{Debug, Display};
 use std::ffi::{OsStr, OsString};
+use std::ops::Deref;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::pin::pin;
@@ -25,15 +26,110 @@ use crate::process::CommandExt;
 use crate::process::{OutputExt, SyncCommandExt};
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
-pub struct CommitHash(pub String);
+pub struct Hash(String);
 
-impl AsRef<OsStr> for CommitHash {
+// My hacky and hasty attempts to implement types for hashes. I haven't reall
+// thought through this properly. Basically we want CommitHash and TreeHash to
+// be subtypes of Hash, but all of them are really nothing but Strings. I don't
+// really wanna figure this out for myself I just wanna see how a smart
+// Rustacean would do this. So for now just do whatever.
+
+impl Hash {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
+impl AsRef<OsStr> for Hash {
     fn as_ref(&self) -> &OsStr {
         OsStr::from_bytes(self.0.as_bytes())
     }
 }
 
+impl Display for Hash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub struct CommitHash(Hash);
+
+impl CommitHash {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(Hash::new(s))
+    }
+}
+
+impl From<CommitHash> for Hash {
+    fn from(h: CommitHash) -> Hash {
+        h.0
+    }
+}
+
+impl Deref for CommitHash {
+    type Target = Hash;
+
+    fn deref(&self) -> &Hash {
+        &self.0
+    }
+}
+
+impl AsRef<Hash> for CommitHash {
+    fn as_ref(&self) -> &Hash {
+        &self.0
+    }
+}
+
+impl AsRef<OsStr> for CommitHash {
+    fn as_ref(&self) -> &OsStr {
+        self.0.as_ref()
+    }
+}
+
 impl Display for CommitHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub struct TreeHash(Hash);
+
+impl TreeHash {
+    #[expect(dead_code)]
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(Hash::new(s))
+    }
+}
+
+impl Deref for TreeHash {
+    type Target = Hash;
+
+    fn deref(&self) -> &Hash {
+        &self.0
+    }
+}
+
+impl From<TreeHash> for Hash {
+    fn from(h: TreeHash) -> Hash {
+        h.0
+    }
+}
+
+impl AsRef<Hash> for TreeHash {
+    fn as_ref(&self) -> &Hash {
+        &self.0
+    }
+}
+
+impl AsRef<OsStr> for TreeHash {
+    fn as_ref(&self) -> &OsStr {
+        self.0.as_ref()
+    }
+}
+
+impl Display for TreeHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -107,7 +203,7 @@ pub trait Worktree: Debug {
             );
         }
         let out_str: &str = str::from_utf8(&output.stdout).context("non utf-8 rev-list output")?;
-        Ok(out_str.lines().map(|l| CommitHash(l.to_owned())).collect())
+        Ok(out_str.lines().map(CommitHash::new).collect())
     }
 
     async fn checkout(&self, commit: &CommitHash) -> anyhow::Result<()> {
@@ -378,7 +474,7 @@ pub mod test_utils {
             }
             let out_string =
                 String::from_utf8(output.stdout).context("reading git rev-parse output")?;
-            Ok(Some(CommitHash(out_string.trim().to_owned())))
+            Ok(Some(CommitHash::new(out_string.trim())))
         }
 
         async fn merge(

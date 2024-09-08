@@ -164,7 +164,7 @@ impl OutputBuffer {
                 );
             }
             let mattch = matches.first().unwrap();
-            let hash = CommitHash(mattch.as_str().to_owned());
+            let hash = CommitHash::new(mattch.as_str());
 
             let log_n1_os = repo
                 .log_n1(&hash, log_format)

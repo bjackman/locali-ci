@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fs::{self, create_dir_all, File},
     path::{Path, PathBuf},
 };
@@ -36,7 +37,7 @@ impl Database {
     // Prepare to create the output directory for a job output, but don't actually create it yet.
     // It's created once you use one of the methods of CommitOutput for writing data.
     pub fn job_output(&self, hash: &CommitHash, test_name: &str) -> anyhow::Result<CommitOutput> {
-        CommitOutput::new(self.base_dir.join(hash.as_ref()).join(test_name))
+        CommitOutput::new(self.base_dir.join::<&OsStr>(hash.as_ref()).join(test_name))
     }
 }
 
