@@ -494,7 +494,7 @@ pub struct Notification {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, fs, path::PathBuf, thread::panicking, time::Duration};
+    use std::{array, collections::VecDeque, fs, path::PathBuf, thread::panicking, time::Duration};
 
     use anyhow::bail;
     use future::select_all;
@@ -737,21 +737,51 @@ mod tests {
         )
     }
 
+    struct TestScriptFixture<const NUM_TESTS: usize> {
+        repo: Arc<TempRepo>,
+        scripts: [TestScript; NUM_TESTS],
+        manager: Manager,
+    }
+
+    impl<const NUM_TESTS: usize> TestScriptFixture<NUM_TESTS> {
+        async fn new_with_worktrees(num_worktrees: usize) -> Self {
+            let repo = Arc::new(TempRepo::new().await.unwrap());
+            // TODO: We need to have a commit in the repo otherwise manager
+            // setup will fail. This is a bug.
+            repo.commit("hello,", some_time())
+                .await
+                .expect("couldn't create base commit");
+            let scripts = array::from_fn(|_| TestScript::new());
+            let manager = Manager::builder(repo.clone(), scripts.iter().map(|s| s.as_test()), [])
+                .num_worktrees(num_worktrees)
+                .build()
+                .await
+                .expect("couldn't set up manager");
+            Self {
+                manager,
+                scripts,
+                repo,
+            }
+        }
+
+        async fn new() -> Self {
+            Self::new_with_worktrees(2).await
+        }
+    }
+
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
-        let repo = Arc::new(TempRepo::new().await.unwrap());
+        let TestScriptFixture {
+            mut manager,
+            scripts: [script],
+            repo,
+        } = TestScriptFixture::new().await;
+        let mut results = manager.results();
         let hash = repo
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        let script = TestScript::new();
-        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
-            .num_worktrees(2)
-            .build()
-            .await
-            .expect("couldn't set up manager");
-        let mut results = m.results();
-        m.set_revisions(vec![hash.clone()]).unwrap();
+        manager.set_revisions(vec![hash.clone()]).unwrap();
         // We should get a singular result because we only fed in one revision.
         expect_notifs_10s(
             &mut results,
@@ -770,25 +800,25 @@ mod tests {
         )
         .await
         .expect("bad test result");
-        expect_no_more_results(&mut results, &m).await.unwrap()
+        expect_no_more_results(&mut results, &manager)
+            .await
+            .unwrap()
     }
 
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
-        let repo = Arc::new(TempRepo::new().await.unwrap());
+        let TestScriptFixture {
+            mut manager,
+            scripts: [script],
+            repo,
+        } = TestScriptFixture::new().await;
         // First commit's test will block forever.
         let hash1 = repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
-        let script = TestScript::new();
-        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
-            .num_worktrees(2)
-            .build()
-            .await
-            .expect("couldn't set up manager");
-        let mut results = m.results();
-        m.set_revisions(vec![hash1.clone()]).unwrap();
+        let mut results = manager.results();
+        manager.set_revisions(vec![hash1.clone()]).unwrap();
         let started_hash1 = timeout_5s(script.started(&hash1))
             .await
             .expect("script did not run for hash1");
@@ -797,7 +827,7 @@ mod tests {
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        m.set_revisions(vec![hash2.clone()]).unwrap();
+        manager.set_revisions(vec![hash2.clone()]).unwrap();
         timeout_5s(script.started(&hash2))
             .await
             .expect("script did not run for hash2");
@@ -838,31 +868,32 @@ mod tests {
         )
         .await
         .unwrap();
-        expect_no_more_results(&mut results, &m).await.unwrap()
+        expect_no_more_results(&mut results, &manager)
+            .await
+            .unwrap()
     }
 
     // This is not actually testing functionality, this is a meta-test, yikes this is
     // over-engineered.
     #[test_log::test(tokio::test)]
     async fn should_not_settle() {
-        let repo = Arc::new(TempRepo::new().await.unwrap());
+        let TestScriptFixture {
+            mut manager,
+            scripts: [script],
+            repo,
+        } = TestScriptFixture::new().await;
         // First commit's test will block forever.
         let hash = repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
-        let script = TestScript::new();
-        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
-            .build()
-            .await
-            .expect("couldn't set up manager");
-        m.set_revisions([hash.clone()]).unwrap();
+        manager.set_revisions([hash.clone()]).unwrap();
         timeout_5s(script.started(&hash))
             .await
             .expect("script did not start");
         select!(
             _ = sleep(Duration::from_secs(1)) => (),
-            _ = m.settled() => panic!("manager settled unexpectedly"),
+            _ = manager.settled() => panic!("manager settled unexpectedly"),
         )
     }
 
@@ -871,8 +902,11 @@ mod tests {
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
     #[test_log::test(tokio::test)]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
-        let repo = Arc::new(TempRepo::new().await.unwrap());
-        let script = TestScript::new();
+        let TestScriptFixture {
+            mut manager,
+            scripts: [script],
+            repo,
+        } = TestScriptFixture::new_with_worktrees(num_worktrees).await;
         let mut hashes = Vec::new();
         let mut want_results = HashMap::new();
         let mut i = 0;
@@ -900,13 +934,8 @@ mod tests {
                 i += 1;
             }
         }
-        let mut m = Manager::builder(repo.clone(), [script.as_test()], [])
-            .num_worktrees(num_worktrees)
-            .build()
-            .await
-            .expect("couldn't set up manager");
-        let mut results = m.results();
-        m.set_revisions(hashes.clone()).unwrap();
+        let mut results = manager.results();
+        manager.set_revisions(hashes.clone()).unwrap();
         expect_notifs_10s(&mut results, want_results)
             .await
             .expect("bad results");
