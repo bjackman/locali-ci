@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::{
     git::{self, PersistentWorktree},
+    result::Database,
     test,
 };
 
@@ -151,8 +152,11 @@ pub fn manager_builder(
         resource_token_counts[idx] = resource.count();
     }
 
-    Ok(
-        test::Manager::builder(repo.clone(), tests, resource_token_counts)
-            .num_worktrees(config.num_worktrees),
+    Ok(test::Manager::builder(
+        repo.clone(),
+        Database::create_or_open_user()?,
+        tests,
+        resource_token_counts,
     )
+    .num_worktrees(config.num_worktrees))
 }

@@ -85,13 +85,13 @@ impl Display for Test {
     }
 }
 
-#[derive(Default)]
 pub struct ManagerBuilder<W> {
     // This needs to be an Arc because we hold onto a reference to it for a
     // while, and create temporary worktrees from it in the background.
     repo: Arc<W>,
     tests: Vec<Test>,
     token_pool_sizes: Vec<usize>,
+    result_db: Database,
 
     num_worktrees: usize,
     worktree_prefix: String,
@@ -157,7 +157,7 @@ impl<W> ManagerBuilder<W> {
             job_counter: JobCounter::new(),
             tests: self.tests.into_iter().map(Arc::new).collect(),
             resource_pools: Arc::new(Pools::new(self.token_pool_sizes, worktrees)),
-            result_db: Database::create_or_open_user()?,
+            result_db: self.result_db,
             origin_path: Arc::new(self.repo.path().to_owned()),
         })
     }
@@ -183,6 +183,10 @@ impl Manager {
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
+        // This is mandatory instead of defaulting to the user's main database,
+        // because we want it to be hard to accidentally refer to global
+        // resources like that.
+        result_db: Database,
         tests: I,
         token_pool_sizes: J,
     ) -> ManagerBuilder<W> {
@@ -190,6 +194,7 @@ impl Manager {
             repo,
             tests: tests.into_iter().collect(),
             token_pool_sizes: token_pool_sizes.into_iter().collect(),
+            result_db,
 
             num_worktrees: 1,
             worktree_prefix: "worktree-".to_owned(),
@@ -738,6 +743,7 @@ mod tests {
     }
 
     struct TestScriptFixture<const NUM_TESTS: usize> {
+        _db_dir: TempDir,
         repo: Arc<TempRepo>,
         scripts: [TestScript; NUM_TESTS],
         manager: Manager,
@@ -752,15 +758,22 @@ mod tests {
                 .await
                 .expect("couldn't create base commit");
             let scripts = array::from_fn(|_| TestScript::new());
-            let manager = Manager::builder(repo.clone(), scripts.iter().map(|s| s.as_test()), [])
-                .num_worktrees(num_worktrees)
-                .build()
-                .await
-                .expect("couldn't set up manager");
+            let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
+            let manager = Manager::builder(
+                repo.clone(),
+                Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
+                scripts.iter().map(|s| s.as_test()),
+                [],
+            )
+            .num_worktrees(num_worktrees)
+            .build()
+            .await
+            .expect("couldn't set up manager");
             Self {
                 manager,
                 scripts,
                 repo,
+                _db_dir: db_dir,
             }
         }
 
@@ -952,11 +965,17 @@ mod tests {
             needs_resource_idxs: vec![1],
             shutdown_grace_period: Duration::from_secs(5),
         }];
-        let mut m = Manager::builder(repo.clone(), tests, resource_token_counts)
-            .num_worktrees(4)
-            .build()
-            .await
-            .expect("couldn't set up manager");
+        let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
+        let mut m = Manager::builder(
+            repo.clone(),
+            Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
+            tests,
+            resource_token_counts,
+        )
+        .num_worktrees(4)
+        .build()
+        .await
+        .expect("couldn't set up manager");
         m.set_revisions(hashes.clone()).unwrap();
 
         let mut start_futs = hashes.iter().map(|h| Box::pin(script.started(h))).collect();
@@ -982,8 +1001,10 @@ mod tests {
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
+        let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let mut m = Manager::builder(
             repo.clone(),
+            Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
             [Test {
                 name: "my_test".to_owned(),
                 program: OsString::from("bash"),
