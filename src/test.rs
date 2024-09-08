@@ -771,24 +771,21 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
-        let TestScriptFixture {
-            mut manager,
-            scripts: [script],
-            repo,
-        } = TestScriptFixture::new().await;
-        let mut results = manager.results();
-        let hash = repo
+        let mut f = TestScriptFixture::<1>::new().await;
+        let mut results = f.manager.results();
+        let hash = f
+            .repo
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        manager.set_revisions(vec![hash.clone()]).unwrap();
+        f.manager.set_revisions(vec![hash.clone()]).unwrap();
         // We should get a singular result because we only fed in one revision.
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
                 TestCase {
                     hash,
-                    test_name: script.test_name().to_owned(),
+                    test_name: f.scripts[0].test_name().to_owned(),
                 },
                 vec![
                     TestStatus::Enqueued,
@@ -800,37 +797,35 @@ mod tests {
         )
         .await
         .expect("bad test result");
-        expect_no_more_results(&mut results, &manager)
+        expect_no_more_results(&mut results, &f.manager)
             .await
             .unwrap()
     }
 
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
-        let TestScriptFixture {
-            mut manager,
-            scripts: [script],
-            repo,
-        } = TestScriptFixture::new().await;
+        let mut f = TestScriptFixture::<1>::new().await;
         // First commit's test will block forever.
-        let hash1 = repo
+        let hash1 = f
+            .repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
-        let mut results = manager.results();
-        manager.set_revisions(vec![hash1.clone()]).unwrap();
-        let started_hash1 = timeout_5s(script.started(&hash1))
+        let mut results = f.manager.results();
+        f.manager.set_revisions(vec![hash1.clone()]).unwrap();
+        let started_hash1 = timeout_5s(f.scripts[0].started(&hash1))
             .await
             .expect("script did not run for hash1");
         // Second commit's test will terminate quickly.
-        let hash2 = repo
+        let hash2 = f
+            .repo
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        manager.set_revisions(vec![hash2.clone()]).unwrap();
-        timeout_5s(script.started(&hash2))
+        f.manager.set_revisions(vec![hash2.clone()]).unwrap();
+        timeout_5s(f.scripts[0].started(&hash2))
             .await
-            .expect("script did not run for hash2");
+            .expect("f.scripts[0] did not run for hash2");
         timeout_5s(started_hash1.siginted())
             .await
             .expect("hash1 test did not get siginted");
@@ -841,7 +836,7 @@ mod tests {
                 (
                     TestCase {
                         hash: hash1,
-                        test_name: script.test_name().to_owned(),
+                        test_name: f.scripts[0].test_name().to_owned(),
                     },
                     vec![
                         TestStatus::Enqueued,
@@ -855,7 +850,7 @@ mod tests {
                 (
                     TestCase {
                         hash: hash2,
-                        test_name: script.test_name().to_owned(),
+                        test_name: f.scripts[0].test_name().to_owned(),
                     },
                     vec![
                         TestStatus::Enqueued,
@@ -868,7 +863,7 @@ mod tests {
         )
         .await
         .unwrap();
-        expect_no_more_results(&mut results, &manager)
+        expect_no_more_results(&mut results, &f.manager)
             .await
             .unwrap()
     }
@@ -877,23 +872,20 @@ mod tests {
     // over-engineered.
     #[test_log::test(tokio::test)]
     async fn should_not_settle() {
-        let TestScriptFixture {
-            mut manager,
-            scripts: [script],
-            repo,
-        } = TestScriptFixture::new().await;
+        let mut f = TestScriptFixture::<1>::new().await;
         // First commit's test will block forever.
-        let hash = repo
+        let hash = f
+            .repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
-        manager.set_revisions([hash.clone()]).unwrap();
-        timeout_5s(script.started(&hash))
+        f.manager.set_revisions([hash.clone()]).unwrap();
+        timeout_5s(f.scripts[0].started(&hash))
             .await
             .expect("script did not start");
         select!(
             _ = sleep(Duration::from_secs(1)) => (),
-            _ = manager.settled() => panic!("manager settled unexpectedly"),
+            _ = f.manager.settled() => panic!("manager settled unexpectedly"),
         )
     }
 
@@ -902,17 +894,14 @@ mod tests {
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
     #[test_log::test(tokio::test)]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
-        let TestScriptFixture {
-            mut manager,
-            scripts: [script],
-            repo,
-        } = TestScriptFixture::new_with_worktrees(num_worktrees).await;
+        let mut f = TestScriptFixture::<1>::new_with_worktrees(num_worktrees).await;
         let mut hashes = Vec::new();
         let mut want_results = HashMap::new();
         let mut i = 0;
         for _ in 0..50 {
             for _ in 0..num_tests {
-                let hash = repo
+                let hash = f
+                    .repo
                     // We'll give each test a unique exit code so we can check they really got
                     // tested individually.
                     .commit(TestScript::exit_code_tag(i as u32), some_time())
@@ -921,7 +910,7 @@ mod tests {
                 want_results.insert(
                     TestCase {
                         hash: hash.to_owned(),
-                        test_name: script.test_name().to_owned(),
+                        test_name: f.scripts[0].test_name().to_owned(),
                     },
                     vec![
                         TestStatus::Enqueued,
@@ -934,8 +923,8 @@ mod tests {
                 i += 1;
             }
         }
-        let mut results = manager.results();
-        manager.set_revisions(hashes.clone()).unwrap();
+        let mut results = f.manager.results();
+        f.manager.set_revisions(hashes.clone()).unwrap();
         expect_notifs_10s(&mut results, want_results)
             .await
             .expect("bad results");
