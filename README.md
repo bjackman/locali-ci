@@ -1,3 +1,5 @@
+Needs Rust >= 1.80.
+
 TODOS:
 
  - `Manager::set_revisions` urgently needs refactoring.
