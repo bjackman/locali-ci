@@ -53,7 +53,7 @@ where
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Hash, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CachePolicy {
     NoCaching,
@@ -62,6 +62,10 @@ pub enum CachePolicy {
 }
 
 // A test task that will need to be repeated for each commit.
+// We have tests that use these as hash keys for historical reasons. I think
+// this is fine but I'm not sure if it's really something to reasonably take
+// advantage of in prod code so we only derive the necessary traits for test.
+#[cfg_attr(test, derive(Hash, PartialEq, Eq))]
 pub struct Test {
     pub name: String,
     pub program: OsString,
@@ -93,6 +97,12 @@ impl Test {
 impl Display for Test {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "<test: {:?}>", self.name)
+    }
+}
+
+impl Debug for Test {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -242,7 +252,7 @@ impl<W: Worktree> Manager<W> {
             for test in self.tests.iter() {
                 let test_case = TestCase {
                     hash: rev.to_owned(),
-                    test_name: test.name.to_owned(),
+                    test: test.clone(),
                 };
                 let tx = self.result_tx.clone();
 
@@ -261,7 +271,7 @@ impl<W: Worktree> Manager<W> {
                 if let Some(ref hash) = cache_hash {
                     match self
                         .result_db
-                        .cached_result(hash, &test_case.test_name)
+                        .cached_result(hash, &test_case.test.name)
                         .context("reading cached test result")
                     {
                         Ok(Some(status)) => {
@@ -290,7 +300,7 @@ impl<W: Worktree> Manager<W> {
                     _token: self.job_counter.get(),
                     output: self
                         .result_db
-                        .create_output(&storage_hash, &test_case.test_name)?,
+                        .create_output(&storage_hash, &test_case.test.name)?,
                     origin_path: self.origin_path.clone(),
                 };
 
@@ -495,10 +505,11 @@ impl TestJob {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(Hash, PartialEq, Eq))] // See comment on Test.
 pub struct TestCase {
     pub hash: CommitHash,
-    pub test_name: String,
+    pub test: Arc<Test>,
 }
 pub type ExitCode = i32;
 
@@ -889,7 +900,7 @@ mod tests {
             HashMap::from([(
                 TestCase {
                     hash,
-                    test_name: f.scripts[0].test_name().to_owned(),
+                    test: f.manager.tests[0].clone(),
                 },
                 vec![
                     TestStatus::Enqueued,
@@ -940,7 +951,7 @@ mod tests {
                 (
                     TestCase {
                         hash: hash1,
-                        test_name: f.scripts[0].test_name().to_owned(),
+                        test: f.manager.tests[0].clone(),
                     },
                     vec![
                         TestStatus::Enqueued,
@@ -954,7 +965,7 @@ mod tests {
                 (
                     TestCase {
                         hash: hash2,
-                        test_name: f.scripts[0].test_name().to_owned(),
+                        test: f.manager.tests[0].clone(),
                     },
                     vec![
                         TestStatus::Enqueued,
@@ -1079,7 +1090,7 @@ mod tests {
                 want_results.insert(
                     TestCase {
                         hash: hash.to_owned(),
-                        test_name: f.scripts[0].test_name().to_owned(),
+                        test: f.manager.tests[0].clone(),
                     },
                     vec![
                         TestStatus::Enqueued,

@@ -51,7 +51,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
             .statuses
             .entry(notif.test_case.hash.clone())
             .or_default();
-        commit_statuses.insert(notif.test_case.test_name.clone(), notif.status.clone());
+        commit_statuses.insert(notif.test_case.test.name.clone(), notif.status.clone());
     }
 
     pub fn repaint(&mut self) -> anyhow::Result<()> {
