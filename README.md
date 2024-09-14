@@ -2,7 +2,6 @@ Needs Rust >= 1.80.
 
 Bugs (high to low priority):
 
- - `Manager::set_revisions` urgently needs refactoring.
  - Need tests for cancellation of not-yet-started jobs.
  - Sometimes "Cancelled" test statuses get cached.
  - SIGINT from local-ci shutdown gets cached.

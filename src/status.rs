@@ -49,7 +49,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
     pub fn update(&mut self, notif: Arc<Notification>) {
         let commit_statuses = self
             .statuses
-            .entry(notif.test_case.hash.clone())
+            .entry(notif.test_case.commit_hash.clone())
             .or_default();
         commit_statuses.insert(notif.test_case.test.name.clone(), notif.status.clone());
     }

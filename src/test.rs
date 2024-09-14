@@ -225,6 +225,68 @@ impl<W: Worktree> Manager<W> {
         }
     }
 
+    async fn cache_lookup(&self, test_case: &TestCase) -> Option<TestStatus> {
+        match test_case.cache_hash {
+            Some(ref hash) => {
+                match self
+                    .result_db
+                    .cached_result(hash, &test_case.test.name)
+                    .context("reading cached test result")
+                {
+                    Err(err) => {
+                        error!("Failed to read cached test result, will overwrite: {err:?}");
+                        None
+                    }
+                    Ok(maybe_status) => maybe_status,
+                }
+            }
+            None => None,
+        }
+    }
+
+    fn notify(&self, test_case: TestCase, status: TestStatus) {
+        self.result_tx
+            .send(Arc::new(Notification { test_case, status }))
+            .or_log_error("Dropping a notification. Probably nothing was listening");
+    }
+
+    fn spawn_job(&self, mut job: TestJob) {
+        self.notify(job.test_case.clone(), TestStatus::Enqueued);
+
+        let tx = self.result_tx.clone();
+        let pools = self.resource_pools.clone();
+        tokio::spawn(async move {
+            select!(
+                    _ = job.ct.cancelled() => (),
+                    resources = pools.get(job.test_case.test.needs_resource_idxs.clone()) =>  {
+                tx.send(Arc::new(Notification {
+                    test_case: job.test_case.clone(),
+                    status: TestStatus::Started,
+                }))
+                .or_log_error("Dropping a notification");
+                let worktree = resources.obj();
+                let result = job.run(worktree).await;
+                let status = match result {
+                    Err(ref err) => TestStatus::Error(err.to_string()),
+                    Ok(None) => TestStatus::Canceled,
+                    Ok(Some(exit_code)) => TestStatus::Completed(exit_code),
+                };
+                job.output
+                    .set_status(&status)
+                    .or_log_error("couldn't save job status");
+                // Note: must not drop test until the send is complete, or we would break
+                // settled().
+                let _ = tx.send(Arc::new(Notification {
+                    test_case: job.test_case,
+                    status,
+                }))
+                .map_err(|e|
+                    error!("Dropping a result ({result:?}. Seems nobody is listening to Manager::results(): {}", e)
+                );
+            });
+        });
+    }
+
     // Interrupt any revisions that are not in revs, start testing all revisions in revs that are
     // not already tested or being tested.
     // It doesn't make sense to call this function if you don't have a receiver
@@ -250,96 +312,24 @@ impl<W: Worktree> Manager<W> {
 
         for rev in to_start {
             for test in self.tests.iter() {
-                let test_case = TestCase {
-                    hash: rev.to_owned(),
-                    test: test.clone(),
-                };
-                let tx = self.result_tx.clone();
-
-                let cache_hash = match test.cache_policy {
-                    CachePolicy::NoCaching => None::<Hash>,
-                    CachePolicy::ByCommit => Some(rev.clone().into()),
-                    CachePolicy::ByTree => Some(
-                        self.repo
-                            .commit_tree(rev.clone())
-                            .await
-                            .context("looking up tree from commit")?
-                            .into(),
-                    ),
-                };
-
-                if let Some(ref hash) = cache_hash {
-                    match self
-                        .result_db
-                        .cached_result(hash, &test_case.test.name)
-                        .context("reading cached test result")
-                    {
-                        Ok(Some(status)) => {
-                            tx.send(Arc::new(Notification { test_case, status }))
-                                .or_log_error("dropping a cached result notification");
-                            continue;
-                        }
-                        Err(err) => {
-                            error!("Failed to read cached test result, will overwrite: {err:?}");
-                        }
-                        Ok(None) => (),
-                    }
+                let test_case = TestCase::new(rev.to_owned(), test.clone(), self.repo.as_ref())
+                    .await
+                    .context("failed to create TestCase")?;
+                if let Some(status) = self.cache_lookup(&test_case).await {
+                    self.notify(test_case, status);
+                    continue;
                 }
-
-                // If we're caching by tree, store the result by tree. If we're
-                // caching by commit, store by commit. If we aren't caching,
-                // also store by commit.
-                let storage_hash = cache_hash.unwrap_or(rev.clone().into());
 
                 let ct = CancellationToken::new();
                 self.job_cts.insert(rev.to_owned(), ct.clone());
-                let mut job = TestJob {
+                self.spawn_job(TestJob {
                     ct,
-                    test: test.clone(),
-                    rev: rev.to_owned(),
                     _token: self.job_counter.get(),
                     output: self
                         .result_db
-                        .create_output(&storage_hash, &test_case.test.name)?,
+                        .create_output(test_case.storage_hash(), &test_case.test.name)?,
+                    test_case,
                     origin_path: self.origin_path.clone(),
-                };
-
-                tx.send(Arc::new(Notification {
-                    test_case: test_case.clone(),
-                    status: TestStatus::Enqueued,
-                }))
-                .or_log_error("Dropping a notificatoin");
-
-                let pools = self.resource_pools.clone();
-                tokio::spawn(async move {
-                    select!(
-                            _ = job.ct.cancelled() => (),
-                            resources = pools.get(job.test.needs_resource_idxs.clone()) =>  {
-                        tx.send(Arc::new(Notification {
-                            test_case: test_case.clone(),
-                            status: TestStatus::Started,
-                        }))
-                        .or_log_error("Dropping a notification");
-                        let worktree = resources.obj();
-                        let result = job.run(worktree).await;
-                        let status = match result {
-                            Err(ref err) => TestStatus::Error(err.to_string()),
-                            Ok(None) => TestStatus::Canceled,
-                            Ok(Some(exit_code)) => TestStatus::Completed(exit_code),
-                        };
-                        job.output
-                            .set_status(&status)
-                            .or_log_error("couldn't save job status");
-                        // Note: must not drop test until the send is complete, or we would break
-                        // settled().
-                        let _ = tx.send(Arc::new(Notification {
-                            test_case,
-                            status,
-                        }))
-                        .map_err(|e|
-                            error!("Dropping a result ({result:?}. Seems nobody is listening to Manager::results(): {}", e)
-                        );
-                    });
                 });
             }
         }
@@ -424,11 +414,7 @@ impl Drop for JobToken {
 // https://smallcultfollowing.com/babysteps/blog/2024/06/02/the-borrow-checker-within/
 struct TestJob {
     ct: CancellationToken,
-    // TODO: Unclear if there's a way to avoid the atomic operations incurred by cloning these Arcs.
-    // There is no builtin equivalent to thread::scope for async. If we had that, maybe it would
-    // become possible to convince the compiler that the Manager outlives its Tests. Not sure.
-    test: Arc<Test>,
-    rev: CommitHash,
+    test_case: TestCase,
     _token: JobToken,
     output: TestCaseOutput,
     // Path of original repo we are testing (not our worktree).
@@ -441,16 +427,19 @@ impl TestJob {
     where
         W: Worktree,
     {
-        info!("Starting {} for rev {}...", self.test.name, self.rev);
+        info!(
+            "Starting {} for rev {}...",
+            self.test_case.test.name, self.test_case.commit_hash
+        );
 
-        worktree.checkout(&self.rev).await?;
+        worktree.checkout(&self.test_case.commit_hash).await?;
 
-        let mut cmd = self.test.command();
+        let mut cmd = self.test_case.test.command();
         let child = cmd
             .current_dir(worktree.path())
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
-            .env("LCI_COMMIT", self.rev.to_string())
+            .env("LCI_COMMIT", self.test_case.commit_hash.to_string())
             .env("LCI_ORIGIN", self.origin_path.as_os_str())
             // Killing on drop is not what we want. We really want this job to
             // get awaited so that the worktree can be safely reused and we can
@@ -489,12 +478,12 @@ impl TestJob {
                 // We don't care about its result but we
                 // need to wait for it to shut down so that we can safely give back the
                 // worktree.
-                let timeout = sleep(self.test.shutdown_grace_period);
+                let timeout = sleep(self.test_case.test.shutdown_grace_period);
                 select!(
                     _ = child_fut => (),
                     _ = timeout => {
                         // Canceled. Shut down the process.
-                        warn!("timeout for {:?}, SIGKILLing", self.test.name);
+                        warn!("timeout for {:?}, SIGKILLing", self.test_case.test.name);
                         kill(pid, Signal::SIGKILL).context("couldn't interrupt child job")?;
                     }
                 );
@@ -508,9 +497,46 @@ impl TestJob {
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(Hash, PartialEq, Eq))] // See comment on Test.
 pub struct TestCase {
-    pub hash: CommitHash,
+    // Commit that will be checked out to run the test.
+    pub commit_hash: CommitHash,
+    // Hash that will be used to identify the test result. Might be a tree hash,
+    // otherwise it matches the commit hash.
+    pub cache_hash: Option<Hash>,
     pub test: Arc<Test>,
 }
+
+impl TestCase {
+    pub async fn new<W: Worktree>(
+        commit_hash: CommitHash,
+        test: Arc<Test>,
+        repo: &W,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            cache_hash: match test.cache_policy {
+                CachePolicy::NoCaching => None::<Hash>,
+                CachePolicy::ByCommit => Some(commit_hash.clone().into()),
+                CachePolicy::ByTree => Some(
+                    repo.commit_tree(commit_hash.clone())
+                        .await
+                        .context("looking up tree from commit")?
+                        .into(),
+                ),
+            },
+            test,
+            commit_hash,
+        })
+    }
+
+    // Returns the hash that should be used to store the result in the result
+    // database. Note that results get stored in the database even when caching
+    // is disabled, so that the user can see the output..
+    pub fn storage_hash(&self) -> &Hash {
+        self.cache_hash
+            .as_ref()
+            .unwrap_or(self.commit_hash.as_ref())
+    }
+}
+
 pub type ExitCode = i32;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -898,10 +924,9 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                TestCase {
-                    hash,
-                    test: f.manager.tests[0].clone(),
-                },
+                TestCase::new(hash.to_owned(), f.manager.tests[0].clone(), f.repo.as_ref())
+                    .await
+                    .unwrap(),
                 vec![
                     TestStatus::Enqueued,
                     TestStatus::Started,
@@ -949,10 +974,13 @@ mod tests {
             // awu weh, weh mah
             HashMap::from([
                 (
-                    TestCase {
-                        hash: hash1,
-                        test: f.manager.tests[0].clone(),
-                    },
+                    TestCase::new(
+                        hash1.to_owned(),
+                        f.manager.tests[0].clone(),
+                        f.repo.as_ref(),
+                    )
+                    .await
+                    .unwrap(),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -963,10 +991,13 @@ mod tests {
                 // This isn't what we're testing here but we need to assert that it comes in so we can
                 // check below that nothing else comes in.
                 (
-                    TestCase {
-                        hash: hash2,
-                        test: f.manager.tests[0].clone(),
-                    },
+                    TestCase::new(
+                        hash2.to_owned(),
+                        f.manager.tests[0].clone(),
+                        f.repo.as_ref(),
+                    )
+                    .await
+                    .unwrap(),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1088,10 +1119,9 @@ mod tests {
                     .await
                     .expect("couldn't create test commit");
                 want_results.insert(
-                    TestCase {
-                        hash: hash.to_owned(),
-                        test: f.manager.tests[0].clone(),
-                    },
+                    TestCase::new(hash.to_owned(), f.manager.tests[0].clone(), f.repo.as_ref())
+                        .await
+                        .unwrap(),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
