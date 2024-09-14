@@ -20,5 +20,5 @@ cache = "by_tree"
 
 [[tests]]
 name = "clippy"
-command = "cargo clippy -- -D warnings"
+command = "cargo clippy --all-targets -- -D warnings"
 cache = "by_tree"

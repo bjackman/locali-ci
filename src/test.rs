@@ -601,7 +601,6 @@ mod tests {
     use log::error;
     use tempfile::TempDir;
     use test_case::test_case;
-    use test_log;
     use tokio::{
         select,
         time::{sleep, sleep_until, Instant},
@@ -638,7 +637,7 @@ mod tests {
         // Generate a tag which, when put in the commit message of a commit, will result in the test
         // returning the given exit code.
         pub fn exit_code_tag(code: u32) -> OsString {
-            return format!("exit_code({})", code).into();
+            format!("exit_code({})", code).into()
         }
 
         // Creates a script, this will create a temporary directory, which will
@@ -719,7 +718,7 @@ mod tests {
         pub async fn started(&self, hash: &CommitHash) -> StartedTestScript {
             path_exists(self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)).await;
             StartedTestScript {
-                script: &self,
+                script: self,
                 hash: hash.to_owned(),
             }
         }
@@ -809,7 +808,7 @@ mod tests {
         mut want: HashMap<TestCase, VecDeque<TestStatus>>,
     ) -> anyhow::Result<()> {
         let timeout = Instant::now() + Duration::from_secs(10);
-        while want.len() != 0 {
+        while !want.is_empty() {
             let notif = select!(
                 _ = sleep_until(timeout) => {
                     bail!("timeout after 5s, remaining results:\n{}",

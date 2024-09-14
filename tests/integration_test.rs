@@ -16,7 +16,6 @@ use nix::{
 use tempfile::TempDir;
 use test_bin::get_test_bin;
 use test_case::test_case;
-use test_log;
 use tokio::{
     io::AsyncWriteExt as _,
     process::{Child, Command},
@@ -91,7 +90,7 @@ impl LocalCiChild {
                 .stderr(Stdio::null())
                 .stderr(Stdio::null())
                 .current_dir(temp_dir.path())
-                .args(&["commit", "--allow-empty", "-m", "lohs geht's buebe"])
+                .args(["commit", "--allow-empty", "-m", "lohs geht's buebe"])
                 .status()
                 .await?
                 .check_exit_ok()
@@ -170,8 +169,7 @@ async fn test_worktree_teardown(test_command: &str) {
     .await
     .unwrap();
 
-    wait_for(|| lci.has_worktrees(), Duration::from_secs(5))
-        .expect(&format!("worktree not found after 5s"));
+    wait_for(|| lci.has_worktrees(), Duration::from_secs(5)).expect("worktree not found after 5s");
 
     lci.terminate().expect("couldn't shut down child");
 
@@ -207,8 +205,8 @@ async fn shouldnt_leak_jobs() {
     // Wait for test to start up
     let test_pid_path = temp_dir.path().join("test_pid");
     wait_for(|| Ok(test_pid_path.exists()), Duration::from_secs(5))
-        .expect(&format!("worktree not found after 5s"));
-    let pid: pid_t = pid_t::from_str(&fs::read_to_string(test_pid_path).unwrap().trim()).unwrap();
+        .expect("worktree not found after 5s");
+    let pid: pid_t = pid_t::from_str(fs::read_to_string(test_pid_path).unwrap().trim()).unwrap();
 
     lci.terminate().unwrap();
     assert!(!pid_running(pid));
