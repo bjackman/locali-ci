@@ -10,7 +10,6 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
- - Need to rename `--result-cache` to `--result-db`.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.

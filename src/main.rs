@@ -61,7 +61,8 @@ struct Args {
 // I think there's very likely a less totally fucking insane way to write it
 // but this is too tedious, I can't be bothered to figure it out.
 struct RuntimeDefaultArgs {
-    result_cache: PathBuf,
+    /// Directory where results will be stored.
+    result_db: PathBuf,
 }
 
 // IIUC this diabolical bullshit is to take the parsed arguments ant put thme
@@ -74,10 +75,7 @@ impl FromArgMatches for RuntimeDefaultArgs {
     }
     fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::Error> {
         Ok(Self {
-            result_cache: matches
-                .get_one::<PathBuf>("result-cache")
-                .unwrap()
-                .to_owned(),
+            result_db: matches.get_one::<PathBuf>("result-db").unwrap().to_owned(),
         })
     }
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
@@ -85,10 +83,7 @@ impl FromArgMatches for RuntimeDefaultArgs {
         self.update_from_arg_matches_mut(&mut matches)
     }
     fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), clap::Error> {
-        self.result_cache = matches
-            .get_one::<PathBuf>("result-cache")
-            .unwrap()
-            .to_owned();
+        self.result_db = matches.get_one::<PathBuf>("result-db").unwrap().to_owned();
         Ok(())
     }
 }
@@ -104,8 +99,8 @@ impl clap::Args for RuntimeDefaultArgs {
         ));
 
         cmd.arg(
-            Arg::new("result-cache")
-                .long("result-cache")
+            Arg::new("result-db")
+                .long("result-db")
                 .value_parser(value_parser!(PathBuf))
                 .default_value(default.to_str()),
         )
@@ -147,13 +142,10 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
-    let manager_builder = config::manager_builder(
-        repo.clone(),
-        &args.runtime_default.result_cache,
-        &args.config,
-    )?
-    .worktree_prefix(&args.worktree_prefix)
-    .worktree_dir(&args.worktree_dir);
+    let manager_builder =
+        config::manager_builder(repo.clone(), &args.runtime_default.result_db, &args.config)?
+            .worktree_prefix(&args.worktree_prefix)
+            .worktree_dir(&args.worktree_dir);
     let mut test_manager = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
     let mut notifs = test_manager.results();

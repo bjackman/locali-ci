@@ -114,7 +114,7 @@ impl LocalCiChild {
                 "test-worktree-",
                 "--repo",
                 temp_dir.path().to_str().unwrap(),
-                "--result-cache",
+                "--result-db",
                 cache_dir.to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
