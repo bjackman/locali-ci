@@ -1,5 +1,5 @@
 use anyhow::Context;
-use clap::Parser as _;
+use clap::{arg, value_parser, Arg, ArgMatches, FromArgMatches, Parser as _};
 use futures::StreamExt;
 use log::info;
 use std::ffi::OsString;
@@ -44,10 +44,58 @@ struct Args {
     /// Command to test. Note this is _not_ run via the shell.
     #[arg(short, long, required = true)]
     config: PathBuf,
+    #[command(flatten)]
+    runtime_default: RuntimeDefaultArgs,
     /// Base of range to test. Will test commits between this (exclusive) and
     /// HEAD (inclusive). Whenever HEAD changes, this string will be re-evaluated
     /// to find the base of the range.
     base: String,
+}
+
+// For arguments whose defaults need to be computed at runtime, we use the tricks from
+// https://docs.rs/clap/latest/clap/_derive/index.html#flattening-hand-implemented-args-into-a-derived-application
+struct RuntimeDefaultArgs {
+    result_cache: PathBuf,
+}
+
+impl FromArgMatches for RuntimeDefaultArgs {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        let mut matches = matches.clone();
+        Self::from_arg_matches_mut(&mut matches)
+    }
+    fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::Error> {
+        Ok(Self {
+            result_cache: matches
+                .get_one::<PathBuf>("result-cache")
+                .unwrap()
+                .to_owned(),
+        })
+    }
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        let mut matches = matches.clone();
+        self.update_from_arg_matches_mut(&mut matches)
+    }
+    fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), clap::Error> {
+        self.result_cache = matches
+            .get_one::<PathBuf>("result-cache")
+            .unwrap()
+            .to_owned();
+        Ok(())
+    }
+}
+
+impl clap::Args for RuntimeDefaultArgs {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        cmd.arg(
+            Arg::new("result-cache")
+                .long("result-cache")
+                .value_parser(value_parser!(PathBuf))
+                .default_value("foobar"),
+        )
+    }
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        Self::augment_args(cmd)
+    }
 }
 
 #[tokio::main]
