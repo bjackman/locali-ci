@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs::{self, create_dir},
     path::Path,
     process::{ExitStatus, Stdio},
     str::FromStr,
@@ -97,19 +97,21 @@ impl LocalCiChild {
                 .context("git commit")?;
         }
 
+        let worktree_dir = temp_dir.path().join("worktrees");
+        create_dir(&worktree_dir).unwrap();
+
         let mut cmd: Command = get_test_bin("local-ci").into();
-        // TODO: This uses this code's repo as a test input, so maybe we can break
-        // this test by just commiting changes. Should probably have a special test
-        // repo as input.
         let cmd = cmd
             .args([
                 "HEAD^",
                 "--config",
                 "/dev/stdin",
                 "--worktree-dir",
-                temp_dir.path().to_str().unwrap(),
+                worktree_dir.to_str().unwrap(),
                 "--worktree-prefix",
                 "test-worktree-",
+                "--repo",
+                temp_dir.path().to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
             .kill_on_drop(true);
