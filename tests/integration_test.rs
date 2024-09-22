@@ -114,6 +114,7 @@ impl LocalCiChild {
                 temp_dir.path().to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
+            .stdout(Stdio::null())
             .kill_on_drop(true);
         let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
