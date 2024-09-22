@@ -11,14 +11,14 @@ set `nice 10` for the current shell.
 Bugs (high to low priority):
 
  - Need to rename `--result-cache` to `--result-db`.
- - Shutdown still does not happen cleanly on my kernel repo. At least one reason
-   for this seems to be that child processes inherit the SIGINT. Another is that
-   Ctrl-C just doesn't always kill the service.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.
- - Bogus output directory names for `by_tree` tests (doesn't affect functionality).
  - Cache should also include hash of test config.
+ - Shutdown still does not happen cleanly on my kernel repo. At least one reason
+   for this seems to be that child processes inherit the SIGINT. Another is that
+   Ctrl-C just doesn't always kill the service.
+ - Bogus output directory names for `by_tree` tests (doesn't affect functionality).
  - Status output doesn't seem to get updated when tested range shrinks?
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.
