@@ -313,7 +313,7 @@ impl<W: Worktree> Manager<W> {
                 cancel_revs.push(rev.clone())
             }
         }
-        info!("Starting {:?}, cancelling {:?}", to_start, cancel_revs);
+        info!("Enqueueing {:?}, cancelling {:?}", to_start, cancel_revs);
         for rev in cancel_revs {
             self.job_cts[&rev].cancel();
             self.job_cts.remove(&rev);
@@ -864,8 +864,7 @@ mod tests {
                 }
             );
             let want_statuses = want.get_mut(&notif.test_case).context(format!(
-                "got result for unexpected case {:?}",
-                notif.test_case
+                "got notification for unexpected test case: {notif:?}",
             ))?;
             let want_status = want_statuses.pop_front().expect("empty status series");
             if want_statuses.is_empty() {
