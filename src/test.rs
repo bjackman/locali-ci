@@ -256,7 +256,13 @@ impl<W: Worktree> Manager<W> {
         let tx = self.result_tx.clone();
         let pools = self.resource_pools.clone();
         tokio::spawn(async move {
-            select!(
+            // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
+            // and some of those jobs are blocking on resources held by others,
+            // we want the former jobs to observe their own cancellation before
+            // they see the resources get freed up by the latter. I don't think
+            // this totally eliminates that case, which probably means tests
+            // will be flaky. Not sure what to do about that.
+            select!(biased;
                     _ = job.ct.cancelled() => (),
                     resources = pools.get(job.test_case.test.needs_resource_idxs.clone()) =>  {
                 tx.send(Arc::new(Notification {
