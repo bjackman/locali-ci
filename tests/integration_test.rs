@@ -78,7 +78,7 @@ impl LocalCiChild {
 
         Command::new("git")
             .stderr(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::null())
             .arg("init")
             .current_dir(temp_dir.path())
             .status()
@@ -88,7 +88,7 @@ impl LocalCiChild {
         for _ in 0..5 {
             Command::new("git")
                 .stderr(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::null())
                 .current_dir(temp_dir.path())
                 .args(["commit", "--allow-empty", "-m", "lohs geht's buebe"])
                 .status()
