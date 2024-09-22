@@ -10,6 +10,7 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
+ - Integration tests use the user's cache, so they fail when run often.
  - Sometimes "Cancelled" test statuses get cached.
  - SIGINT from local-ci shutdown gets cached.
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
