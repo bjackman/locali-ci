@@ -907,6 +907,17 @@ mod tests {
         async fn new() -> Self {
             Self::new_with_worktrees(2).await
         }
+
+        // Convenience helper to construct a TestCase referring to this fixture's configuration.
+        async fn test_case(&self, hash: impl Borrow<CommitHash>, test_idx: usize) -> TestCase {
+            TestCase::new(
+                hash.borrow().to_owned(),
+                self.manager.tests[test_idx].clone(),
+                self.repo.as_ref(),
+            )
+            .await
+            .unwrap()
+        }
     }
 
     #[test_log::test(tokio::test)]
@@ -923,9 +934,7 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                TestCase::new(hash.to_owned(), f.manager.tests[0].clone(), f.repo.as_ref())
-                    .await
-                    .unwrap(),
+                f.test_case(&hash, 0).await,
                 vec![
                     TestStatus::Enqueued,
                     TestStatus::Started,
@@ -973,13 +982,7 @@ mod tests {
             // awu weh, weh mah
             HashMap::from([
                 (
-                    TestCase::new(
-                        hash1.to_owned(),
-                        f.manager.tests[0].clone(),
-                        f.repo.as_ref(),
-                    )
-                    .await
-                    .unwrap(),
+                    f.test_case(hash1, 0).await,
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -990,13 +993,7 @@ mod tests {
                 // This isn't what we're testing here but we need to assert that it comes in so we can
                 // check below that nothing else comes in.
                 (
-                    TestCase::new(
-                        hash2.to_owned(),
-                        f.manager.tests[0].clone(),
-                        f.repo.as_ref(),
-                    )
-                    .await
-                    .unwrap(),
+                    f.test_case(hash2, 0).await,
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1118,9 +1115,7 @@ mod tests {
                     .await
                     .expect("couldn't create test commit");
                 want_results.insert(
-                    TestCase::new(hash.to_owned(), f.manager.tests[0].clone(), f.repo.as_ref())
-                        .await
-                        .unwrap(),
+                    f.test_case(&hash, 0).await,
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
