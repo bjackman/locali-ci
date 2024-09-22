@@ -551,21 +551,6 @@ pub enum TestStatus {
     Completed(ExitCode),
 }
 
-// impl TestStatus {
-//     pub fn is_final(&self) -> bool {
-//         match self {
-//             Self::Canceled => true,
-//             Self::Completed(_) => true,
-//             _ => false,
-//         }
-//     }
-
-//     // This is the first status we shoudl expect to observe for any TestCase.
-//     pub fn initial() -> Self {
-//         Self::Enqueued
-//     }
-// }
-
 impl Display for TestStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
