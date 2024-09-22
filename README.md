@@ -18,7 +18,6 @@ Bugs (high to low priority):
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT. Another is that
    Ctrl-C just doesn't always kill the service.
- - Bogus output directory names for `by_tree` tests (doesn't affect functionality).
  - Status output doesn't seem to get updated when tested range shrinks?
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.

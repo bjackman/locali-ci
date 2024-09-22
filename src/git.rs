@@ -266,7 +266,8 @@ pub trait Worktree: Debug {
             self.log_n1(hash, "%T")
                 .await?
                 .into_string()
-                .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?,
+                .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?
+                .trim(),
         ))
     }
 
