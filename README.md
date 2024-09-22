@@ -10,7 +10,6 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
- - Need tests for cancellation of not-yet-started jobs.
  - Sometimes "Cancelled" test statuses get cached.
  - SIGINT from local-ci shutdown gets cached.
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason

@@ -714,6 +714,12 @@ mod tests {
             self.dir.path().join(Self::BUG_DETECTED_PATH)
         }
 
+        // Has the script been started so far for this test?
+        pub fn was_started(&self, hash: &CommitHash) -> bool {
+            self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)
+                .exists()
+        }
+
         // Blocks until the script is started for the given commit hash.
         pub async fn started(&self, hash: &CommitHash) -> StartedTestScript {
             path_exists(self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)).await;
@@ -1238,6 +1244,71 @@ mod tests {
         );
     }
 
+    #[test_log::test(tokio::test)]
+    async fn should_not_start_canceled() {
+        let mut f = TestScriptFixture::<1>::new_with_worktrees(1).await;
+        let mut results = f.manager.results();
+        let mut hashes = Vec::new();
+        for _ in 0..5 {
+            hashes.push(
+                f.repo
+                    .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+                    .await
+                    .expect("couldn't create test commit"),
+            );
+        }
+
+        // We're gonna start one test and have another become blocked waiting
+        // for a worktree. In order to make it deterministic which one gets
+        // blocked, we'll do this in two phases.
+        f.manager
+            .set_revisions(vec![hashes[0].clone()])
+            .await
+            .unwrap();
+        // wait for first test to get started.
+        expect_notifs_10s(
+            &mut results,
+            HashMap::from([(
+                f.test_case(&hashes[0], 0).await,
+                vec![TestStatus::Enqueued, TestStatus::Started].into(),
+            )]),
+        )
+        .await
+        .expect("bad test result");
+
+        // Now we enqueue the test that should block.
+        f.manager
+            .set_revisions(vec![hashes[0].clone(), hashes[1].clone()])
+            .await
+            .unwrap();
+        expect_notifs_10s(
+            &mut results,
+            HashMap::from([(
+                f.test_case(&hashes[1], 0).await,
+                vec![TestStatus::Enqueued].into(),
+            )]),
+        )
+        .await
+        .expect("bad test result");
+
+        // Now we cancel both of those tests.
+        f.manager.set_revisions(Vec::new()).await.unwrap();
+        expect_notifs_10s(
+            &mut results,
+            HashMap::from([(
+                f.test_case(&hashes[0], 0).await,
+                vec![TestStatus::Canceled].into(),
+            )]),
+        )
+        .await
+        .expect("bad test result");
+
+        expect_no_more_results(&mut results, &f.manager)
+            .await
+            .unwrap();
+
+        assert!(!f.scripts[0].was_started(&hashes[1]));
+    }
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
     // to do with panic and drop order I think.
 }
