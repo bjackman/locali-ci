@@ -19,6 +19,8 @@ Bugs (high to low priority):
    Ctrl-C just doesn't always kill the service.
  - Status output doesn't seem to get updated when tested range shrinks?
  - No tests for checking config cache...
+ - No tests for actual contents of config cache. (E.g: Nothing to catch bug
+   where we deleted stdouts and stderrs).
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.
 

@@ -78,6 +78,7 @@ impl Database {
 // Output for an individual commit.
 pub struct TestCaseOutput {
     base_dir: PathBuf,
+    base_dir_created: bool,
     stdout_opened: bool,
     stderr_opened: bool,
     status_written: bool,
@@ -88,6 +89,7 @@ impl TestCaseOutput {
     pub fn new(base_dir: PathBuf, config_hash: ConfigHash) -> anyhow::Result<Self> {
         Ok(Self {
             base_dir,
+            base_dir_created: false,
             stdout_opened: false,
             stderr_opened: false,
             status_written: false,
@@ -96,16 +98,19 @@ impl TestCaseOutput {
     }
 
     // Create and return base directory
-    fn get_base_dir(&self) -> Result<&Path> {
-        // To avoid confusion from partially-overwritten entries, delete the old one if it exists.
-        if self.base_dir.exists() {
-            remove_dir_all(&self.base_dir).context("cleaning up old result DB entry")?;
-        }
+    fn get_base_dir(&mut self) -> Result<&Path> {
+        if !self.base_dir_created {
+            // To avoid confusion from partially-overwritten entries, delete the old one if it exists.
+            if self.base_dir.exists() {
+                remove_dir_all(&self.base_dir).context("cleaning up old result DB entry")?;
+            }
 
-        create_dir_all(&self.base_dir).context(format!(
-            "creating commit result dir at {}",
-            self.base_dir.display()
-        ))?;
+            create_dir_all(&self.base_dir).context(format!(
+                "creating commit result dir at {}",
+                self.base_dir.display()
+            ))?;
+            self.base_dir_created = true;
+        }
         Ok(&self.base_dir)
     }
 
