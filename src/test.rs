@@ -672,8 +672,8 @@ mod tests {
                 if [ -e ./{lock_filename:?} ]; then
                     echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
                 fi
-                touch ./{lock_filename:?}
                 trap \"rm {lock_filename:?}\" EXIT
+                touch ./{lock_filename:?}
                 commit_msg=\"$(git log -n1 --format=%B)\"
                 if [[ \"$commit_msg\" =~ {block_tag} ]]; then
                     # sleep is not a builtin so we won't handle SIGINT while
