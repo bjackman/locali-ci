@@ -102,6 +102,7 @@ pub struct Config {
 
 pub fn manager_builder(
     repo: Arc<git::PersistentWorktree>,
+    cache_path: &Path,
     config_path: &Path,
 ) -> anyhow::Result<test::ManagerBuilder<PersistentWorktree>> {
     let config_content = fs::read_to_string(config_path).context("couldn't read config")?;
@@ -165,7 +166,7 @@ pub fn manager_builder(
 
     Ok(test::Manager::builder(
         repo.clone(),
-        Database::create_or_open_user()?,
+        Database::create_or_open(cache_path)?,
         tests,
         resource_token_counts,
     )

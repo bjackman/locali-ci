@@ -52,12 +52,21 @@ struct Args {
     base: String,
 }
 
-// For arguments whose defaults need to be computed at runtime, we use the tricks from
+// Clap's derive API doesn't support argument defaults that depend on runtime
+// computation. We don't wanna drop that API completely so
+// we use the tricks from
 // https://docs.rs/clap/latest/clap/_derive/index.html#flattening-hand-implemented-args-into-a-derived-application
+// to combine the derive and builder APIs.
+// This builder-API based part is absolutely fucking insane,
+// I think there's very likely a less totally fucking insane way to write it
+// but this is too tedious, I can't be bothered to figure it out.
 struct RuntimeDefaultArgs {
     result_cache: PathBuf,
 }
 
+// IIUC this diabolical bullshit is to take the parsed arguments ant put thme
+// into theo RuntimeDefaultArgs struct that we flatten into the derive'd struct
+// above.
 impl FromArgMatches for RuntimeDefaultArgs {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
         let mut matches = matches.clone();
@@ -84,13 +93,21 @@ impl FromArgMatches for RuntimeDefaultArgs {
     }
 }
 
+// This is where we actually define the arguments with dynamic defaults.
 impl clap::Args for RuntimeDefaultArgs {
     fn augment_args(cmd: clap::Command) -> clap::Command {
+        let default = Box::leak(Box::new(
+            directories::ProjectDirs::from("", "", "local-ci")
+                .expect("couldn't find user data dir")
+                .data_local_dir()
+                .to_owned(),
+        ));
+
         cmd.arg(
             Arg::new("result-cache")
                 .long("result-cache")
                 .value_parser(value_parser!(PathBuf))
-                .default_value("foobar"),
+                .default_value(default.to_str()),
         )
     }
     fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
@@ -100,9 +117,9 @@ impl clap::Args for RuntimeDefaultArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-
     env_logger::init();
+
+    let args = Args::parse();
 
     // Set up shutdown first, to ensure we correctly handle early signals.
     // As well as doing it early, it seems to be important that we do this with
@@ -130,9 +147,13 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
-    let manager_builder = config::manager_builder(repo.clone(), &args.config)?
-        .worktree_prefix(&args.worktree_prefix)
-        .worktree_dir(&args.worktree_dir);
+    let manager_builder = config::manager_builder(
+        repo.clone(),
+        &args.runtime_default.result_cache,
+        &args.config,
+    )?
+    .worktree_prefix(&args.worktree_prefix)
+    .worktree_dir(&args.worktree_dir);
     let mut test_manager = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
     let mut notifs = test_manager.results();

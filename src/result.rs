@@ -26,14 +26,6 @@ impl Database {
         })
     }
 
-    pub fn create_or_open_user() -> anyhow::Result<Self> {
-        Self::create_or_open(
-            directories::ProjectDirs::from("", "", "local-ci")
-                .context("finding user data dir")?
-                .data_local_dir(),
-        )
-    }
-
     fn result_path(&self, hash: &Hash, test_name: impl Into<String>) -> PathBuf {
         self.base_dir.join(hash.as_ref()).join(test_name.into())
     }

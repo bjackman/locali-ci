@@ -99,6 +99,8 @@ impl LocalCiChild {
 
         let worktree_dir = temp_dir.path().join("worktrees");
         create_dir(&worktree_dir).unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+        create_dir(&cache_dir).unwrap();
 
         let mut cmd: Command = get_test_bin("local-ci").into();
         let cmd = cmd
@@ -112,6 +114,8 @@ impl LocalCiChild {
                 "test-worktree-",
                 "--repo",
                 temp_dir.path().to_str().unwrap(),
+                "--result-cache",
+                cache_dir.to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -125,7 +129,7 @@ impl LocalCiChild {
 
     // Returns true if any worktree of this child currently exists.
     fn has_worktrees(&mut self) -> Result<bool> {
-        let mut pattern = self.temp_dir.path().to_owned();
+        let mut pattern = self.temp_dir.path().join("worktrees").to_owned();
         pattern.push("test-worktree-*");
         Ok(!glob(pattern.to_string_lossy().as_ref())?
             .collect::<Vec<_>>()
