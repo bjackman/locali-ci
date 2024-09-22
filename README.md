@@ -10,13 +10,10 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
- - Sometimes "Cancelled" test statuses get cached.
- - SIGINT from local-ci shutdown gets cached.
  - Need to rename `--result-cache` to `--result-db`.
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT. Another is that
    Ctrl-C just doesn't always kill the service.
-   - Workaround (Fish): `for f in (find ~/.local/share/local-ci/ -name result.json | xargs grep -l "terminated by"); rm -rf (dirname (dirname $f)); end`
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.

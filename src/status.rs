@@ -253,9 +253,12 @@ impl OutputBuffer {
                                 name.bold(),
                                 match status {
                                     TestStatus::Error(msg) => msg.on_bright_red(),
-                                    TestStatus::Completed(0) => "success".on_green(),
-                                    TestStatus::Completed(code) =>
-                                        format!("failed (status {code})").on_red(),
+                                    TestStatus::Completed(result) =>
+                                        if result.exit_code == 0 {
+                                            "success".on_green()
+                                        } else {
+                                            format!("failed (status {})", result.exit_code).on_red()
+                                        },
                                     _ => status.to_string().into(),
                                 }
                             )
@@ -279,6 +282,7 @@ mod tests {
 
     use crate::{
         git::test_utils::{TempRepo, WorktreeExt},
+        test::TestResult,
         test_utils::some_time,
     };
 
@@ -300,7 +304,10 @@ mod tests {
                 hash3,
                 HashMap::from([
                     ("my_test1".to_owned(), TestStatus::Enqueued),
-                    ("my_test2".to_owned(), TestStatus::Completed(0)),
+                    (
+                        "my_test2".to_owned(),
+                        TestStatus::Completed(TestResult { exit_code: 0 }),
+                    ),
                 ]),
             ),
             (
@@ -354,7 +361,10 @@ mod tests {
                 hash3,
                 HashMap::from([
                     ("my_test1".to_owned(), TestStatus::Enqueued),
-                    ("my_test2".to_owned(), TestStatus::Completed(0)),
+                    (
+                        "my_test2".to_owned(),
+                        TestStatus::Completed(TestResult { exit_code: 0 }),
+                    ),
                 ]),
             ),
             (
@@ -412,7 +422,10 @@ mod tests {
                 hash3,
                 HashMap::from([
                     ("my_test1".to_owned(), TestStatus::Enqueued),
-                    ("my_test2".to_owned(), TestStatus::Completed(0)),
+                    (
+                        "my_test2".to_owned(),
+                        TestStatus::Completed(TestResult { exit_code: 0 }),
+                    ),
                 ]),
             ),
             (

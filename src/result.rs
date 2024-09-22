@@ -5,8 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::git::Hash;
-use crate::test::TestStatus;
+use crate::{git::Hash, test::TestResult};
 
 // Result database similar to the design described in
 // https://github.com/bjackman/git-brisect?tab=readme-ov-file#the-result-directory
@@ -34,7 +33,7 @@ impl Database {
         &self,
         hash: &Hash,
         test_name: impl Into<String>,
-    ) -> Result<Option<TestStatus>> {
+    ) -> Result<Option<TestResult>> {
         let result_path = self.result_path(hash, test_name).join("result.json");
         if result_path.exists() {
             Ok(Some(
@@ -100,16 +99,14 @@ impl TestCaseOutput {
         Ok(File::create(self.get_base_dir()?.join("stderr.txt"))?)
     }
 
-    // Note this is called "exitcode" instead of "returncode" because it really
-    // only gets set when the child process exits.
     // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
     // Panics if called more than once.
-    pub fn set_status(&mut self, status: &TestStatus) -> anyhow::Result<()> {
+    pub fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
         assert!(!self.status_written);
         self.status_written = true;
         Ok(fs::write(
             self.get_base_dir()?.join("result.json"),
-            serde_json::to_vec(status).expect("failed to serialize TestStatus"),
+            serde_json::to_vec(result).expect("failed to serialize TestStatus"),
         )?)
     }
 }

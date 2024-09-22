@@ -225,7 +225,7 @@ impl<W: Worktree> Manager<W> {
         }
     }
 
-    async fn cache_lookup(&self, test_case: &TestCase) -> Option<TestStatus> {
+    async fn cache_lookup(&self, test_case: &TestCase) -> Option<TestResult> {
         match test_case.cache_hash {
             Some(ref hash) => {
                 match self
@@ -237,7 +237,7 @@ impl<W: Worktree> Manager<W> {
                         error!("Failed to read cached test result, will overwrite: {err:?}");
                         None
                     }
-                    Ok(maybe_status) => maybe_status,
+                    Ok(maybe_result) => maybe_result,
                 }
             }
             None => None,
@@ -269,11 +269,14 @@ impl<W: Worktree> Manager<W> {
                 let status = match result {
                     Err(ref err) => TestStatus::Error(err.to_string()),
                     Ok(None) => TestStatus::Canceled,
-                    Ok(Some(exit_code)) => TestStatus::Completed(exit_code),
+                    Ok(Some(exit_code)) => {
+                        let test_result = TestResult{exit_code};
+                        job.output
+                            .set_result(&test_result)
+                            .or_log_error("couldn't save job status");
+                        TestStatus::Completed(test_result)
+                    }
                 };
-                job.output
-                    .set_status(&status)
-                    .or_log_error("couldn't save job status");
                 // Note: must not drop test until the send is complete, or we would break
                 // settled().
                 let _ = tx.send(Arc::new(Notification {
@@ -315,8 +318,8 @@ impl<W: Worktree> Manager<W> {
                 let test_case = TestCase::new(rev.to_owned(), test.clone(), self.repo.as_ref())
                     .await
                     .context("failed to create TestCase")?;
-                if let Some(status) = self.cache_lookup(&test_case).await {
-                    self.notify(test_case, status);
+                if let Some(test_result) = self.cache_lookup(&test_case).await {
+                    self.notify(test_case, TestStatus::Completed(test_result));
                     continue;
                 }
 
@@ -539,7 +542,7 @@ impl TestCase {
 
 pub type ExitCode = i32;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestStatus {
     Enqueued,
     Started,
@@ -548,7 +551,7 @@ pub enum TestStatus {
     // error handling fanciness since this is just part of the normal flow of
     // the program, so we just define this as a normal case among this enum.
     Error(String), // This includes the test getting terminated by a signal.
-    Completed(ExitCode),
+    Completed(TestResult),
 }
 
 impl Display for TestStatus {
@@ -558,8 +561,21 @@ impl Display for TestStatus {
             Self::Started => write!(f, "Started"),
             Self::Canceled => write!(f, "Cancelled"),
             Self::Error(msg) => write!(f, "Failed testing - {:?}", msg),
-            Self::Completed(exit_code) => write!(f, "Completed - exit code {}", exit_code),
+            Self::Completed(result) => write!(f, "Completed - {}", result),
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TestResult {
+    // Note this is called "exit_code" instead of "return_code" because it really
+    // only gets set when the child process exits.
+    pub exit_code: ExitCode,
+}
+
+impl Display for TestResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "exit code {}", self.exit_code)
     }
 }
 
@@ -574,7 +590,7 @@ mod tests {
     use std::{
         array,
         collections::VecDeque,
-        fs::{self, File},
+        fs::{self, remove_file, File},
         io::{self, BufRead as _},
         path::PathBuf,
         thread::panicking,
@@ -610,7 +626,7 @@ mod tests {
 
     impl TestScript {
         // Each time the script gets started it echoes a line to this file.
-        const STARTED_FILENAME_PREFIX: &'static str = "started.";
+        const PID_FILENAME_PREFIX: &'static str = "pid.";
         const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
         const LOCK_FILENAME: &'static str = "lockfile";
         const BUG_DETECTED_PATH: &'static str = "bug_detected";
@@ -645,7 +661,7 @@ mod tests {
             // need more Bash hackery to ensure that the signal gets forwarded to it.
             let script = format!(
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
-                echo >> {started_path_prefix:?}$(git rev-parse HEAD)
+                echo $$ >> {pid_path_prefix:?}$(git rev-parse HEAD)
 
                 if [ -e ./{lock_filename:?} ]; then
                     echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
@@ -664,7 +680,7 @@ mod tests {
                 exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
                 exit ${{exit_code:-0}}
                 ",
-                started_path_prefix = dir.path().join(Self::STARTED_FILENAME_PREFIX),
+                pid_path_prefix = dir.path().join(Self::PID_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
                 lock_filename = Self::LOCK_FILENAME,
                 bug_detected_path = dir.path().join(Self::BUG_DETECTED_PATH),
@@ -701,22 +717,35 @@ mod tests {
 
         // Has the script been started so far for this test?
         pub fn was_started(&self, hash: &CommitHash) -> bool {
-            self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)
+            self.signalling_path(Self::PID_FILENAME_PREFIX, hash)
                 .exists()
         }
 
         // Blocks until the script is started for the given commit hash.
         pub async fn started(&self, hash: &CommitHash) -> StartedTestScript {
-            path_exists(self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash)).await;
+            let pid_path = self.signalling_path(Self::PID_FILENAME_PREFIX, hash);
+            path_exists(&pid_path).await;
+            let content = fs::read_to_string(pid_path).expect("couldn't read PID file");
+            // The script appends a PID to the file each time, this is handy for num_runs.
+            // So we just take the last one.
+            let line = content
+                .trim()
+                .split("\n")
+                .last()
+                .expect("PID file existed but contained no PIDs");
             StartedTestScript {
                 script: self,
                 hash: hash.to_owned(),
+                pid: Pid::from_raw(line.parse().unwrap_or_else(|_| {
+                    panic!("couldn't parse PID file as integer (content: {content:?}")
+                })),
             }
         }
 
-        // Number of times the script has been successfully spawned for this commit.
+        // Number of times the script has been successfully spawned for this
+        // commit, since StartedTestScript::reset_started was called for it.
         pub fn num_runs(&self, hash: &CommitHash) -> usize {
-            let path = self.signalling_path(Self::STARTED_FILENAME_PREFIX, hash);
+            let path = self.signalling_path(Self::PID_FILENAME_PREFIX, hash);
             if !path.exists() {
                 return 0;
             }
@@ -768,6 +797,7 @@ mod tests {
     struct StartedTestScript<'a> {
         script: &'a TestScript,
         hash: CommitHash,
+        pid: Pid,
     }
 
     impl<'a> StartedTestScript<'a> {
@@ -778,6 +808,22 @@ mod tests {
                     .signalling_path(TestScript::SIGINTED_FILENAME_PREFIX, &self.hash),
             )
             .await;
+        }
+
+        // SIGTERM the instance of the script. Use this if you want the script
+        // to "fail with an error". This preferable to SIGKILL because that will
+        // prevent the underlying script from performing its cleanup.
+        pub fn sigterm(&self) {
+            kill(self.pid, Signal::SIGTERM).expect("couldn't SIGKILL test script");
+        }
+
+        // Forget "started" state so that TestScript::started can usefully be called again.
+        pub fn reset_started(self) {
+            remove_file(
+                self.script
+                    .signalling_path(TestScript::PID_FILENAME_PREFIX, &self.hash),
+            )
+            .expect("couldn't delete test script PID file");
         }
     }
 
@@ -929,7 +975,7 @@ mod tests {
                 vec![
                     TestStatus::Enqueued,
                     TestStatus::Started,
-                    TestStatus::Completed(0),
+                    TestStatus::Completed(TestResult { exit_code: 0 }),
                 ]
                 .into(),
             )]),
@@ -988,7 +1034,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Completed(0),
+                        TestStatus::Completed(TestResult { exit_code: 0 }),
                     ]
                     .into(),
                 ),
@@ -1110,7 +1156,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Completed(i),
+                        TestStatus::Completed(TestResult { exit_code: i }),
                     ]
                     .into(),
                 );
@@ -1231,7 +1277,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_not_start_canceled() {
-        let mut f = TestScriptFixture::<1>::new_with_worktrees(1).await;
+        let mut f = TestScriptFixture::<1>::new_with_worktrees(2).await;
         let mut results = f.manager.results();
         let mut hashes = Vec::new();
         for _ in 0..5 {
@@ -1293,6 +1339,81 @@ mod tests {
             .unwrap();
 
         assert!(!f.scripts[0].was_started(&hashes[1]));
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn should_not_cache() {
+        let mut f = TestScriptFixture::<2>::new_with_worktrees(2).await;
+        let mut results = f.manager.results();
+        let hash = f
+            .repo
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+            .await
+            .expect("couldn't create test commit");
+
+        // Wait until both tests are started.
+        f.manager
+            .set_revisions(vec![hash.clone()].clone())
+            .await
+            .unwrap();
+        expect_notifs_10s(
+            &mut results,
+            HashMap::from([
+                (
+                    f.test_case(&hash, 0).await,
+                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                ),
+                (
+                    f.test_case(&hash, 1).await,
+                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                ),
+            ]),
+        )
+        .await
+        .expect("bad test result");
+
+        // Cause one to fail with an error. We take advantage of the fact that
+        // this whole tool considers it an "error" when a test exits with a
+        // signal instead of exiting with a nonzero code.
+        // f.scripts[0];
+        let started_script = f.scripts[0].started(&hash).await;
+        started_script.sigterm();
+        expect_notifs_10s(
+            &mut results,
+            HashMap::from([(
+                f.test_case(&hash, 0).await,
+                vec![TestStatus::Error(String::from("terminated by signal 15"))].into(),
+            )]),
+        )
+        .await
+        .expect("didn't get error after killing script");
+        started_script.reset_started();
+
+        // ... and the other to be canceled.
+        f.manager.set_revisions(vec![]).await.unwrap();
+        expect_notifs_10s(
+            &mut results,
+            HashMap::from([(
+                f.test_case(&hash, 1).await,
+                vec![TestStatus::Canceled].into(),
+            )]),
+        )
+        .await
+        .expect("didn't see test cancellation");
+
+        // They should now get run a second time.
+        f.manager
+            .set_revisions(vec![hash.clone()].clone())
+            .await
+            .unwrap();
+        select!(
+            _ = sleep(Duration::from_secs(5)) => panic!("error'd test not re-run"),
+            _ = f.scripts[0].started(&hash) => ()
+        );
+        select!(
+            _ = sleep(Duration::from_secs(5)) => panic!("canceled test not re-run"),
+            _ = f.scripts[1].started(&hash) => ()
+        );
     }
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
     // to do with panic and drop order I think.
