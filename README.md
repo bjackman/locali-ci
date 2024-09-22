@@ -1,5 +1,13 @@
 Needs Rust >= 1.80.
 
+To run this as a low priority on Linux, try prefixing the command with `chrt -i
+0` which will run it as `SCHED_IDLE`. `nice -n 19` isn't really enough because
+you probably have
+[autogroups](https://man7.org/linux/man-pages/man7/sched.7.html) enabled. To run
+at background priorities other than `SCHED_IDLE` you'll need to work around that
+- the man page gives an example of running `echo 10 > /proc/self/autogroup` to
+set `nice 10` for the current shell.
+
 Bugs (high to low priority):
 
  - Need tests for cancellation of not-yet-started jobs.
