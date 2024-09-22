@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
-    fs, iter,
+    fs,
+    hash::{DefaultHasher, Hash as _, Hasher as _},
+    iter,
     path::Path,
     sync::Arc,
     time::Duration,
@@ -16,7 +18,7 @@ use crate::{
     test::{self, CachePolicy},
 };
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Hash)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum Resource {
@@ -40,7 +42,7 @@ impl Resource {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Hash)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum Command {
@@ -64,7 +66,7 @@ impl Command {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct Test {
     name: String,
@@ -144,6 +146,11 @@ pub fn manager_builder(
                 needs_resource_idxs,
                 shutdown_grace_period: Duration::from_secs(t.shutdown_grace_period_s),
                 cache_policy: t.cache,
+                config_hash: {
+                    let mut h = DefaultHasher::new();
+                    t.hash(&mut h);
+                    h.finish()
+                },
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;

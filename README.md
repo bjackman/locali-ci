@@ -14,11 +14,11 @@ Bugs (high to low priority):
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.
    I don't see this when running against this repo, only when running on my big fat kernel tree.
- - Cache should also include hash of test config.
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT. Another is that
    Ctrl-C just doesn't always kill the service.
  - Status output doesn't seem to get updated when tested range shrinks?
+ - No tests for checking config cache...
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.
 

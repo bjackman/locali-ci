@@ -61,6 +61,9 @@ pub enum CachePolicy {
     ByTree,
 }
 
+// Some unspecified hash, don't care too much about stability across builds.
+pub type ConfigHash = u64;
+
 // A test task that will need to be repeated for each commit.
 // We have tests that use these as hash keys for historical reasons. I think
 // this is fine but I'm not sure if it's really something to reasonably take
@@ -68,6 +71,8 @@ pub enum CachePolicy {
 #[cfg_attr(test, derive(Hash, PartialEq, Eq))]
 pub struct Test {
     pub name: String,
+    // Hash of the configuration that created this Test.
+    pub config_hash: ConfigHash,
     pub program: OsString,
     pub args: Vec<OsString>,
     // Indexes of pools in the Manager's token_pools from which this test needs
@@ -230,7 +235,7 @@ impl<W: Worktree> Manager<W> {
             Some(ref hash) => {
                 match self
                     .result_db
-                    .cached_result(hash, &test_case.test.name)
+                    .cached_result(hash, &test_case.test.name, test_case.test.config_hash)
                     .context("reading cached test result")
                 {
                     Err(err) => {
@@ -334,9 +339,11 @@ impl<W: Worktree> Manager<W> {
                 self.spawn_job(TestJob {
                     ct,
                     _token: self.job_counter.get(),
-                    output: self
-                        .result_db
-                        .create_output(test_case.storage_hash(), &test_case.test.name)?,
+                    output: self.result_db.create_output(
+                        test_case.storage_hash(),
+                        &test_case.test.name,
+                        test_case.test.config_hash,
+                    )?,
                     test_case,
                     origin_path: self.origin_path.clone(),
                 });
@@ -774,6 +781,7 @@ mod tests {
                 needs_resource_idxs: vec![],
                 shutdown_grace_period: Duration::from_secs(5),
                 cache_policy,
+                config_hash: 0,
             }
         }
     }
@@ -1198,6 +1206,7 @@ mod tests {
             needs_resource_idxs: vec![1],
             shutdown_grace_period: Duration::from_secs(5),
             cache_policy: CachePolicy::ByCommit,
+            config_hash: 0,
         }];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let mut m = Manager::builder(
@@ -1252,6 +1261,7 @@ mod tests {
                 needs_resource_idxs: vec![],
                 shutdown_grace_period: Duration::from_secs(5),
                 cache_policy: CachePolicy::ByCommit,
+                config_hash: 0
             }],
             [],
         )

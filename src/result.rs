@@ -1,17 +1,27 @@
 use std::{
-    fs::{self, create_dir_all, File},
+    fs::{self, create_dir_all, remove_dir_all, File},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
-use crate::{git::Hash, test::TestResult};
+use crate::{
+    git::Hash,
+    test::{ConfigHash, TestResult},
+};
 
 // Result database similar to the design described in
 // https://github.com/bjackman/git-brisect?tab=readme-ov-file#the-result-directory
 // TODO: Actually we should probably separate it by the repo lol. But how?
 pub struct Database {
     base_dir: PathBuf,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+struct TestResultEntry {
+    config_hash: ConfigHash,
+    result: TestResult,
 }
 
 impl Database {
@@ -33,18 +43,23 @@ impl Database {
         &self,
         hash: &Hash,
         test_name: impl Into<String>,
+        // Hash of the config that created the test.
+        config_hash: ConfigHash,
     ) -> Result<Option<TestResult>> {
         let result_path = self.result_path(hash, test_name).join("result.json");
-        if result_path.exists() {
-            Ok(Some(
-                serde_json::from_str(
-                    &fs::read_to_string(result_path).context("reading result JSON")?,
-                )
-                .context("parsing result JSON")?,
-            ))
-        } else {
-            Ok(None)
+        if !result_path.exists() {
+            return Ok(None);
         }
+
+        let entry: TestResultEntry =
+            serde_json::from_str(&fs::read_to_string(result_path).context("reading result JSON")?)
+                .context("parsing result JSON")?;
+        if entry.config_hash != config_hash {
+            // Configuration changed, need to re-run.
+            return Ok(None);
+        }
+
+        Ok(Some(entry.result))
     }
 
     // Prepare to create the output directory for a job output, but don't actually create it yet.
@@ -53,8 +68,10 @@ impl Database {
         &self,
         hash: &Hash,
         test_name: impl Into<String>,
+        // Hash of the config that created the test.
+        config_hash: ConfigHash,
     ) -> anyhow::Result<TestCaseOutput> {
-        TestCaseOutput::new(self.result_path(hash, test_name))
+        TestCaseOutput::new(self.result_path(hash, test_name), config_hash)
     }
 }
 
@@ -64,20 +81,27 @@ pub struct TestCaseOutput {
     stdout_opened: bool,
     stderr_opened: bool,
     status_written: bool,
+    config_hash: ConfigHash,
 }
 
 impl TestCaseOutput {
-    pub fn new(base_dir: PathBuf) -> anyhow::Result<Self> {
+    pub fn new(base_dir: PathBuf, config_hash: ConfigHash) -> anyhow::Result<Self> {
         Ok(Self {
             base_dir,
             stdout_opened: false,
             stderr_opened: false,
             status_written: false,
+            config_hash,
         })
     }
 
     // Create and return base directory
     fn get_base_dir(&self) -> Result<&Path> {
+        // To avoid confusion from partially-overwritten entries, delete the old one if it exists.
+        if self.base_dir.exists() {
+            remove_dir_all(&self.base_dir).context("cleaning up old result DB entry")?;
+        }
+
         create_dir_all(&self.base_dir).context(format!(
             "creating commit result dir at {}",
             self.base_dir.display()
@@ -104,9 +128,13 @@ impl TestCaseOutput {
     pub fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
         assert!(!self.status_written);
         self.status_written = true;
+        let entry = TestResultEntry {
+            config_hash: self.config_hash,
+            result: result.clone(),
+        };
         Ok(fs::write(
             self.get_base_dir()?.join("result.json"),
-            serde_json::to_vec(result).expect("failed to serialize TestStatus"),
+            serde_json::to_vec(&entry).expect("failed to serialize TestStatus"),
         )?)
     }
 }
