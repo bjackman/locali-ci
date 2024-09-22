@@ -12,6 +12,7 @@ Bugs (high to low priority):
 
  - Sometimes "Cancelled" test statuses get cached.
  - SIGINT from local-ci shutdown gets cached.
+ - Need to rename `--result-cache` to `--result-db`.
  - Shutdown still does not happen cleanly on my kernel repo. At least one reason
    for this seems to be that child processes inherit the SIGINT. Another is that
    Ctrl-C just doesn't always kill the service.
