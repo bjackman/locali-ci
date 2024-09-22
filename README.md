@@ -48,6 +48,10 @@ Needed features (high to low priority):
    make progress on a single thread when the job server starves them, as is the
    case for Make, since all jobs have one implicit job slot).
  - Document config format.
+ - Make it easier to share configs. At present the distinction between config
+   file content and arg content may be a mit messy (e.g. `num_worktrees` is as
+   much a property of the system running the service as the project being
+   tested).
  - Support multiple repos?
  - Respect git's color configuration.
  - (Nice to have: avoid creating worktrees if they aren't actually to be used).
