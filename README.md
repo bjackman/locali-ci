@@ -8,12 +8,13 @@ at background priorities other than `SCHED_IDLE` you'll need to work around that
 - the man page gives an example of running `echo 10 > /proc/self/autogroup` to
 set `nice 10` for the current shell.
 
-See `test-cancel-*` branches for WIP tests for the most pressing bugs.
-
 Bugs (high to low priority):
 
  - Cancelled jobs still get cached if they shut down via `exit` instead of being
-   directly terminated by `SIGINT`. Need to actuall check cancellation status before writing to DB.
+   directly terminated by `SIGINT`. This only happens in a full real-world run, I think 
+   it's specifically caused by the `SIGINT` being inherited by the child
+   processes, the logic in `test.rs` is correct in the world where jobs only
+   ever get canceled by signals we send them ourselves.
  - Linked output data gets interpreted as HTML instead of plaintext.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.

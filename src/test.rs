@@ -672,8 +672,12 @@ mod tests {
         const LOCK_FILENAME: &'static str = "lockfile";
         const BUG_DETECTED_PATH: &'static str = "bug_detected";
 
-        // If this appears in the commit message , the test script will block until SIGINTed,
-        // otherwise it terminates immediately.
+        // If this appears in the commit message , the test script will block
+        // until SIGINTed, otherwise it terminates immediately. When receiving
+        // SIGINT the value depends on whether you include the results of
+        // exit_code_tag(). If yes, it exits with that code, otherwise it is
+        // terminated directly by the signal (the latter is considered an
+        // "error" by local-ci).
         pub const BLOCK_COMMIT_MSG_TAG: &'static str = "block_this_test";
 
         // Generate a tag which, when put in the commit message of a commit, will result in the test
@@ -710,7 +714,11 @@ mod tests {
                 trap \"rm {lock_filename:?}\" EXIT
                 touch ./{lock_filename:?}
                 commit_msg=\"$(git log -n1 --format=%B)\"
+                exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
                 if [[ \"$commit_msg\" =~ {block_tag} ]]; then
+                    if [[ -n \"$exit_code\" ]]; then
+                        trap \"exit $exit_code\" SIGINT
+                    fi
                     # sleep is not a builtin so we won't handle SIGINT while
                     # that's running. Hack suggested by ChatGPT: just spawn it
                     # then use wait, which is a builtin.
@@ -718,7 +726,6 @@ mod tests {
                     wait $!
                 fi
                 # Extract the exit code and pass it to exit if there is one, otherwise pass 0.
-                exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
                 exit ${{exit_code:-0}}
                 ",
                 pid_path_prefix = dir.path().join(Self::PID_FILENAME_PREFIX),
@@ -1443,30 +1450,51 @@ mod tests {
     async fn should_not_cache() {
         let mut f = TestScriptFixture::builder()
             .num_tests(2)
-            .num_worktrees(2)
+            .num_worktrees(4)
             .build()
             .await;
         let mut results = f.manager.results();
-        let hash = f
+
+        // This commit's tests will be terminated by SIGINT if they receive it,
+        // which is "an error"
+        let hash_error = f
             .repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
+        // This commit's tests will shut down with an error exit-code if
+        // SIGINTED which is normally a test failure. But this should not be
+        // cached if the SIGINT was due to the job being canceled.
+        let mut commit_msg = OsString::from(TestScript::BLOCK_COMMIT_MSG_TAG);
+        commit_msg.push(TestScript::exit_code_tag(1));
+        let hash_fail = f
+            .repo
+            .commit(commit_msg, some_time())
+            .await
+            .expect("couldn't create test commit");
 
-        // Wait until both tests are started.
+        // Wait until all tests are started.
         f.manager
-            .set_revisions(vec![hash.clone()].clone())
+            .set_revisions(vec![hash_error.clone(), hash_fail.clone()].clone())
             .await
             .unwrap();
         expect_notifs_10s(
             &mut results,
             HashMap::from([
                 (
-                    f.test_case(&hash, 0).await,
+                    f.test_case(&hash_error, 0).await,
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
                 (
-                    f.test_case(&hash, 1).await,
+                    f.test_case(&hash_error, 1).await,
+                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                ),
+                (
+                    f.test_case(&hash_fail, 0).await,
+                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                ),
+                (
+                    f.test_case(&hash_fail, 1).await,
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
             ]),
@@ -1477,13 +1505,12 @@ mod tests {
         // Cause one to fail with an error. We take advantage of the fact that
         // this whole tool considers it an "error" when a test exits with a
         // signal instead of exiting with a nonzero code.
-        // f.scripts[0];
-        let started_script = f.scripts[0].started(&hash).await;
+        let started_script = f.scripts[0].started(&hash_error).await;
         started_script.sigterm();
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                f.test_case(&hash, 0).await,
+                f.test_case(&hash_error, 0).await,
                 vec![TestStatus::Error(String::from("terminated by signal 15"))].into(),
             )]),
         )
@@ -1491,30 +1518,48 @@ mod tests {
         .expect("didn't get error after killing script");
         started_script.reset_started();
 
-        // ... and the other to be canceled.
+        // ... and the others to be canceled.
         f.manager.set_revisions(vec![]).await.unwrap();
         expect_notifs_10s(
             &mut results,
-            HashMap::from([(
-                f.test_case(&hash, 1).await,
-                vec![TestStatus::Canceled].into(),
-            )]),
+            HashMap::from([
+                (
+                    f.test_case(&hash_error, 1).await,
+                    vec![TestStatus::Canceled].into(),
+                ),
+                (
+                    f.test_case(&hash_fail, 0).await,
+                    vec![TestStatus::Canceled].into(),
+                ),
+                (
+                    f.test_case(&hash_fail, 1).await,
+                    vec![TestStatus::Canceled].into(),
+                ),
+            ]),
         )
         .await
         .expect("didn't see test cancellation");
 
-        // They should now get run a second time.
+        // They should now get run a second time. i.e. none of the results should have got hashed.
         f.manager
-            .set_revisions(vec![hash.clone()].clone())
+            .set_revisions(vec![hash_error.clone(), hash_fail.clone()].clone())
             .await
             .unwrap();
         select!(
             _ = sleep(Duration::from_secs(5)) => panic!("error'd test not re-run"),
-            _ = f.scripts[0].started(&hash) => ()
+            _ = f.scripts[0].started(&hash_error) => ()
         );
         select!(
             _ = sleep(Duration::from_secs(5)) => panic!("canceled test not re-run"),
-            _ = f.scripts[1].started(&hash) => ()
+            _ = f.scripts[1].started(&hash_error) => ()
+        );
+        select!(
+            _ = sleep(Duration::from_secs(5)) => panic!("error'd test not re-run"),
+            _ = f.scripts[0].started(&hash_fail) => ()
+        );
+        select!(
+            _ = sleep(Duration::from_secs(5)) => panic!("canceled test not re-run"),
+            _ = f.scripts[1].started(&hash_fail) => ()
         );
     }
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
