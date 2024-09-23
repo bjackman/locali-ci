@@ -1173,24 +1173,21 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
         let mut f = TestScriptFixture::builder()
-            .num_tests(1)
+            .num_tests(num_tests)
             .num_worktrees(num_worktrees)
             .build()
             .await;
         let mut hashes = Vec::new();
         let mut want_results = HashMap::new();
-        let mut i = 0;
-        for _ in 0..50 {
-            for _ in 0..num_tests {
-                let hash = f
-                    .repo
-                    // We'll give each test a unique exit code so we can check they really got
-                    // tested individually.
-                    .commit(TestScript::exit_code_tag(i as u32), some_time())
-                    .await
-                    .expect("couldn't create test commit");
+        for i in 0..50 {
+            let hash = f
+                .repo
+                .commit(TestScript::exit_code_tag(i as u32), some_time())
+                .await
+                .expect("couldn't create test commit");
+            for j in 0..num_tests {
                 want_results.insert(
-                    f.test_case(&hash, 0).await,
+                    f.test_case(&hash, j).await,
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1198,9 +1195,8 @@ mod tests {
                     ]
                     .into(),
                 );
-                hashes.push(hash);
-                i += 1;
             }
+            hashes.push(hash);
         }
         let mut results = f.manager.results();
         f.manager.set_revisions(hashes.clone()).await.unwrap();
