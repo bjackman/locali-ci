@@ -635,6 +635,7 @@ mod tests {
     struct TestScript {
         dir: TempDir,
         script: OsString, // Raw content.
+        test_name: String,
     }
 
     impl TestScript {
@@ -656,7 +657,7 @@ mod tests {
 
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
-        pub fn new() -> Self {
+        pub fn new(test_name: impl Into<String>) -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
             // The script will touch a special file to notify us that it has been started. On
             // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
@@ -702,6 +703,7 @@ mod tests {
 
             Self {
                 dir,
+                test_name: test_name.into(),
                 script: script.into(),
             }
         }
@@ -769,13 +771,9 @@ mod tests {
                 .count()
         }
 
-        pub fn test_name(&self) -> &str {
-            "my_test"
-        }
-
         pub fn as_test(&self, cache_policy: CachePolicy) -> Test {
             Test {
-                name: self.test_name().to_owned(),
+                name: self.test_name.clone(),
                 program: self.program(),
                 args: self.args(),
                 needs_resource_idxs: vec![],
@@ -923,7 +921,7 @@ mod tests {
             repo.commit("hello,", some_time())
                 .await
                 .expect("couldn't create base commit");
-            let scripts = array::from_fn(|_| TestScript::new());
+            let scripts = array::from_fn(|i| TestScript::new(format!("test_{i}")));
             let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
             let manager = Manager::builder(
                 repo.clone(),
@@ -1195,7 +1193,7 @@ mod tests {
                     .expect("couldn't create test commit"),
             );
         }
-        let script = TestScript::new();
+        let script = TestScript::new("my_test");
         // We only have 2 tokens
         let resource_token_counts = [2];
         // And a test that requires one of those tokens.
