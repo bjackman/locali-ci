@@ -8,6 +8,8 @@ at background priorities other than `SCHED_IDLE` you'll need to work around that
 - the man page gives an example of running `echo 10 > /proc/self/autogroup` to
 set `nice 10` for the current shell.
 
+See `test-cancel-*` branches for WIP tests for the most pressing bugs.
+
 Bugs (high to low priority):
 
  - `Manager::job_cts` is indexed only by commit hash, but not by test name.
