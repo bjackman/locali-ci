@@ -601,7 +601,6 @@ pub struct Notification {
 #[cfg(test)]
 mod tests {
     use std::{
-        array,
         collections::VecDeque,
         fs::{self, remove_file, File},
         io::{self, BufRead as _},
@@ -899,61 +898,83 @@ mod tests {
         )
     }
 
-    struct TestScriptFixture<const NUM_TESTS: usize> {
+    struct TestScriptFixture {
         _db_dir: TempDir,
         repo: Arc<TempRepo>,
-        scripts: [TestScript; NUM_TESTS],
+        scripts: Vec<TestScript>,
         manager: Manager<TempRepo>,
     }
 
-    impl<const NUM_TESTS: usize> TestScriptFixture<NUM_TESTS> {
-        // Agh, it's really hard to make an ergonomic API for configuring these
-        // fixtures. Do we need a builder struct? Yuck. For now we just have one
-        // really ugly "verbose" constructor and then others that call this one.
-        // It's like C!
-        async fn new_verbose(
-            num_worktrees: usize,
-            cache_policies: [CachePolicy; NUM_TESTS],
-        ) -> Self {
+    struct TestScriptFixtureBuilder {
+        num_worktrees: usize,
+        num_tests: usize,
+        cache_policies: Vec<CachePolicy>,
+    }
+
+    impl TestScriptFixtureBuilder {
+        pub fn num_worktrees(mut self, n: usize) -> Self {
+            self.num_worktrees = n;
+            self
+        }
+
+        // Tests per commit.
+        pub fn num_tests(mut self, n: usize) -> Self {
+            self.num_tests = n;
+            while self.cache_policies.len() < self.num_tests {
+                self.cache_policies.push(CachePolicy::ByCommit);
+            }
+            self
+        }
+
+        // cache_policies[i] will be the cache policy for the ith test.
+        pub fn cache_policies(mut self, pols: impl IntoIterator<Item = CachePolicy>) -> Self {
+            self.cache_policies = pols.into_iter().collect();
+            self.num_tests = self.cache_policies.len();
+            self
+        }
+    }
+
+    impl TestScriptFixtureBuilder {
+        pub async fn build(&self) -> TestScriptFixture {
             let repo = Arc::new(TempRepo::new().await.unwrap());
             // TODO: We need to have a commit in the repo otherwise manager
             // setup will fail. This is a bug.
             repo.commit("hello,", some_time())
                 .await
                 .expect("couldn't create base commit");
-            let scripts = array::from_fn(|i| TestScript::new(format!("test_{i}")));
+            let scripts: Vec<TestScript> = (0..self.num_tests)
+                .map(|i| TestScript::new(format!("test_{i}")))
+                .collect();
             let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
             let manager = Manager::builder(
                 repo.clone(),
                 Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
                 scripts
                     .iter()
-                    .zip(cache_policies)
-                    .map(|(s, c)| s.as_test(c)),
+                    .zip(&self.cache_policies)
+                    .map(|(s, &c)| s.as_test(c)),
                 [],
             )
-            .num_worktrees(num_worktrees)
+            .num_worktrees(self.num_worktrees)
             .build()
             .await
             .expect("couldn't set up manager");
-            Self {
+            TestScriptFixture {
                 manager,
                 scripts,
                 repo,
                 _db_dir: db_dir,
             }
         }
+    }
 
-        async fn new_with_worktrees(num_worktrees: usize) -> Self {
-            Self::new_verbose(num_worktrees, [CachePolicy::ByCommit; NUM_TESTS]).await
-        }
-
-        async fn new_with_cache_policies(cache_policies: [CachePolicy; NUM_TESTS]) -> Self {
-            Self::new_verbose(2, cache_policies).await
-        }
-
-        async fn new() -> Self {
-            Self::new_with_worktrees(2).await
+    impl TestScriptFixture {
+        pub fn builder() -> TestScriptFixtureBuilder {
+            TestScriptFixtureBuilder {
+                num_worktrees: 2,
+                num_tests: 2,
+                cache_policies: vec![CachePolicy::ByCommit; 2],
+            }
         }
 
         // Convenience helper to construct a TestCase referring to this fixture's configuration.
@@ -970,7 +991,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
-        let mut f = TestScriptFixture::<1>::new().await;
+        let mut f = TestScriptFixture::builder().num_tests(1).build().await;
         let mut results = f.manager.results();
         let hash = f
             .repo
@@ -1000,7 +1021,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
-        let mut f = TestScriptFixture::<1>::new().await;
+        let mut f = TestScriptFixture::builder().num_tests(1).build().await;
         // First commit's test will block forever.
         let hash1 = f
             .repo
@@ -1062,7 +1083,7 @@ mod tests {
     // over-engineered.
     #[test_log::test(tokio::test)]
     async fn should_not_settle() {
-        let mut f = TestScriptFixture::<1>::new().await;
+        let mut f = TestScriptFixture::builder().num_tests(1).build().await;
         // First commit's test will block forever.
         let hash = f
             .repo
@@ -1081,12 +1102,14 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_cache_results() {
-        let mut f = TestScriptFixture::new_with_cache_policies([
-            CachePolicy::NoCaching,
-            CachePolicy::ByCommit,
-            CachePolicy::ByTree,
-        ])
-        .await;
+        let mut f = TestScriptFixture::builder()
+            .cache_policies([
+                CachePolicy::NoCaching,
+                CachePolicy::ByCommit,
+                CachePolicy::ByTree,
+            ])
+            .build()
+            .await;
         f.repo
             .commit("yarp", some_time())
             .await
@@ -1149,7 +1172,11 @@ mod tests {
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
     #[test_log::test(tokio::test)]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
-        let mut f = TestScriptFixture::<1>::new_with_worktrees(num_worktrees).await;
+        let mut f = TestScriptFixture::builder()
+            .num_tests(1)
+            .num_worktrees(num_worktrees)
+            .build()
+            .await;
         let mut hashes = Vec::new();
         let mut want_results = HashMap::new();
         let mut i = 0;
@@ -1290,7 +1317,11 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_not_start_canceled() {
-        let mut f = TestScriptFixture::<1>::new_with_worktrees(2).await;
+        let mut f = TestScriptFixture::builder()
+            .num_tests(1)
+            .num_worktrees(2)
+            .build()
+            .await;
         let mut results = f.manager.results();
         let mut hashes = Vec::new();
         for _ in 0..5 {
@@ -1356,7 +1387,11 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_not_cache() {
-        let mut f = TestScriptFixture::<2>::new_with_worktrees(2).await;
+        let mut f = TestScriptFixture::builder()
+            .num_tests(2)
+            .num_worktrees(2)
+            .build()
+            .await;
         let mut results = f.manager.results();
         let hash = f
             .repo
