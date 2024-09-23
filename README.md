@@ -10,6 +10,9 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
+ - Cancelled jobs still get cached if they shut down via `exit` instead of being
+   directly terminated by `SIGINT`. Need to actuall check cancellation status before writing to DB.
+ - Linked output data gets interpreted as HTML instead of plaintext.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.
