@@ -10,6 +10,12 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
+ - `Manager::job_cts` is indexed only by commit hash, but not by test name. This
+   means only one job for each commit actually gets cancelled, and if any test
+   is running for a given commit then other tests don't get started. This might
+   actually explain the "gummed up" issue I saw below, since it would lead to
+   lots of jobs running that are invisible in the status tracker, and possibly
+   missed opportunities to start new jobs.
  - Cancelled jobs still get cached if they shut down via `exit` instead of being
    directly terminated by `SIGINT`. Need to actuall check cancellation status before writing to DB.
  - Linked output data gets interpreted as HTML instead of plaintext.
