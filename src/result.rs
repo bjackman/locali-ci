@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     git::Hash,
-    test::{ConfigHash, TestResult},
+    test::{ConfigHash, TestName, TestResult},
 };
 
 // Result database similar to the design described in
@@ -35,14 +35,14 @@ impl Database {
         })
     }
 
-    fn result_path(&self, hash: &Hash, test_name: impl Into<String>) -> PathBuf {
+    fn result_path(&self, hash: &Hash, test_name: impl Into<TestName>) -> PathBuf {
         self.base_dir.join(hash.as_ref()).join(test_name.into())
     }
 
     pub fn cached_result(
         &self,
         hash: &Hash,
-        test_name: impl Into<String>,
+        test_name: impl Into<TestName>,
         // Hash of the config that created the test.
         config_hash: ConfigHash,
     ) -> Result<Option<TestResult>> {
@@ -67,7 +67,7 @@ impl Database {
     pub fn create_output(
         &self,
         hash: &Hash,
-        test_name: impl Into<String>,
+        test_name: impl Into<TestName>,
         // Hash of the config that created the test.
         config_hash: ConfigHash,
     ) -> anyhow::Result<TestCaseOutput> {

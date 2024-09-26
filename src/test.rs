@@ -64,13 +64,15 @@ pub enum CachePolicy {
 // Some unspecified hash, don't care too much about stability across builds.
 pub type ConfigHash = u64;
 
+pub type TestName = String;
+
 // A test task that will need to be repeated for each commit.
 // We have tests that use these as hash keys for historical reasons. I think
 // this is fine but I'm not sure if it's really something to reasonably take
 // advantage of in prod code so we only derive the necessary traits for test.
 #[cfg_attr(test, derive(Hash, PartialEq, Eq))]
 pub struct Test {
-    pub name: String,
+    pub name: TestName,
     // Hash of the configuration that created this Test.
     pub config_hash: ConfigHash,
     pub program: OsString,
@@ -634,7 +636,7 @@ mod tests {
     struct TestScript {
         dir: TempDir,
         script: OsString, // Raw content.
-        test_name: String,
+        test_name: TestName,
     }
 
     impl TestScript {
@@ -656,7 +658,7 @@ mod tests {
 
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
-        pub fn new(test_name: impl Into<String>) -> Self {
+        pub fn new(test_name: impl Into<TestName>) -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
             // The script will touch a special file to notify us that it has been started. On
             // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
