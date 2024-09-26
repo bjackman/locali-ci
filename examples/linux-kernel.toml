@@ -1,0 +1,15 @@
+# Example config for the linux kernel
+
+num_worktrees = 4
+
+[[tests]]
+name = "checkpatch"
+command = "./scripts/checkpatch.pl --git HEAD"
+
+[[tests]]
+name = "vmlinux-defconfig"
+command = """
+set -e
+make -j defconfig
+make -j100 vmlinux CC="ccache gcc" KBUILD_BUILD_TIMESTAMP=
+"""
