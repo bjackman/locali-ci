@@ -12,10 +12,6 @@ See `test-cancel-*` branches for WIP tests for the most pressing bugs.
 
 Bugs (high to low priority):
 
- - `Manager::job_cts` is indexed only by commit hash, but not by test name.
-   Manager::set_revisions doesn't really make any sense. This might actually
-   explain the "gummed up" issue I saw below, since it would lead to lots of jobs
-   running that are invisible in the status tracker.
  - Cancelled jobs still get cached if they shut down via `exit` instead of being
    directly terminated by `SIGINT`. Need to actuall check cancellation status before writing to DB.
  - Linked output data gets interpreted as HTML instead of plaintext.
