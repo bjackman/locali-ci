@@ -66,6 +66,8 @@ pub type ConfigHash = u64;
 
 pub type TestName = String;
 
+// This struct should not be constructed directly because the config_hash will be wrong.
+// The type should probably just not let you do that. Instead construct it from a config::Test.
 // A test task that will need to be repeated for each commit.
 // We have tests that use these as hash keys for historical reasons. I think
 // this is fine but I'm not sure if it's really something to reasonably take
@@ -606,6 +608,7 @@ mod tests {
         collections::VecDeque,
         fs::{self, remove_file, File},
         io::{self, BufRead as _},
+        iter,
         path::PathBuf,
         thread::panicking,
         time::Duration,
@@ -622,6 +625,7 @@ mod tests {
     };
 
     use crate::{
+        config,
         git::{
             test_utils::{TempRepo, WorktreeExt},
             CommitHash,
@@ -772,16 +776,24 @@ mod tests {
                 .count()
         }
 
+        pub fn as_config_command(&self) -> config::Command {
+            let argv: Vec<OsString> = iter::once(self.program()).chain(self.args()).collect();
+            config::Command::Raw(
+                argv.into_iter()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .collect(),
+            )
+        }
         pub fn as_test(&self, cache_policy: CachePolicy) -> Test {
-            Test {
+            config::Test {
                 name: self.test_name.clone(),
-                program: self.program(),
-                args: self.args(),
-                needs_resource_idxs: vec![],
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy,
-                config_hash: 0,
+                command: self.as_config_command(),
+                resources: None,
+                shutdown_grace_period_s: 5,
+                cache: cache_policy,
             }
+            .parse(&HashMap::new())
+            .unwrap()
         }
     }
 
@@ -1222,15 +1234,15 @@ mod tests {
         // We only have 2 tokens
         let resource_token_counts = [2];
         // And a test that requires one of those tokens.
-        let tests = [Test {
+        let tests = [config::Test {
             name: "my_test".to_owned(),
-            program: script.program(),
-            args: script.args(),
-            needs_resource_idxs: vec![1],
-            shutdown_grace_period: Duration::from_secs(5),
-            cache_policy: CachePolicy::ByCommit,
-            config_hash: 0,
-        }];
+            command: script.as_config_command(),
+            resources: Some(vec![config::Resource::Bare("my_resource".to_owned())]),
+            shutdown_grace_period_s: 5,
+            cache: CachePolicy::ByCommit,
+        }
+        .parse(&HashMap::from([("my_resource".to_owned(), 0)]))
+        .unwrap()];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let mut m = Manager::builder(
             repo.clone(),
