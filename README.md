@@ -10,15 +10,10 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
- - ```rust
-   impl PartialEq for Test {
-       fn eq(&self, other: &Self) -> bool {
-           self.config_hash == other.config_hash
-       }
-   }
-   ```
-   my beloved brother and co-beneficiary of christ's loving embrace, that is not
-   how hashing works.
+ - `Manager::job_cts` is indexed only by commit hash, but not by test name.
+   Manager::set_revisions doesn't really make any sense. This might actually
+   explain the "gummed up" issue I saw below, since it would lead to lots of jobs
+   running that are invisible in the status tracker.
  - Linked output data gets interpreted as HTML instead of plaintext.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
