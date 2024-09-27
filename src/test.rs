@@ -2,7 +2,6 @@ use core::fmt;
 use core::fmt::Display;
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
 use std::fmt::Debug;
@@ -14,6 +13,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use futures::future::{self, try_join_all, Either};
+use itertools::Itertools;
 use log::debug;
 use log::error;
 use log::info;
@@ -198,7 +198,7 @@ impl<W> ManagerBuilder<W> {
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager<W: Worktree> {
     repo: Arc<W>,
-    job_cts: HashMap<CommitHash, CancellationToken>,
+    job_cts: HashMap<TestCaseId, CancellationToken>,
     job_counter: JobCounter,
     result_tx: broadcast::Sender<Arc<Notification>>,
     tests: Vec<Arc<Test>>,
@@ -314,45 +314,70 @@ impl<W: Worktree> Manager<W> {
     where
         I: IntoIterator<Item = CommitHash>,
     {
-        let mut to_start = HashSet::<CommitHash>::from_iter(revs);
-        let mut cancel_revs = Vec::new();
-        for rev in self.job_cts.keys() {
-            // We're already testing rev, so we don't need to kick it off below.
-            if !to_start.remove(rev) {
-                // This rev is being tested but wasn't in rev_set.
-                cancel_revs.push(rev.clone())
-            }
-        }
-        info!("Enqueueing {:?}, cancelling {:?}", to_start, cancel_revs);
-        for rev in cancel_revs {
-            self.job_cts[&rev].cancel();
-            self.job_cts.remove(&rev);
+        // Build the set test cases we need to kick off.
+        //
+        // TODO instead of blocking until all are ready can we iterate over them
+        // in the order they become ready?
+        //
+        // TODO maybe we should actually just remove the need for async from the
+        // constructor, it's just about getting the tree hash, which could just
+        // be an async operation that you have to call on the TestCase after
+        // it's constructed
+        let test_cases = try_join_all(
+            revs.into_iter()
+                .cartesian_product(self.tests.iter())
+                .map(|(rev, test)| TestCase::new(rev, test.clone(), self.repo.as_ref())),
+        )
+        .await
+        .context("setting up test cases")?;
+        let test_cases: HashMap<TestCaseId, TestCase> =
+            test_cases.into_iter().map(|tc| (tc.id(), tc)).collect();
+
+        // For the ones already running, figure out which we wanna keep (and
+        // therefore we don't need to start) and which should be cancelled to
+        // free up resources.
+        //
+        // TODO can we make this more concise?
+        let to_cancel: Vec<TestCaseId> = self
+            .job_cts
+            .keys()
+            .filter(|id| !test_cases.contains_key(*id))
+            .cloned()
+            .collect();
+        let to_start: HashMap<TestCaseId, TestCase> = test_cases
+            .into_iter()
+            .filter(|(id, _tc)| !self.job_cts.contains_key(id))
+            .collect();
+        info!(
+            "Enqueueing {:?}, cancelling {:?} jobs",
+            to_start,
+            to_cancel.len()
+        );
+        for id in to_cancel {
+            self.job_cts[&id].cancel();
+            self.job_cts.remove(&id);
         }
 
-        for rev in to_start {
-            for test in self.tests.iter() {
-                let test_case = TestCase::new(rev.to_owned(), test.clone(), self.repo.as_ref())
-                    .await
-                    .context("failed to create TestCase")?;
-                if let Some(test_result) = self.cache_lookup(&test_case).await {
-                    self.notify(test_case, TestStatus::Completed(test_result));
-                    continue;
-                }
-
-                let ct = CancellationToken::new();
-                self.job_cts.insert(rev.to_owned(), ct.clone());
-                self.spawn_job(TestJob {
-                    ct,
-                    _token: self.job_counter.get(),
-                    output: self.result_db.create_output(
-                        test_case.storage_hash(),
-                        &test_case.test.name,
-                        test_case.test.config_hash,
-                    )?,
-                    test_case,
-                    origin_path: self.origin_path.clone(),
-                });
+        for (id, test_case) in to_start.into_iter() {
+            if let Some(test_result) = self.cache_lookup(&test_case).await {
+                self.notify(test_case, TestStatus::Completed(test_result));
+                continue;
             }
+
+            let ct = CancellationToken::new();
+            let output = self.result_db.create_output(
+                test_case.storage_hash(),
+                &test_case.test.name,
+                test_case.test.config_hash,
+            )?;
+            self.job_cts.insert(id, ct.clone());
+            self.spawn_job(TestJob {
+                ct,
+                _token: self.job_counter.get(),
+                output,
+                test_case,
+                origin_path: self.origin_path.clone(),
+            });
         }
         Ok(())
     }
@@ -515,6 +540,9 @@ impl TestJob {
     }
 }
 
+// An identifier that uniquely identifies a TestCase among all that can exist for a given Manager.
+type TestCaseId = String;
+
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(Hash, PartialEq, Eq))] // See comment on Test.
 pub struct TestCase {
@@ -555,6 +583,11 @@ impl TestCase {
         self.cache_hash
             .as_ref()
             .unwrap_or(self.commit_hash.as_ref())
+    }
+
+    pub fn id(&self) -> TestCaseId {
+        // The hash_cache is redundant information here so we don't need to include it.
+        format!("{}:{}", self.commit_hash, self.test.name)
     }
 }
 
@@ -615,7 +648,7 @@ mod tests {
     };
 
     use anyhow::bail;
-    use future::select_all;
+    use future::{join_all, select_all};
     use log::error;
     use tempfile::TempDir;
     use test_case::test_case;
@@ -1033,7 +1066,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
-        let mut f = TestScriptFixture::builder().num_tests(1).build().await;
+        let mut f = TestScriptFixture::builder().num_tests(2).build().await;
         // First commit's test will block forever.
         let hash1 = f
             .repo
@@ -1042,9 +1075,9 @@ mod tests {
             .expect("couldn't create test commit");
         let mut results = f.manager.results();
         f.manager.set_revisions(vec![hash1.clone()]).await.unwrap();
-        let started_hash1 = timeout_5s(f.scripts[0].started(&hash1))
+        let started_hash1 = timeout_5s(join_all(f.scripts.iter().map(|s| s.started(&hash1))))
             .await
-            .expect("script did not run for hash1");
+            .expect("not all scripts run for hash1");
         // Second commit's test will terminate quickly.
         let hash2 = f
             .repo
@@ -1055,15 +1088,28 @@ mod tests {
         timeout_5s(f.scripts[0].started(&hash2))
             .await
             .expect("f.scripts[0] did not run for hash2");
-        timeout_5s(started_hash1.siginted())
-            .await
-            .expect("hash1 test did not get siginted");
+        timeout_5s(join_all(
+            started_hash1
+                .iter()
+                .map(|s: &StartedTestScript| s.siginted()),
+        ))
+        .await
+        .expect("hash1 tests did not all get siginted");
         expect_notifs_10s(
             &mut results,
             // awu weh, weh mah
             HashMap::from([
                 (
-                    f.test_case(hash1, 0).await,
+                    f.test_case(&hash1, 0).await,
+                    vec![
+                        TestStatus::Enqueued,
+                        TestStatus::Started,
+                        TestStatus::Canceled,
+                    ]
+                    .into(),
+                ),
+                (
+                    f.test_case(&hash1, 1).await,
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1074,7 +1120,16 @@ mod tests {
                 // This isn't what we're testing here but we need to assert that it comes in so we can
                 // check below that nothing else comes in.
                 (
-                    f.test_case(hash2, 0).await,
+                    f.test_case(&hash2, 0).await,
+                    vec![
+                        TestStatus::Enqueued,
+                        TestStatus::Started,
+                        TestStatus::Completed(TestResult { exit_code: 0 }),
+                    ]
+                    .into(),
+                ),
+                (
+                    f.test_case(&hash2, 1).await,
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1393,7 +1448,6 @@ mod tests {
         assert!(!f.scripts[0].was_started(&hashes[1]));
     }
 
-    #[ignore] // Broken by ongoin refactoring
     #[test_log::test(tokio::test)]
     async fn should_not_cache() {
         let mut f = TestScriptFixture::builder()
