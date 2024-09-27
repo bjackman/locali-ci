@@ -88,6 +88,9 @@ impl Test {
     fn command(&self) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
+        // Separate process group means the child doesn't get SIGINT if the user
+        // Ctrl-C's the terminal.
+        cmd.process_group(0);
         // Ensure we don't pass random nonsense to the test command and create
         // confusing behaviour. This is kinda annoying because IIUC this gives
         // you a fd that is immediately closed, which is likely to be different

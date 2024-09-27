@@ -166,6 +166,11 @@ pub trait Worktree: Debug {
             &format!("color.ui={}", SHOULD_COLORIZE.should_colorize()),
         ]);
         cmd.args(args);
+        // Separate process group means the child doesn't get SIGINT if the user
+        // Ctrl-C's the terminal. We are trusting that git won't get stuck and
+        // prevent us from shutting down. The benefit is that we don't get
+        // annoying confusing errors on shut down.
+        cmd.process_group(0);
         cmd
     }
 
@@ -397,6 +402,12 @@ impl Drop for TempWorktree {
             );
             return;
         }
+        // We don't create a new process group here, that means if the user
+        // Ctrl-C's us while this is going on the Git command will get
+        // interrupted too and we'll shut down in a mess. I think that's
+        // actually desirable, if it gets to that point the user probably
+        // just want us to fuck off and give them their terminal back at
+        // whatever cost.
         cmd.args(["worktree", "remove", "--force"])
             .arg(self.temp_dir.path())
             .current_dir(&self.origin)
