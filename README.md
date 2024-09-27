@@ -10,6 +10,8 @@ set `nice 10` for the current shell.
 
 Bugs (high to low priority):
 
+ - Tests don't work on my work computer. I think this is because I made false
+   assumptions abuot the conditions for Git commit hashes to be deterministic.
  - `Manager::job_cts` is indexed only by commit hash, but not by test name.
    Manager::set_revisions doesn't really make any sense. This might actually
    explain the "gummed up" issue I saw below, since it would lead to lots of jobs
