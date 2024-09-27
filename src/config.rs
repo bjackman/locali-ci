@@ -82,6 +82,39 @@ pub struct Test {
     cache: CachePolicy,
 }
 
+impl Test {
+    // Convert to the "real" object.
+    pub fn parse(&self, resource_idxs: &HashMap<String, usize>) -> anyhow::Result<test::Test> {
+        let mut needs_resource_idxs: Vec<_> = iter::repeat(0).take(resource_idxs.len()).collect();
+        let mut seen_resources = HashSet::new();
+        for resource in self.resources.as_ref().unwrap_or(&vec![]) {
+            if seen_resources.contains(&resource.name()) {
+                // TODO: Need better error messages.
+                bail!("duplicate resource reference {:?}", resource.name());
+            }
+            seen_resources.insert(resource.name());
+
+            let idx = *resource_idxs
+                .get(resource.name())
+                .ok_or_else(|| anyhow!("undefined resource {:?}", resource.name()))?;
+            needs_resource_idxs[idx] = resource.count();
+        }
+        Ok(test::Test {
+            name: self.name.clone(),
+            program: self.command.program(),
+            args: self.command.args(),
+            needs_resource_idxs,
+            shutdown_grace_period: Duration::from_secs(self.shutdown_grace_period_s),
+            cache_policy: self.cache,
+            config_hash: {
+                let mut h = DefaultHasher::new();
+                self.hash(&mut h);
+                h.finish()
+            },
+        })
+    }
+}
+
 fn default_cache_policy() -> CachePolicy {
     // Hard to choose a default here. Rationale for this choice: It's weird not
     // to want any caching at all. Almost all of the time you want ByTree, but
@@ -120,39 +153,11 @@ pub fn manager_builder(
         .map(|(i, resource)| (resource.name().to_owned(), i))
         .collect();
 
+    // Parse all the tests, with reference to the named resource idxs.
     let tests = config
         .tests
         .iter()
-        .map(|t| {
-            let mut needs_resource_idxs: Vec<_> =
-                iter::repeat(0).take(resource_idxs.len()).collect();
-            let mut seen_resources = HashSet::new();
-            for resource in t.resources.as_ref().unwrap_or(&vec![]) {
-                if seen_resources.contains(&resource.name()) {
-                    // TODO: Need better error messages.
-                    bail!("duplicate resource reference {:?}", resource.name());
-                }
-                seen_resources.insert(resource.name());
-
-                let idx = *resource_idxs
-                    .get(resource.name())
-                    .ok_or_else(|| anyhow!("undefined resource {:?}", resource.name()))?;
-                needs_resource_idxs[idx] = resource.count();
-            }
-            Ok(test::Test {
-                name: t.name.clone(),
-                program: t.command.program(),
-                args: t.command.args(),
-                needs_resource_idxs,
-                shutdown_grace_period: Duration::from_secs(t.shutdown_grace_period_s),
-                cache_policy: t.cache,
-                config_hash: {
-                    let mut h = DefaultHasher::new();
-                    t.hash(&mut h);
-                    h.finish()
-                },
-            })
-        })
+        .map(|t| t.parse(&resource_idxs))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     // TODO: deduplicate this!
