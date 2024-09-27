@@ -69,50 +69,17 @@ impl Command {
 #[derive(Deserialize, Debug, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct Test {
-    pub name: String,
-    pub command: Command,
-    pub resources: Option<Vec<Resource>>,
+    name: String,
+    command: Command,
+    resources: Option<Vec<Resource>>,
     #[serde(default = "default_shutdown_grace_period")]
     /// When a job is no longer needed it's SIGINTed. If it doesn't respond (by
     /// dying) after this duration it will then be SIGKILLed. This also affects
     /// the overall shutdown of local-ci so do not set this to longer than you are
     /// willing to wait when you terminate this program.
-    pub shutdown_grace_period_s: u64,
+    shutdown_grace_period_s: u64,
     #[serde(default = "default_cache_policy")]
-    pub cache: CachePolicy,
-}
-
-impl Test {
-    // Convert to the "real" object.
-    pub fn parse(&self, resource_idxs: &HashMap<String, usize>) -> anyhow::Result<test::Test> {
-        let mut needs_resource_idxs: Vec<_> = iter::repeat(0).take(resource_idxs.len()).collect();
-        let mut seen_resources = HashSet::new();
-        for resource in self.resources.as_ref().unwrap_or(&vec![]) {
-            if seen_resources.contains(&resource.name()) {
-                // TODO: Need better error messages.
-                bail!("duplicate resource reference {:?}", resource.name());
-            }
-            seen_resources.insert(resource.name());
-
-            let idx = *resource_idxs
-                .get(resource.name())
-                .ok_or_else(|| anyhow!("undefined resource {:?}", resource.name()))?;
-            needs_resource_idxs[idx] = resource.count();
-        }
-        Ok(test::Test {
-            name: self.name.clone(),
-            program: self.command.program(),
-            args: self.command.args(),
-            needs_resource_idxs,
-            shutdown_grace_period: Duration::from_secs(self.shutdown_grace_period_s),
-            cache_policy: self.cache,
-            config_hash: {
-                let mut h = DefaultHasher::new();
-                self.hash(&mut h);
-                h.finish()
-            },
-        })
-    }
+    cache: CachePolicy,
 }
 
 fn default_cache_policy() -> CachePolicy {
@@ -153,11 +120,39 @@ pub fn manager_builder(
         .map(|(i, resource)| (resource.name().to_owned(), i))
         .collect();
 
-    // Parse all the tests, with reference to the named resource idxs.
     let tests = config
         .tests
         .iter()
-        .map(|t| t.parse(&resource_idxs))
+        .map(|t| {
+            let mut needs_resource_idxs: Vec<_> =
+                iter::repeat(0).take(resource_idxs.len()).collect();
+            let mut seen_resources = HashSet::new();
+            for resource in t.resources.as_ref().unwrap_or(&vec![]) {
+                if seen_resources.contains(&resource.name()) {
+                    // TODO: Need better error messages.
+                    bail!("duplicate resource reference {:?}", resource.name());
+                }
+                seen_resources.insert(resource.name());
+
+                let idx = *resource_idxs
+                    .get(resource.name())
+                    .ok_or_else(|| anyhow!("undefined resource {:?}", resource.name()))?;
+                needs_resource_idxs[idx] = resource.count();
+            }
+            Ok(test::Test {
+                name: t.name.clone(),
+                program: t.command.program(),
+                args: t.command.args(),
+                needs_resource_idxs,
+                shutdown_grace_period: Duration::from_secs(t.shutdown_grace_period_s),
+                cache_policy: t.cache,
+                config_hash: {
+                    let mut h = DefaultHasher::new();
+                    t.hash(&mut h);
+                    h.finish()
+                },
+            })
+        })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     // TODO: deduplicate this!
