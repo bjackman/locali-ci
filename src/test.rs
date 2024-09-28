@@ -235,8 +235,15 @@ impl<W: Worktree> Manager<W> {
         }
     }
 
-    async fn cache_lookup(&self, test_case: &TestCase) -> Option<TestResult> {
-        match test_case.cache_hash {
+    // If we are able to look up a result but we can't read it from the
+    // database, we don' fail this function we just treat it as a cache miss.
+    // Failures are reserved for more weird and scary cases.
+    async fn cache_lookup(&self, test_case: &TestCase) -> anyhow::Result<Option<TestResult>> {
+        match test_case
+            .cache_hash(self.repo.as_ref())
+            .await
+            .context("getting cache hash")?
+        {
             Some(ref hash) => {
                 match self
                     .result_db
@@ -245,12 +252,12 @@ impl<W: Worktree> Manager<W> {
                 {
                     Err(err) => {
                         error!("Failed to read cached test result, will overwrite: {err:?}");
-                        None
+                        Ok(None)
                     }
-                    Ok(maybe_result) => maybe_result,
+                    Ok(maybe_result) => Ok(maybe_result),
                 }
             }
-            None => None,
+            None => Ok(None),
         }
     }
 
@@ -315,38 +322,25 @@ impl<W: Worktree> Manager<W> {
         I: IntoIterator<Item = CommitHash>,
     {
         // Build the set test cases we need to kick off.
-        //
-        // TODO instead of blocking until all are ready can we iterate over them
-        // in the order they become ready?
-        //
-        // TODO maybe we should actually just remove the need for async from the
-        // constructor, it's just about getting the tree hash, which could just
-        // be an async operation that you have to call on the TestCase after
-        // it's constructed
-        let test_cases = try_join_all(
-            revs.into_iter()
-                .cartesian_product(self.tests.iter())
-                .map(|(rev, test)| TestCase::new(rev, test.clone(), self.repo.as_ref())),
-        )
-        .await
-        .context("setting up test cases")?;
-        let test_cases: HashMap<TestCaseId, TestCase> =
-            test_cases.into_iter().map(|tc| (tc.id(), tc)).collect();
+        let to_start: HashMap<TestCaseId, TestCase> = revs
+            .into_iter()
+            .cartesian_product(self.tests.iter())
+            .map(|(rev, test)| {
+                let tc = TestCase::new(rev, test.clone());
+                (tc.id(), tc)
+            })
+            // Skip the ones that are already running.
+            .filter(|(id, _tc)| !self.job_cts.contains_key(id))
+            .collect();
 
         // For the ones already running, figure out which we wanna keep (and
         // therefore we don't need to start) and which should be cancelled to
         // free up resources.
-        //
-        // TODO can we make this more concise?
         let to_cancel: Vec<TestCaseId> = self
             .job_cts
             .keys()
-            .filter(|id| !test_cases.contains_key(*id))
+            .filter(|id| !to_start.contains_key(*id))
             .cloned()
-            .collect();
-        let to_start: HashMap<TestCaseId, TestCase> = test_cases
-            .into_iter()
-            .filter(|(id, _tc)| !self.job_cts.contains_key(id))
             .collect();
         info!(
             "Enqueueing {:?}, cancelling {:?} jobs",
@@ -359,14 +353,21 @@ impl<W: Worktree> Manager<W> {
         }
 
         for (id, test_case) in to_start.into_iter() {
-            if let Some(test_result) = self.cache_lookup(&test_case).await {
+            if let Some(test_result) = self
+                .cache_lookup(&test_case)
+                .await
+                .context("result cache lookup")?
+            {
                 self.notify(test_case, TestStatus::Completed(test_result));
                 continue;
             }
 
             let ct = CancellationToken::new();
             let output = self.result_db.create_output(
-                test_case.storage_hash(),
+                &test_case
+                    .storage_hash(self.repo.as_ref())
+                    .await
+                    .context("getting storage hash")?,
                 &test_case.test.name,
                 test_case.test.config_hash,
             )?;
@@ -548,41 +549,36 @@ type TestCaseId = String;
 pub struct TestCase {
     // Commit that will be checked out to run the test.
     pub commit_hash: CommitHash,
-    // Hash that will be used to identify the test result. Might be a tree hash,
-    // otherwise it matches the commit hash.
-    pub cache_hash: Option<Hash>,
     pub test: Arc<Test>,
 }
 
 impl TestCase {
-    pub async fn new<W: Worktree>(
-        commit_hash: CommitHash,
-        test: Arc<Test>,
-        repo: &W,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            cache_hash: match test.cache_policy {
-                CachePolicy::NoCaching => None::<Hash>,
-                CachePolicy::ByCommit => Some(commit_hash.clone().into()),
-                CachePolicy::ByTree => Some(
-                    repo.commit_tree(commit_hash.clone())
-                        .await
-                        .context("looking up tree from commit")?
-                        .into(),
-                ),
-            },
-            test,
-            commit_hash,
-        })
+    pub fn new(commit_hash: CommitHash, test: Arc<Test>) -> Self {
+        Self { test, commit_hash }
     }
 
     // Returns the hash that should be used to store the result in the result
     // database. Note that results get stored in the database even when caching
     // is disabled, so that the user can see the output..
-    pub fn storage_hash(&self) -> &Hash {
-        self.cache_hash
-            .as_ref()
-            .unwrap_or(self.commit_hash.as_ref())
+    pub async fn storage_hash<W: Worktree>(&self, repo: &W) -> anyhow::Result<Hash> {
+        match self.test.cache_policy {
+            CachePolicy::NoCaching => Ok(self.commit_hash.clone().into()),
+            CachePolicy::ByCommit => Ok(self.commit_hash.clone().into()),
+            CachePolicy::ByTree => Ok(repo
+                .commit_tree(self.commit_hash.clone())
+                .await
+                .context("looking up tree from commit")?
+                .into()),
+        }
+    }
+
+    // Returns the hash that should be used to look up a cached result in a
+    // database, if that is appropriate for this test case.
+    pub async fn cache_hash<W: Worktree>(&self, repo: &W) -> anyhow::Result<Option<Hash>> {
+        match self.test.cache_policy {
+            CachePolicy::NoCaching => Ok(None),
+            _ => self.storage_hash(repo).await.map(Some),
+        }
     }
 
     pub fn id(&self) -> TestCaseId {
@@ -1023,14 +1019,11 @@ mod tests {
         }
 
         // Convenience helper to construct a TestCase referring to this fixture's configuration.
-        async fn test_case(&self, hash: impl Borrow<CommitHash>, test_idx: usize) -> TestCase {
+        fn test_case(&self, hash: impl Borrow<CommitHash>, test_idx: usize) -> TestCase {
             TestCase::new(
                 hash.borrow().to_owned(),
                 self.manager.tests[test_idx].clone(),
-                self.repo.as_ref(),
             )
-            .await
-            .unwrap()
         }
     }
 
@@ -1048,7 +1041,7 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                f.test_case(&hash, 0).await,
+                f.test_case(&hash, 0),
                 vec![
                     TestStatus::Enqueued,
                     TestStatus::Started,
@@ -1100,7 +1093,7 @@ mod tests {
             // awu weh, weh mah
             HashMap::from([
                 (
-                    f.test_case(&hash1, 0).await,
+                    f.test_case(&hash1, 0),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1109,7 +1102,7 @@ mod tests {
                     .into(),
                 ),
                 (
-                    f.test_case(&hash1, 1).await,
+                    f.test_case(&hash1, 1),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1120,7 +1113,7 @@ mod tests {
                 // This isn't what we're testing here but we need to assert that it comes in so we can
                 // check below that nothing else comes in.
                 (
-                    f.test_case(&hash2, 0).await,
+                    f.test_case(&hash2, 0),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1129,7 +1122,7 @@ mod tests {
                     .into(),
                 ),
                 (
-                    f.test_case(&hash2, 1).await,
+                    f.test_case(&hash2, 1),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1254,7 +1247,7 @@ mod tests {
                 .expect("couldn't create test commit");
             for j in 0..num_tests {
                 want_results.insert(
-                    f.test_case(&hash, j).await,
+                    f.test_case(&hash, j),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1407,7 +1400,7 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                f.test_case(&hashes[0], 0).await,
+                f.test_case(&hashes[0], 0),
                 vec![TestStatus::Enqueued, TestStatus::Started].into(),
             )]),
         )
@@ -1422,7 +1415,7 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                f.test_case(&hashes[1], 0).await,
+                f.test_case(&hashes[1], 0),
                 vec![TestStatus::Enqueued].into(),
             )]),
         )
@@ -1434,7 +1427,7 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                f.test_case(&hashes[0], 0).await,
+                f.test_case(&hashes[0], 0),
                 vec![TestStatus::Canceled].into(),
             )]),
         )
@@ -1484,19 +1477,19 @@ mod tests {
             &mut results,
             HashMap::from([
                 (
-                    f.test_case(&hash_error, 0).await,
+                    f.test_case(&hash_error, 0),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
                 (
-                    f.test_case(&hash_error, 1).await,
+                    f.test_case(&hash_error, 1),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 0).await,
+                    f.test_case(&hash_fail, 0),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 1).await,
+                    f.test_case(&hash_fail, 1),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
             ]),
@@ -1512,7 +1505,7 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             HashMap::from([(
-                f.test_case(&hash_error, 0).await,
+                f.test_case(&hash_error, 0),
                 vec![TestStatus::Error(String::from("terminated by signal 15"))].into(),
             )]),
         )
@@ -1526,15 +1519,15 @@ mod tests {
             &mut results,
             HashMap::from([
                 (
-                    f.test_case(&hash_error, 1).await,
+                    f.test_case(&hash_error, 1),
                     vec![TestStatus::Canceled].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 0).await,
+                    f.test_case(&hash_fail, 0),
                     vec![TestStatus::Canceled].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 1).await,
+                    f.test_case(&hash_fail, 1),
                     vec![TestStatus::Canceled].into(),
                 ),
             ]),
