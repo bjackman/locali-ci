@@ -315,9 +315,6 @@ impl<W: Worktree> Manager<W> {
         I: IntoIterator<Item = CommitHash>,
     {
         // Build the set test cases we need to kick off.
-        //
-        // TODO instead of blocking until all are ready can we iterate over them
-        // in the order they become ready?
         let test_cases = try_join_all(
             revs.into_iter()
                 .cartesian_product(self.tests.iter())
@@ -331,8 +328,6 @@ impl<W: Worktree> Manager<W> {
         // For the ones already running, figure out which we wanna keep (and
         // therefore we don't need to start) and which should be cancelled to
         // free up resources.
-        //
-        // TODO can we make this more concise?
         let to_cancel: Vec<TestCaseId> = self
             .job_cts
             .keys()
