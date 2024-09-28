@@ -8,16 +8,43 @@ use regex::Regex;
 
 use crate::{
     git::{CommitHash, Worktree},
-    test::{Notification, TestStatus},
+    result::Database,
+    test::{Notification, TestCase, TestStatus},
 };
+
+struct TrackedTestCase {
+    test_case: TestCase,
+    status: TestStatus,
+}
+
+// Inner string key is test name. Here we awkwardly store this as a
+// two-level map instead of a flat one by TestCaseId, because that
+// conveniently lets us grab all the TestCases for a given commit when
+// rendering the output.
+type TrackedCases = HashMap<CommitHash, HashMap<String, TrackedTestCase>>;
+
+// Updates the awkward nested hashmap to reflect a new notification coming in.
+// Standalone function for convenient use in tests.
+fn update_tracked_cases(tracked_cases: &mut TrackedCases, notif: Arc<Notification>) {
+    let commit_statuses = tracked_cases
+        .entry(notif.test_case.commit_hash.clone())
+        .or_default();
+    commit_statuses.insert(
+        notif.test_case.test.name.clone(),
+        TrackedTestCase {
+            test_case: notif.test_case.clone(),
+            status: notif.status.clone(),
+        },
+    );
+}
 
 pub struct Tracker<W: Worktree, O: Write> {
     repo: Arc<W>,
-    // Inner string key is test name.
-    statuses: HashMap<CommitHash, HashMap<String, TestStatus>>,
+    tracked_cases: TrackedCases,
     output_buf: OutputBuffer,
     output: O,
     lines_to_clear: usize,
+    result_url_base: String,
 }
 
 // This ought to be private to Tracker::reset, rust just doesn't seem to let you do that.
@@ -27,13 +54,14 @@ lazy_static! {
 }
 
 impl<W: Worktree, O: Write> Tracker<W, O> {
-    pub fn new(repo: Arc<W>, output: O) -> Self {
+    pub fn new(repo: Arc<W>, output: O, result_url_base: impl Into<String>) -> Self {
         Self {
             repo,
-            statuses: HashMap::new(),
+            tracked_cases: HashMap::new(),
             output_buf: OutputBuffer::empty(),
             output,
             lines_to_clear: 0,
+            result_url_base: result_url_base.into(),
         }
     }
 
@@ -47,11 +75,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
     }
 
     pub fn update(&mut self, notif: Arc<Notification>) {
-        let commit_statuses = self
-            .statuses
-            .entry(notif.test_case.commit_hash.clone())
-            .or_default();
-        commit_statuses.insert(notif.test_case.test.name.clone(), notif.status.clone());
+        update_tracked_cases(&mut self.tracked_cases, notif);
     }
 
     pub fn repaint(&mut self) -> anyhow::Result<()> {
@@ -67,7 +91,9 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
                 ED(None)
             )?;
         }
-        self.lines_to_clear = self.output_buf.render(&mut self.output, &self.statuses)?;
+        self.lines_to_clear =
+            self.output_buf
+                .render(&mut self.output, &self.tracked_cases, &self.result_url_base)?;
         Ok(())
     }
 }
@@ -232,7 +258,8 @@ impl OutputBuffer {
     fn render(
         &self,
         output: &mut impl Write,
-        statuses: &HashMap<CommitHash, HashMap<String, TestStatus>>,
+        statuses: &HashMap<CommitHash, HashMap<String, TrackedTestCase>>,
+        result_url_base: &str,
     ) -> anyhow::Result<usize> {
         if self.lines.is_empty() {
             output.write_all(b"[range empty]\n")?;
@@ -241,52 +268,99 @@ impl OutputBuffer {
         for (i, line) in self.lines.iter().enumerate() {
             output.write_all(line.as_bytes())?;
             if let Some(hash) = self.status_commits.get(&i) {
-                if let Some(statuses) = statuses.get(hash) {
-                    let mut statuses: Vec<(&String, &TestStatus)> = statuses.iter().collect();
-                    // Sort by test case name. Would like sort_by_key here but
-                    // there's lifetime pain.
-                    statuses.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
-                    for (name, status) in statuses {
-                        output.write_all(
-                            format!(
-                                "{}: {} ",
-                                name.bold(),
-                                match status {
-                                    TestStatus::Error(msg) => msg.on_bright_red(),
-                                    TestStatus::Completed(result) =>
-                                        if result.exit_code == 0 {
-                                            "success".on_green()
-                                        } else {
-                                            format!("failed (status {})", result.exit_code).on_red()
-                                        },
-                                    _ => status.to_string().into(),
-                                }
-                            )
-                            .as_bytes(),
-                        )?;
-                    }
+                if let Some(tracked_cases) = statuses.get(hash) {
+                    self.render_cases(output, tracked_cases, result_url_base)?;
                 }
             }
             output.write_all(b"\n")?;
         }
         Ok(self.lines.len())
     }
+
+    fn render_cases(
+        &self,
+        output: &mut impl Write,
+        tracked_cases: &HashMap<String, TrackedTestCase>,
+        result_url_base: &str,
+    ) -> anyhow::Result<()> {
+        let mut tracked_cases: Vec<(&String, &TrackedTestCase)> = tracked_cases.iter().collect();
+        // Sort by test case name. Would like sort_by_key here but
+        // there's lifetime pain.
+        tracked_cases.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+        for (name, tracked_case) in tracked_cases {
+            let status_part = match &tracked_case.status {
+                TestStatus::Error(msg) => msg.on_bright_red(),
+                TestStatus::Completed(result) => {
+                    if result.exit_code == 0 {
+                        "success".on_green()
+                    } else {
+                        format!("failed (status {})", result.exit_code).on_red()
+                    }
+                }
+                _ => tracked_case.status.to_string().into(),
+            }
+            // IIUC the to_string renders the ColoredString. If you just implicitly convert
+            // it to a str it skips the colour rendering.
+            .to_string();
+            let url = format!(
+                "{}/{}",
+                result_url_base,
+                Database::result_relpath(&tracked_case.test_case).to_string_lossy()
+            );
+            let status_part = hyperlink(&status_part, &url);
+            output.write_all(format!("{}: {} ", name.bold(), status_part).as_bytes())?;
+        }
+        Ok(())
+    }
+}
+
+// Renders a hyperlink like in
+// https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda.
+// Obviously it would be a bit nicer to use some library for this, and we
+// already do that for the colorization, but I just dunno if it's worth
+// pulling in a dependency for something so trivial.
+fn hyperlink(text: &str, url: &str) -> String {
+    format!("\u{1b}]8;;{}\u{1b}\\{}\u{1b}]8;;\u{1b}\\", url, text)
 }
 
 #[cfg(test)]
 mod tests {
     use core::str;
-    use std::{io::BufWriter, sync::Arc};
+    use std::{io::BufWriter, sync::Arc, time::Duration};
 
     use googletest::{expect_that, prelude::eq};
 
     use crate::{
         git::test_utils::{TempRepo, WorktreeExt},
-        test::TestResult,
+        test::{CachePolicy, Test, TestName, TestResult},
         test_utils::some_time,
     };
 
     use super::*;
+
+    fn fake_test(name: impl Into<TestName>, cache_policy: CachePolicy) -> Arc<Test> {
+        Arc::new(Test {
+            name: name.into(),
+            cache_policy,
+            // Don't care abou any of the other fields in these tests
+            config_hash: 0,
+            program: "".into(),
+            args: vec![],
+            needs_resource_idxs: vec![],
+            shutdown_grace_period: Duration::from_secs(1),
+        })
+    }
+
+    fn fake_notif(commit_hash: &CommitHash, test: &Arc<Test>, status: TestStatus) -> Notification {
+        Notification {
+            test_case: TestCase {
+                commit_hash: commit_hash.clone(),
+                cache_hash: Some(commit_hash.clone().into()),
+                test: test.clone(),
+            },
+            status,
+        }
+    }
 
     #[googletest::test]
     #[test_log::test(tokio::test)]
@@ -295,32 +369,28 @@ mod tests {
         repo.commit("1", some_time()).await.unwrap();
         let hash2 = repo.commit("2", some_time()).await.unwrap();
         let hash3 = repo.commit("3", some_time()).await.unwrap();
+        let test1 = fake_test("my_test1", CachePolicy::ByCommit);
+        let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
         let ob = OutputBuffer::new(&repo, format!("{hash2}^..HEAD"), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
-        let statuses = HashMap::from([
-            (
-                hash3,
-                HashMap::from([
-                    ("my_test1".to_owned(), TestStatus::Enqueued),
-                    (
-                        "my_test2".to_owned(),
-                        TestStatus::Completed(TestResult { exit_code: 0 }),
-                    ),
-                ]),
+        let mut tracked_cases = HashMap::new();
+        for notif in [
+            fake_notif(&hash3, &test1, TestStatus::Enqueued),
+            fake_notif(
+                &hash3,
+                &test2,
+                TestStatus::Completed(TestResult { exit_code: 0 }),
             ),
-            (
-                hash2,
-                HashMap::from([
-                    ("my_test1".to_owned(), TestStatus::Error("oh no".to_owned())),
-                    ("my_test2".to_owned(), TestStatus::Started),
-                ]),
-            ),
-        ]);
+            fake_notif(&hash2, &test1, TestStatus::Error("oh no".to_owned())),
+            fake_notif(&hash2, &test2, TestStatus::Started),
+        ] {
+            update_tracked_cases(&mut tracked_cases, Arc::new(notif));
+        }
 
         let mut buf = BufWriter::new(Vec::new());
-        ob.render(&mut buf, &statuses)
+        ob.render(&mut buf, &tracked_cases, "myhost")
             .expect("OutputBuffer::render failed");
 
         expect_that!(
@@ -352,32 +422,29 @@ mod tests {
         repo.merge(&[hash1, hash2.clone(), hash3.clone()], some_time())
             .await
             .unwrap();
+        let test1 = fake_test("my_test1", CachePolicy::ByCommit);
+        let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
         let ob = OutputBuffer::new(&repo, format!("{base_hash}..HEAD"), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
-        let statuses = HashMap::from([
-            (
-                hash3,
-                HashMap::from([
-                    ("my_test1".to_owned(), TestStatus::Enqueued),
-                    (
-                        "my_test2".to_owned(),
-                        TestStatus::Completed(TestResult { exit_code: 0 }),
-                    ),
-                ]),
+
+        let mut tracked_cases = HashMap::new();
+        for notif in [
+            fake_notif(&hash3, &test1, TestStatus::Enqueued),
+            fake_notif(
+                &hash3,
+                &test2,
+                TestStatus::Completed(TestResult { exit_code: 0 }),
             ),
-            (
-                hash2,
-                HashMap::from([
-                    ("my_test1".to_owned(), TestStatus::Error("oh no".to_owned())),
-                    ("my_test2".to_owned(), TestStatus::Started),
-                ]),
-            ),
-        ]);
+            fake_notif(&hash2, &test1, TestStatus::Error("oh no".to_owned())),
+            fake_notif(&hash2, &test2, TestStatus::Started),
+        ] {
+            update_tracked_cases(&mut tracked_cases, Arc::new(notif));
+        }
 
         let mut buf = BufWriter::new(Vec::new());
-        ob.render(&mut buf, &statuses)
+        ob.render(&mut buf, &tracked_cases, "myhost")
             .expect("OutputBuffer::render failed");
 
         // Note this is a kinda weird log. We excluded the common ancestor of all the commits.
@@ -413,32 +480,28 @@ mod tests {
         repo.merge(&[hash1, hash2.clone(), hash3.clone()], some_time())
             .await
             .unwrap();
+        let test1 = fake_test("my_test1", CachePolicy::ByCommit);
+        let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
         let ob = OutputBuffer::new(&repo, format!("{base_hash}..{base_hash}"), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
-        let statuses = HashMap::from([
-            (
-                hash3,
-                HashMap::from([
-                    ("my_test1".to_owned(), TestStatus::Enqueued),
-                    (
-                        "my_test2".to_owned(),
-                        TestStatus::Completed(TestResult { exit_code: 0 }),
-                    ),
-                ]),
+        let mut tracked_cases = HashMap::new();
+        for notif in [
+            fake_notif(&hash3, &test1, TestStatus::Enqueued),
+            fake_notif(
+                &hash3,
+                &test1,
+                TestStatus::Completed(TestResult { exit_code: 0 }),
             ),
-            (
-                hash2,
-                HashMap::from([
-                    ("my_test1".to_owned(), TestStatus::Error("oh no".to_owned())),
-                    ("my_test2".to_owned(), TestStatus::Started),
-                ]),
-            ),
-        ]);
+            fake_notif(&hash2, &test2, TestStatus::Error("oh no".to_owned())),
+            fake_notif(&hash2, &test2, TestStatus::Started),
+        ] {
+            update_tracked_cases(&mut tracked_cases, Arc::new(notif));
+        }
 
         let mut buf = BufWriter::new(Vec::new());
-        ob.render(&mut buf, &statuses)
+        ob.render(&mut buf, &tracked_cases, "myhost")
             .expect("OutputBuffer::render failed");
 
         expect_that!(

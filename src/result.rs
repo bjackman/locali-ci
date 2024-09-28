@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     git::Hash,
-    test::{ConfigHash, TestName, TestResult},
+    test::{ConfigHash, TestCase, TestName, TestResult},
 };
 
 // Result database similar to the design described in
@@ -33,6 +33,10 @@ impl Database {
         Ok(Self {
             base_dir: base_dir.to_owned(),
         })
+    }
+
+    pub fn result_relpath(test_case: &TestCase) -> PathBuf {
+        PathBuf::from(test_case.storage_hash()).join(test_case.test.name.clone())
     }
 
     fn result_path(&self, hash: &Hash, test_name: impl Into<TestName>) -> PathBuf {

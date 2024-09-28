@@ -12,7 +12,6 @@ Bugs (high to low priority):
 
  - Tests don't work on my work computer. I think this is because I made false
    assumptions abuot the conditions for Git commit hashes to be deterministic.
- - Linked output data gets interpreted as HTML instead of plaintext.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.

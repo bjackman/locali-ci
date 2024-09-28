@@ -2,6 +2,7 @@ use anyhow::Context;
 use clap::{arg, value_parser, Arg, ArgMatches, FromArgMatches, Parser as _};
 use futures::StreamExt;
 use log::info;
+use nix::sys::utsname::uname;
 use std::ffi::OsString;
 use std::io::stdout;
 use std::path::PathBuf;
@@ -15,6 +16,7 @@ use crate::git::Worktree;
 
 mod config;
 mod git;
+mod http;
 mod process;
 mod resource;
 mod result;
@@ -44,6 +46,11 @@ struct Args {
     /// Command to test. Note this is _not_ run via the shell.
     #[arg(short, long, required = true)]
     config: PathBuf,
+    /// Socket address in the form "$ip:$port" to listen on for serving files
+    /// over HTTP. For example "127.0.0.1:8080" or ""[::1]:1234". Set the port
+    /// to 0 to let the OS pick a port for us.
+    #[arg(long, default_value_t = {"0.0.0.0:0".to_string()})]
+    http_sockaddr: String,
     #[command(flatten)]
     runtime_default: RuntimeDefaultArgs,
     /// Base of range to test. Will test commits between this (exclusive) and
@@ -63,6 +70,8 @@ struct Args {
 struct RuntimeDefaultArgs {
     /// Directory where results will be stored.
     result_db: PathBuf,
+    /// Hostname to use for HTTP URLs
+    hostname: String,
 }
 
 // IIUC this diabolical bullshit is to take the parsed arguments ant put thme
@@ -76,6 +85,7 @@ impl FromArgMatches for RuntimeDefaultArgs {
     fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::Error> {
         Ok(Self {
             result_db: matches.get_one::<PathBuf>("result-db").unwrap().to_owned(),
+            hostname: matches.get_one::<String>("hostname").unwrap().to_owned(),
         })
     }
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
@@ -91,18 +101,28 @@ impl FromArgMatches for RuntimeDefaultArgs {
 // This is where we actually define the arguments with dynamic defaults.
 impl clap::Args for RuntimeDefaultArgs {
     fn augment_args(cmd: clap::Command) -> clap::Command {
-        let default = Box::leak(Box::new(
+        let default_db = Box::leak(Box::new(
             directories::ProjectDirs::from("", "", "local-ci")
                 .expect("couldn't find user data dir")
                 .data_local_dir()
                 .to_owned(),
         ));
-
+        let default_hostname = Box::leak(Box::new(
+            uname()
+                .expect("couldn't get nodename")
+                .nodename()
+                .to_owned(),
+        ));
         cmd.arg(
             Arg::new("result-db")
                 .long("result-db")
                 .value_parser(value_parser!(PathBuf))
-                .default_value(default.to_str()),
+                .default_value(default_db.to_str()),
+        )
+        .arg(
+            Arg::new("hostname")
+                .long("hostname")
+                .default_value(default_hostname.to_str()),
         )
     }
     fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
@@ -134,6 +154,18 @@ async fn main() -> anyhow::Result<()> {
         token.cancel()
     });
 
+    let listener = tokio::net::TcpListener::bind(args.http_sockaddr)
+        .await
+        .unwrap();
+    let http_port = listener
+        .local_addr()
+        .expect("couldn't get local HTTP address")
+        .port();
+    tokio::spawn(http::serve_dir(
+        listener,
+        args.runtime_default.result_db.clone(),
+    ));
+
     let repo = git::PersistentWorktree {
         path: args.repo.to_owned().into(),
     };
@@ -149,7 +181,8 @@ async fn main() -> anyhow::Result<()> {
     let mut test_manager = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", args.base).into();
     let mut notifs = test_manager.results();
-    let mut status_tracker = status::Tracker::new(repo.clone(), stdout());
+    let result_url_base = format!("http://{}:{}", args.runtime_default.hostname, http_port);
+    let mut status_tracker = status::Tracker::new(repo.clone(), stdout(), result_url_base);
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
     loop {

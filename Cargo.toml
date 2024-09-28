@@ -32,6 +32,8 @@ strip-ansi-escapes = "0.2.0"
 chrono = "0.4.38"
 serde_json = "1.0.128"
 itertools = "0.13.0"
+axum = { version = "0.7.7", features = ["http1"] }
+tower-http = { version = "0.6.1", features = ["fs"] }
 
 [dev-dependencies]
 test-case = "3.3"
