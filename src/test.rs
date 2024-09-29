@@ -34,6 +34,8 @@ use crate::git::TempWorktree;
 use crate::git::{CommitHash, Hash, Worktree};
 use crate::process::OutputExt;
 use crate::resource::Pools;
+use crate::resource::Resource;
+use crate::resource::ResourceKey;
 use crate::result::Database;
 use crate::result::TestCaseOutput;
 
@@ -74,9 +76,9 @@ pub struct Test {
     pub config_hash: ConfigHash,
     pub program: OsString,
     pub args: Vec<OsString>,
-    // Indexes of pools in the Manager's token_pools from which this test needs
-    // a resource-token before it can begin.
-    pub needs_resource_idxs: Vec<usize>,
+    // Counts of the resource tokens this test needs a resource-token before it
+    // can begin.
+    pub needs_resources: HashMap<ResourceKey, usize>,
     pub shutdown_grace_period: Duration,
     pub cache_policy: CachePolicy,
 }
@@ -118,7 +120,7 @@ pub struct ManagerBuilder<W> {
     // while, and create temporary worktrees from it in the background.
     repo: Arc<W>,
     tests: Vec<Test>,
-    token_pool_sizes: Vec<usize>,
+    resource_tokens: HashMap<ResourceKey, Vec<String>>,
     result_db: Database,
 
     num_worktrees: usize,
@@ -176,18 +178,40 @@ impl<W> ManagerBuilder<W> {
         .await
         .context("setting up temporary worktrees")?;
         info!("Worktree setup done.");
+
+        let Self {
+            repo,
+            tests,
+            result_db,
+            resource_tokens,
+            num_worktrees: _,
+            worktree_prefix: _,
+            worktree_dir: _,
+        } = self;
+
+        // Combine the worktrees and generic tokens into reosurces that can be
+        // managed by the resource module.
+        let mut resources: HashMap<ResourceKey, Vec<Resource>> = resource_tokens
+            .into_iter()
+            .map(|(key, tokens)| (key, tokens.into_iter().map(Resource::UserToken).collect()))
+            .collect();
+        resources.insert(
+            ResourceKey::Worktree,
+            worktrees.into_iter().map(Resource::Worktree).collect(),
+        );
+
         // TODO: If this capacity gets exhausted, data gets lost and we get an error which this code
         // probably doesn't handle very gracefully. We should instead just block the sender.
         let (result_tx, _) = broadcast::channel(4096);
         Ok(Manager {
-            origin_path: Arc::new(self.repo.path().to_owned()),
-            repo: self.repo,
+            origin_path: Arc::new(repo.path().to_owned()),
+            repo,
             result_tx,
             job_cts: HashMap::new(),
             job_counter: JobCounter::new(),
-            tests: self.tests.into_iter().map(Arc::new).collect(),
-            resource_pools: Arc::new(Pools::new(self.token_pool_sizes, worktrees)),
-            result_db: self.result_db,
+            tests: tests.into_iter().map(Arc::new).collect(),
+            resource_pools: Arc::new(Pools::new(resources)),
+            result_db,
         })
     }
 }
@@ -202,14 +226,14 @@ pub struct Manager<W: Worktree> {
     // Pools contains sets of intangible arbitrary "resources" that can be used to throttle test
     // jobs, and also tracks access to reused worktrees. The indices of the token-type resources
     // will be referenced by Test::needs_resource_idx values.
-    resource_pools: Arc<Pools<TempWorktree>>,
+    resource_pools: Arc<Pools>,
     result_db: Database,
     // Path of original repo.
     origin_path: Arc<PathBuf>,
 }
 
 impl<W: Worktree> Manager<W> {
-    pub fn builder<I: IntoIterator<Item = Test>, J: IntoIterator<Item = usize>>(
+    pub fn builder<T, R>(
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
@@ -217,13 +241,19 @@ impl<W: Worktree> Manager<W> {
         // because we want it to be hard to accidentally refer to global
         // resources like that.
         result_db: Database,
-        tests: I,
-        token_pool_sizes: J,
-    ) -> ManagerBuilder<W> {
+        tests: T,
+        // Tokens for resources, basically a HashMap from "resource type" names
+        // to token values.
+        resource_tokens: R,
+    ) -> ManagerBuilder<W>
+    where
+        T: IntoIterator<Item = Test>,
+        R: IntoIterator<Item = (ResourceKey, Vec<String>)>,
+    {
         ManagerBuilder {
             repo,
             tests: tests.into_iter().collect(),
-            token_pool_sizes: token_pool_sizes.into_iter().collect(),
+            resource_tokens: resource_tokens.into_iter().collect(),
             result_db,
 
             num_worktrees: 1,
@@ -271,13 +301,14 @@ impl<W: Worktree> Manager<W> {
             // will be flaky. Not sure what to do about that.
             select!(biased;
                     _ = job.ct.cancelled() => (),
-                    resources = pools.get(job.test_case.test.needs_resource_idxs.clone()) =>  {
+                    resources = pools.get(job.test_case.test.needs_resources.clone()) =>  {
                 tx.send(Arc::new(Notification {
                     test_case: job.test_case.clone(),
                     status: TestStatus::Started,
                 }))
                 .or_log_error("Dropping a notification");
-                let worktree = resources.obj();
+                // It's a safe language baybee
+                let worktree = resources.resources(&ResourceKey::Worktree)[0].as_worktree();
                 let result = job.run(worktree).await;
                 let status = match result {
                     Err(ref err) => TestStatus::Error(err.to_string()),
@@ -807,7 +838,7 @@ mod tests {
                 name: self.test_name.clone(),
                 program: self.program(),
                 args: self.args(),
-                needs_resource_idxs: vec![],
+                needs_resources: [(ResourceKey::Worktree, 1)].into(),
                 shutdown_grace_period: Duration::from_secs(5),
                 cache_policy,
                 config_hash: 0,
@@ -1276,13 +1307,19 @@ mod tests {
         }
         let script = TestScript::new("my_test");
         // We only have 2 tokens
-        let resource_token_counts = [2];
+        let resource_tokens = HashMap::from([(
+            ResourceKey::UserToken("foo".into()),
+            vec!["foo1".into(), "foo2".into()],
+        )]);
         // And a test that requires one of those tokens.
         let tests = [Test {
             name: "my_test".to_owned(),
             program: script.program(),
             args: script.args(),
-            needs_resource_idxs: vec![1],
+            needs_resources: HashMap::from([
+                (ResourceKey::Worktree, 1),
+                (ResourceKey::UserToken("foo".into()), 1),
+            ]),
             shutdown_grace_period: Duration::from_secs(5),
             cache_policy: CachePolicy::ByCommit,
             config_hash: 0,
@@ -1292,7 +1329,7 @@ mod tests {
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
             tests,
-            resource_token_counts,
+            resource_tokens,
         )
         .num_worktrees(4)
         .build()
@@ -1337,7 +1374,7 @@ mod tests {
                         temp_dir.path()
                     )),
                 ],
-                needs_resource_idxs: vec![],
+                needs_resources: [(ResourceKey::Worktree, 1)].into(),
                 shutdown_grace_period: Duration::from_secs(5),
                 cache_policy: CachePolicy::ByCommit,
                 config_hash: 0

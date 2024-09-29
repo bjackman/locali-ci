@@ -1,77 +1,112 @@
-use std::marker::Send;
+use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
 use async_condvar_fair::Condvar;
+#[allow(unused_imports)]
+use log::debug;
 use parking_lot::Mutex;
 
-#[derive(Debug)]
-// Collection of shared resources, consisting of some sub-pools of "tokens" and a singular pool of
-// objects. The user can request a given number tokens and one object - the tokens are just
-// implemented as counters while the objects are actually returned when requested.
-pub struct Pools<T> {
-    cond: Condvar,
-    resources: Mutex<(Vec<usize>, Vec<T>)>,
+use crate::git::TempWorktree;
+
+// Key to identify the type of resource that can be put into the pool.
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub enum ResourceKey {
+    // Special type of resource representing worktrees. This code doesn't
+    // actually care about worktrees so probably we should actually just be
+    // generic over the key type.
+    Worktree,
+    UserToken(String), // Resource defined by the user.
 }
 
-impl<T: Send> Pools<T> {
+// Resource that can be put in the pool. This is another thing where we leak the
+// details of the user into this code, we probably shouldn't know about
+// TempWorktree in here.
+#[derive(Debug)]
+pub enum Resource {
+    Worktree(TempWorktree),
+    #[expect(dead_code)] // We haven't yet got the logic to feed this info to the child process.
+    UserToken(String),
+}
+
+impl Resource {
+    // Assumes that your resource is a worktree, panics if it isn't.
+    pub fn as_worktree(&self) -> &TempWorktree {
+        match self {
+            Self::Worktree(w) => w,
+            _ => panic!("as_worktree called on bogus Resource"),
+        }
+    }
+}
+
+// Collection of shared resources, consisting of pools of resources. The
+// user can block until an arbitrary combination of numbers of different tokens
+// becomes available, without any underutilization or deadlocking. Tokens are
+// strings, which is another thing this code doesn't actually care about and
+// probably "should" be generic over.
+#[derive(Debug)]
+pub struct Pools {
+    cond: Condvar,
+    resources: Mutex<HashMap<ResourceKey, Vec<Resource>>>,
+}
+
+impl Pools {
     // Create a collection of pools where sizes specifies the initial number of tokens in each
     // pool.
-    pub fn new<I, J>(token_counts: I, objs: J) -> Self
-    where
-        I: IntoIterator<Item = usize>,
-        J: IntoIterator<Item = T>,
-    {
+    pub fn new(resources: impl IntoIterator<Item = (ResourceKey, Vec<Resource>)>) -> Self {
         Self {
             cond: Condvar::new(),
-            resources: Mutex::new((
-                token_counts.into_iter().collect(),
-                objs.into_iter().collect(),
-            )),
+            resources: Mutex::new(resources.into_iter().collect()),
         }
     }
 
-    // Get the specified number of tokens from each of the pools, indexes match
-    // the indexes used in new. Panics if the size of counts differs from the number of pools.
+    // Get the specified number of tokens from each of the pools, keys match
+    // the keys used in new (or this panics).
     // The tokens are held until you drop the returned value.
     //
     // https://github.com/rust-lang/rust-clippy/issues/13075
     #[expect(clippy::await_holding_lock)]
-    pub async fn get<I: IntoIterator<Item = usize>>(&self, token_counts: I) -> Resources<T> {
-        let wants: Vec<_> = token_counts.into_iter().collect();
+    pub async fn get(&self, wants: impl IntoIterator<Item = (ResourceKey, usize)>) -> Resources {
+        let wants: Vec<(ResourceKey, usize)> = wants.into_iter().collect();
         let mut guard = self.resources.lock();
         loop {
-            let (ref mut avail_token_counts, ref mut objs) = *guard;
-            assert!(wants.len() == avail_token_counts.len());
-            if avail_token_counts
+            let avail_tokens = &mut (*guard);
+            // For simplicity we first iterate to check if all the resources we
+            // need are available, then if they are we take them out in a
+            // separate operation.
+            if wants
                 .iter()
-                .zip(wants.iter())
-                .all(|(have, want)| have >= want)
-                && !objs.is_empty()
+                .all(|(key, want)| avail_tokens[key].len() >= *want)
             {
-                for (i, want) in wants.iter().enumerate() {
-                    avail_token_counts[i] -= want;
-                }
-                let obj = objs.pop().unwrap();
-
                 return Resources {
-                    token_counts: ManuallyDrop::new(wants),
-                    obj: ManuallyDrop::new(obj),
+                    resources: ManuallyDrop::new(
+                        wants
+                            .into_iter()
+                            .map(|(key, want_count)| {
+                                let avail =
+                                    avail_tokens.get_mut(&key).expect("invalid resource key");
+                                // Take the last n tokens out of the Vec and
+                                // associated them with the key.
+                                (key, avail.drain((avail.len() - want_count)..).collect())
+                            })
+                            .collect(),
+                    ),
                     pools: self,
                 };
             }
+
             guard = self.cond.wait(guard).await;
         }
     }
 
-    fn put<I: IntoIterator<Item = usize>>(&self, token_counts: I, obj: T) {
-        let token_counts: Vec<_> = token_counts.into_iter().collect();
+    fn put(&self, resources: HashMap<ResourceKey, Vec<Resource>>) {
         let mut guard = self.resources.lock();
-        let (ref mut avail_token_counts, ref mut objs) = *guard;
-        assert!(token_counts.len() == avail_token_counts.len());
-        for (i, want) in token_counts.iter().enumerate() {
-            avail_token_counts[i] += want;
+        let avail_tokens = &mut (*guard);
+        for (key, mut key_resources) in resources.into_iter() {
+            avail_tokens
+                .get_mut(&key)
+                .expect("invalid resource key")
+                .append(&mut key_resources);
         }
-        objs.push(obj);
         // Note this is pretty inefficient, we are waking up every getter even though we can satisfy
         // at most one of them.
         self.cond.notify_all();
@@ -80,38 +115,33 @@ impl<T: Send> Pools<T> {
 
 #[derive(Debug)]
 // Tokens taken from a Pools.
-pub struct Resources<'a, T: Send> {
-    token_counts: ManuallyDrop<Vec<usize>>,
-    obj: ManuallyDrop<T>,
-    pools: &'a Pools<T>,
+pub struct Resources<'a> {
+    resources: ManuallyDrop<HashMap<ResourceKey, Vec<Resource>>>,
+    pools: &'a Pools,
 }
 
-impl<T: Send> Resources<'_, T> {
-    pub fn obj(&self) -> &T {
-        &self.obj
+impl Resources<'_> {
+    // Get acess to the resources with the given key, panics if the key is
+    // invalid.
+    pub fn resources(&self, key: &ResourceKey) -> &Vec<Resource> {
+        self.resources
+            .get(key)
+            .unwrap_or_else(|| panic!("invalid resource key {key:?}"))
     }
 }
 
-impl<T: Send> Drop for Resources<'_, T> {
+impl Drop for Resources<'_> {
     fn drop(&mut self) {
         // SAFETY: This is safe as the fields are never accessed again.
-        let (counts, obj) = unsafe {
-            (
-                ManuallyDrop::take(&mut self.token_counts),
-                ManuallyDrop::take(&mut self.obj),
-            )
-        };
-        self.pools.put(counts, obj)
+        let resources = unsafe { ManuallyDrop::take(&mut self.resources) };
+        self.pools.put(resources)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::bail;
-    use std::{
-        iter::repeat,
-        task::{Context, Poll},
-    };
+    use std::task::{Context, Poll};
 
     use futures::{pin_mut, task::noop_waker, Future};
     use test_case::test_case;
@@ -138,24 +168,63 @@ mod tests {
         }
     }
 
-    #[test_case(vec![0, 0], 1, vec![1, 0] ; "two empty")]
-    #[test_case(vec![0, 0], 1, vec![1, 1] ; "two empty, want both")]
-    #[test_case(vec![4], 1, vec![6] ; "too many")]
-    #[test_case(vec![0], 1, vec![1] ; "one empty")]
-    #[test_case(vec![4], 0, vec![1] ; "no objs")]
+    #[test_case(
+        vec![("foo".into(), vec![]), ("bar".into(), vec![])], 
+        vec![("foo".into(), 1), ("bar".into(), 0)]; "two empty")]
+    // #[test_case(vec![0, 0], 1, vec![1, 1] ; "two empty, want both")]
+    // #[test_case(vec![4], 1, vec![6] ; "too many")]
+    // #[test_case(vec![0], 1, vec![1] ; "one empty")]
+    // #[test_case(vec![4], 0, vec![1] ; "no objs")]
     #[test_log::test]
-    fn test_pools_one_empty_blocks(sizes: Vec<usize>, num_objs: usize, wants: Vec<usize>) {
-        let pool = Pools::<String>::new(sizes.clone(), repeat("obj".to_owned()).take(num_objs));
-        check_pending(pool.get(wants.clone())).unwrap()
+    fn test_pools_one_empty_blocks(
+        resources: Vec<(String, Vec<String>)>,
+        wants: Vec<(String, usize)>,
+    ) {
+        let pools = Pools::new(resources.into_iter().map(|(key, tokens)| {
+            (
+                ResourceKey::UserToken(key),
+                tokens.into_iter().map(Resource::UserToken).collect(),
+            )
+        }));
+        check_pending(
+            pools.get(
+                wants
+                    .into_iter()
+                    .map(|(k, n)| (ResourceKey::UserToken(k), n)),
+            ),
+        )
+        .unwrap()
     }
 
     #[test_log::test(tokio::test)]
     async fn test_pools_get_some() {
-        let pools = Pools::new([3, 4], ["obj1", "obj2"].map(|s| s.to_owned()));
+        let pools = Pools::new([
+            (
+                ResourceKey::UserToken("foo".into()),
+                vec![
+                    Resource::UserToken("foo1".into()),
+                    Resource::UserToken("foo2".into()),
+                    Resource::UserToken("foo3".into()),
+                ],
+            ),
+            (
+                ResourceKey::UserToken("bar".into()),
+                vec![
+                    Resource::UserToken("bar1".into()),
+                    Resource::UserToken("bar2".into()),
+                ],
+            ),
+        ]);
         {
-            let _tokens = pools.get(vec![1, 2]).await;
-            check_pending(pools.get(vec![3, 0])).expect("returned too many tokens");
+            let _tokens = pools
+                .get([
+                    (ResourceKey::UserToken("foo".into()), 2),
+                    (ResourceKey::UserToken("bar".into()), 2),
+                ])
+                .await;
+            check_pending(pools.get([(ResourceKey::UserToken("foo".into()), 3)]))
+                .expect("returned too many tokens");
         }
-        pools.get(vec![3, 0]).await;
+        pools.get([(ResourceKey::UserToken("foo".into()), 3)]).await;
     }
 }

@@ -9,11 +9,12 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{bail, Context as _};
 use serde::Deserialize;
 
 use crate::{
     git::{self, PersistentWorktree},
+    resource::ResourceKey,
     result::Database,
     test::{self, CachePolicy},
 };
@@ -84,8 +85,7 @@ pub struct Test {
 
 impl Test {
     // Convert to the "real" object.
-    pub fn parse(&self, resource_idxs: &HashMap<String, usize>) -> anyhow::Result<test::Test> {
-        let mut needs_resource_idxs: Vec<_> = iter::repeat(0).take(resource_idxs.len()).collect();
+    pub fn parse(&self) -> anyhow::Result<test::Test> {
         let mut seen_resources = HashSet::new();
         for resource in self.resources.as_ref().unwrap_or(&vec![]) {
             if seen_resources.contains(&resource.name()) {
@@ -93,17 +93,20 @@ impl Test {
                 bail!("duplicate resource reference {:?}", resource.name());
             }
             seen_resources.insert(resource.name());
-
-            let idx = *resource_idxs
-                .get(resource.name())
-                .ok_or_else(|| anyhow!("undefined resource {:?}", resource.name()))?;
-            needs_resource_idxs[idx] = resource.count();
         }
         Ok(test::Test {
             name: self.name.clone(),
             program: self.command.program(),
             args: self.command.args(),
-            needs_resource_idxs,
+            needs_resources: self
+                .resources
+                .as_ref()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|r| (ResourceKey::UserToken(r.name().to_owned()), r.count()))
+                // At present we assume all tests require a worktree.
+                .chain(iter::once((ResourceKey::Worktree, 1)))
+                .collect(),
             shutdown_grace_period: Duration::from_secs(self.shutdown_grace_period_s),
             cache_policy: self.cache,
             config_hash: {
@@ -144,43 +147,50 @@ pub fn manager_builder(
     let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
 
     // Build map of resource name to numerical index.
-    let resource_idxs: HashMap<String, usize> = config
+    let resource_tokens: HashMap<ResourceKey, Vec<String>> = config
         .resources
         .as_ref()
         .unwrap_or(&vec![])
         .iter()
-        .enumerate()
-        .map(|(i, resource)| (resource.name().to_owned(), i))
+        .map(|resource| {
+            (
+                ResourceKey::UserToken(resource.name().to_owned()),
+                // Here we'll eventually allow the user to name the resources
+                // explicitly. For now we just pick a unique name.
+                (0..resource.count())
+                    .map(|i| format!("{}-{}", resource.name(), i))
+                    .collect(),
+            )
+        })
         .collect();
 
     // Parse all the tests, with reference to the named resource idxs.
     let tests = config
         .tests
         .iter()
-        .map(|t| t.parse(&resource_idxs))
+        .map(|t| t.parse())
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    // TODO: deduplicate this!
-    let mut resource_token_counts: Vec<_> = iter::repeat(0).take(resource_idxs.len()).collect();
-    let mut seen_resources = HashSet::new();
-    for resource in config.resources.as_ref().unwrap_or(&vec![]) {
-        if seen_resources.contains(&resource.name()) {
-            // TODO: Need better error messages.
-            bail!("duplicate resource reference {:?}", resource.name());
+    // Check for invalid resource references.
+    for test in tests.iter() {
+        for key in test.needs_resources.keys() {
+            if let ResourceKey::UserToken(name) = key {
+                if !resource_tokens.contains_key(key) {
+                    bail!(
+                        "undefined resource {:?} referenced in test {:?}",
+                        name,
+                        test.name
+                    );
+                }
+            }
         }
-        seen_resources.insert(resource.name());
-
-        let idx = *resource_idxs
-            .get(resource.name())
-            .ok_or_else(|| anyhow!("undefined resource {:?}", resource.name()))?;
-        resource_token_counts[idx] = resource.count();
     }
 
     Ok(test::Manager::builder(
         repo.clone(),
         Database::create_or_open(cache_path)?,
         tests,
-        resource_token_counts,
+        resource_tokens,
     )
     .num_worktrees(config.num_worktrees))
 }
