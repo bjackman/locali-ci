@@ -37,6 +37,7 @@ use crate::process::OutputExt;
 use crate::resource::Pools;
 use crate::resource::Resource;
 use crate::resource::ResourceKey;
+use crate::resource::Resources;
 use crate::result::Database;
 use crate::result::TestCaseOutput;
 
@@ -173,7 +174,6 @@ impl<W> ManagerBuilder<W> {
                 .prefix(&self.worktree_prefix)
                 .tempdir_in(&self.worktree_dir)
                 .context("creating temp dir for worktree")?;
-            debug!("Creating worktree: {:?}", t.path());
             TempWorktree::new::<W>(self.repo.borrow(), t).await
         }))
         .await
@@ -311,10 +311,10 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 .or_log_error("Dropping a notification");
                 let result = if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
                     // We "own" this worktree.
-                    job.checkout_and_run(worktrees[0].as_worktree()).await
+                    job.checkout_and_run(worktrees[0].as_worktree(), &resources).await
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    job.run(origin_worktree.path()).await
+                    job.run(origin_worktree.path(), &resources).await
                 };
                 let status = match result {
                     Err(ref err) => TestStatus::Error(err.to_string()),
@@ -491,25 +491,33 @@ struct TestJob {
     origin_path: Arc<PathBuf>,
 }
 
-impl TestJob {
+impl<'a> TestJob {
     // Returns Ok(None) when canceled.
-    async fn checkout_and_run<W>(&mut self, worktree: &W) -> anyhow::Result<Option<ExitCode>>
+    async fn checkout_and_run<W>(
+        &mut self,
+        worktree: &W,
+        resources: &Resources<'a>,
+    ) -> anyhow::Result<Option<ExitCode>>
     where
         W: Worktree,
     {
         worktree.checkout(&self.test_case.commit_hash).await?;
-        self.run(worktree.path()).await
+        self.run(worktree.path(), resources).await
     }
 
     // Returns Ok(None) when canceled.
-    async fn run(&mut self, current_dir: &Path) -> anyhow::Result<Option<ExitCode>> {
+    async fn run(
+        &mut self,
+        current_dir: &Path,
+        resources: &Resources<'a>,
+    ) -> anyhow::Result<Option<ExitCode>> {
         info!(
             "Starting {} for rev {}...",
             self.test_case.test.name, self.test_case.commit_hash
         );
 
         let mut cmd = self.test_case.test.command();
-        let child = cmd
+        let mut cmd = cmd
             .current_dir(current_dir)
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
@@ -520,9 +528,19 @@ impl TestJob {
             // be sure the test script has cleaned up after itself. But, in case
             // local-ci shuts down unexpectedly we'll try to at least limit the
             // damage.
-            .kill_on_drop(true)
-            .spawn()
-            .context("spawning test command")?;
+            .kill_on_drop(true);
+        // Set up env vars to communicate token values.
+        for (resource_name, tokens) in resources.tokens() {
+            for (i, token) in tokens.iter().enumerate() {
+                debug!(
+                    "{} = {}",
+                    format!("LCI_RESOURCE_{}_{}", resource_name, i),
+                    token
+                );
+                cmd = cmd.env(format!("LCI_RESOURCE_{}_{}", resource_name, i), token);
+            }
+        }
+        let child = cmd.spawn().context("spawning test command")?;
         // lol wat?
         let pid = Pid::from_raw(
             child
@@ -1403,17 +1421,27 @@ mod tests {
                 program: OsString::from("bash"),
                 args: vec![
                     "-c".into(),
-                    OsString::from(format!(
-                        "echo $LCI_ORIGIN >> {0:?}/lci_origin && echo $LCI_COMMIT >> {0:?}/lci_commit",
-                        temp_dir.path()
-                    )),
+                    OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
                 ],
-                needs_resources: [(ResourceKey::Worktree, 1)].into(),
+                needs_resources: [
+                    (ResourceKey::Worktree, 1),
+                    (ResourceKey::UserToken("my_resource".into()), 2),
+                ]
+                .into(),
                 shutdown_grace_period: Duration::from_secs(5),
                 cache_policy: CachePolicy::ByCommit,
-                config_hash: 0
+                config_hash: 0,
             }],
-            [],
+            [
+                (
+                    ResourceKey::UserToken("my_resource".into()),
+                    vec!["thing1".into(), "thing2".into(), "thing3".into()],
+                ),
+                (
+                    ResourceKey::UserToken("other_resource".into()),
+                    vec!["whing1".into(), "whing2".into(), "whing3".into()],
+                ),
+            ],
         )
         .build()
         .await
@@ -1424,20 +1452,43 @@ mod tests {
             .expect("set_revisions failed");
         m.settled().await;
 
+        let env_dump = fs::read_to_string(temp_dir.path().join("env.txt"))
+            .expect("couldn't read env dumped from test script");
+        let env: HashMap<&str, &str> = env_dump
+            .trim()
+            .split("\n")
+            .map(|line| {
+                let parts: Vec<_> = line.splitn(2, "=").collect();
+                assert!(parts.len() == 2, "can't parse line in env dump: {line:?}");
+                (parts[0], parts[1])
+            })
+            .collect();
         assert_eq!(
-            fs::read_to_string(temp_dir.path().join("lci_origin"))
-                .expect("couldn't read lci_origin from test script")
-                .trim(),
-            repo.path().to_string_lossy()
+            env.get("LCI_ORIGIN"),
+            // Ugh I don't fucking know, as_ref as_ref as_ref as_ref just deal
+            // with it this is how we write Rust this is good Rust as_ref as_ref.
+            Some(repo.path().to_string_lossy().as_ref()).as_ref()
         );
         assert_eq!(
-            CommitHash::new(
-                fs::read_to_string(temp_dir.path().join("lci_commit"))
-                    .expect("couldn't read lci_origin from test script")
-                    .trim()
-            ),
-            hash,
+            env.get("LCI_COMMIT").map(|t| CommitHash::new(*t)),
+            Some(hash)
         );
+        let resource0 = env
+            .get("LCI_RESOURCE_my_resource_0")
+            .expect("didn't get resource0");
+        assert!(
+            resource0.starts_with("thing"),
+            "bad resource 0: {resource0:?}'"
+        );
+        let resource1 = env
+            .get("LCI_RESOURCE_my_resource_1")
+            .expect("didn't get resource1");
+        assert!(
+            resource1.starts_with("thing"),
+            "bad resource 2: {resource1:?}'"
+        );
+        assert_eq!(env.get("LCI_RESOURCE_my_resource_2"), None);
+        assert_eq!(env.get("LCI_RESOURCE_other_resource_0"), None);
     }
 
     #[test_log::test(tokio::test)]

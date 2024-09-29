@@ -26,7 +26,6 @@ Bugs (high to low priority):
 Needed features (high to low priority):
 
  - Need a way for test command to report "error" as distinguished from failure.
- - Support running tests that don't need worktrees.
  - Store output and artifacts. WIP but:
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
@@ -39,8 +38,6 @@ Needed features (high to low priority):
    mechanism then there would be no need for this since you'd just modify the
    configuration to adopt the error reporting, and in that case the cache would
    be invalidated anyway.
- - Support other resources than worktrees and "tokens". Could e.g. be used for
-   dev servers.
  - Support saving artifacts so the user can reuse or analyze them later.
  - Fix output format, probably have to implement a pager in `ratatui`.
  - Support bailing out more quickly if the worktree teardown is too slow.

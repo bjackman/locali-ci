@@ -24,7 +24,6 @@ pub enum ResourceKey {
 #[derive(Debug)]
 pub enum Resource {
     Worktree(TempWorktree),
-    #[expect(dead_code)] // We haven't yet got the logic to feed this info to the child process.
     UserToken(String),
 }
 
@@ -124,6 +123,26 @@ impl Resources<'_> {
     // Get access to the resources with the given key.
     pub fn resources(&self, key: &ResourceKey) -> Option<&Vec<Resource>> {
         self.resources.get(key)
+    }
+
+    // Get all the user-configured token values
+    pub fn tokens(&self) -> HashMap<String, Vec<String>> {
+        self.resources
+            .iter()
+            .filter_map(|(key, tokens)| match key {
+                ResourceKey::UserToken(name) => Some((
+                    name.clone(),
+                    tokens
+                        .iter()
+                        .map(|t| match t {
+                            Resource::UserToken(token) => token.clone(),
+                            _ => panic!("bad token type for UserToken resource key"),
+                        })
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
     }
 }
 
