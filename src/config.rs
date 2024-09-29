@@ -72,6 +72,8 @@ impl Command {
 pub struct Test {
     name: String,
     command: Command,
+    #[serde(default = "default_requires_worktree")]
+    requires_worktree: bool,
     resources: Option<Vec<Resource>>,
     #[serde(default = "default_shutdown_grace_period")]
     /// When a job is no longer needed it's SIGINTed. If it doesn't respond (by
@@ -81,6 +83,10 @@ pub struct Test {
     shutdown_grace_period_s: u64,
     #[serde(default = "default_cache_policy")]
     cache: CachePolicy,
+}
+
+fn default_requires_worktree() -> bool {
+    true
 }
 
 impl Test {

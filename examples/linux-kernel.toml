@@ -4,7 +4,8 @@ num_worktrees = 4
 
 [[tests]]
 name = "checkpatch"
-command = "./scripts/checkpatch.pl --git HEAD"
+command = "./scripts/checkpatch.pl --git $LCI_COMMIT"
+requires_worktree = false
 
 [[tests]]
 name = "vmlinux-defconfig"

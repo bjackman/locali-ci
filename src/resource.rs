@@ -121,12 +121,9 @@ pub struct Resources<'a> {
 }
 
 impl Resources<'_> {
-    // Get acess to the resources with the given key, panics if the key is
-    // invalid.
-    pub fn resources(&self, key: &ResourceKey) -> &Vec<Resource> {
-        self.resources
-            .get(key)
-            .unwrap_or_else(|| panic!("invalid resource key {key:?}"))
+    // Get access to the resources with the given key.
+    pub fn resources(&self, key: &ResourceKey) -> Option<&Vec<Resource>> {
+        self.resources.get(key)
     }
 }
 

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::process::Stdio;
@@ -232,7 +233,7 @@ pub struct Manager<W: Worktree> {
     origin_path: Arc<PathBuf>,
 }
 
-impl<W: Worktree> Manager<W> {
+impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     pub fn builder<T, R>(
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
@@ -292,6 +293,7 @@ impl<W: Worktree> Manager<W> {
 
         let tx = self.result_tx.clone();
         let pools = self.resource_pools.clone();
+        let origin_worktree = self.repo.clone();
         tokio::spawn(async move {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
             // and some of those jobs are blocking on resources held by others,
@@ -307,9 +309,13 @@ impl<W: Worktree> Manager<W> {
                     status: TestStatus::Started,
                 }))
                 .or_log_error("Dropping a notification");
-                // It's a safe language baybee
-                let worktree = resources.resources(&ResourceKey::Worktree)[0].as_worktree();
-                let result = job.run(worktree).await;
+                let result = if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
+                    // We "own" this worktree.
+                    job.checkout_and_run(worktrees[0].as_worktree()).await
+                } else {
+                    // We don't "own" the "main" worktree so the job shouldn't mess with it.
+                    job.run(origin_worktree.path()).await
+                };
                 let status = match result {
                     Err(ref err) => TestStatus::Error(err.to_string()),
                     Ok(None) => TestStatus::Canceled,
@@ -487,20 +493,24 @@ struct TestJob {
 
 impl TestJob {
     // Returns Ok(None) when canceled.
-    async fn run<W>(&mut self, worktree: &W) -> anyhow::Result<Option<ExitCode>>
+    async fn checkout_and_run<W>(&mut self, worktree: &W) -> anyhow::Result<Option<ExitCode>>
     where
         W: Worktree,
     {
+        worktree.checkout(&self.test_case.commit_hash).await?;
+        self.run(worktree.path()).await
+    }
+
+    // Returns Ok(None) when canceled.
+    async fn run(&mut self, current_dir: &Path) -> anyhow::Result<Option<ExitCode>> {
         info!(
             "Starting {} for rev {}...",
             self.test_case.test.name, self.test_case.commit_hash
         );
 
-        worktree.checkout(&self.test_case.commit_hash).await?;
-
         let mut cmd = self.test_case.test.command();
         let child = cmd
-            .current_dir(worktree.path())
+            .current_dir(current_dir)
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
             .env("LCI_COMMIT", self.test_case.commit_hash.to_string())
@@ -667,6 +677,7 @@ mod tests {
 
     use anyhow::bail;
     use future::{join_all, select_all};
+    use itertools::izip;
     use log::error;
     use tempfile::TempDir;
     use test_case::test_case;
@@ -716,7 +727,7 @@ mod tests {
 
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
-        pub fn new(test_name: impl Into<TestName>) -> Self {
+        pub fn new(test_name: impl Into<TestName>, use_lockfile: bool) -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
             // The script will touch a special file to notify us that it has been started. On
             // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
@@ -733,15 +744,17 @@ mod tests {
             // Note that the blocking thing (maybe_read) must be a shell builtin; otherwise we would
             // need more Bash hackery to ensure that the signal gets forwarded to it.
             let script = format!(
-                "trap \"touch {siginted_path_prefix:?}$(git rev-parse HEAD); exit\" SIGINT
-                echo $$ >> {pid_path_prefix:?}$(git rev-parse HEAD)
+                "trap \"touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT); exit\" SIGINT
+                echo $$ >> {pid_path_prefix:?}$(git rev-parse $LCI_COMMIT)
 
-                if [ -e ./{lock_filename:?} ]; then
-                    echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
+                if [ -n \"{lock_filename}\" ]; then 
+                    if [ -e ./{lock_filename:?} ]; then
+                        echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
+                    fi
+                    trap \"rm {lock_filename:?}\" EXIT
+                    touch ./{lock_filename:?}
                 fi
-                trap \"rm {lock_filename:?}\" EXIT
-                touch ./{lock_filename:?}
-                commit_msg=\"$(git log -n1 --format=%B)\"
+                commit_msg=\"$(git log -n1 --format=%B $LCI_COMMIT)\"
                 exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
                 if [[ \"$commit_msg\" =~ {block_tag} ]]; then
                     if [[ -n \"$exit_code\" ]]; then
@@ -758,7 +771,7 @@ mod tests {
                 ",
                 pid_path_prefix = dir.path().join(Self::PID_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
-                lock_filename = Self::LOCK_FILENAME,
+                lock_filename = if use_lockfile { Self::LOCK_FILENAME } else { "" },
                 bug_detected_path = dir.path().join(Self::BUG_DETECTED_PATH),
                 block_tag = Self::BLOCK_COMMIT_MSG_TAG,
             );
@@ -833,12 +846,16 @@ mod tests {
                 .count()
         }
 
-        pub fn as_test(&self, cache_policy: CachePolicy) -> Test {
+        pub fn as_test(&self, cache_policy: CachePolicy, needs_worktree: bool) -> Test {
             Test {
                 name: self.test_name.clone(),
                 program: self.program(),
                 args: self.args(),
-                needs_resources: [(ResourceKey::Worktree, 1)].into(),
+                needs_resources: if needs_worktree {
+                    [(ResourceKey::Worktree, 1)].into()
+                } else {
+                    [].into()
+                },
                 shutdown_grace_period: Duration::from_secs(5),
                 cache_policy,
                 config_hash: 0,
@@ -975,7 +992,11 @@ mod tests {
     struct TestScriptFixtureBuilder {
         num_worktrees: usize,
         num_tests: usize,
+        // If we end up with more awkward "configuration vectors" like these
+        // then probably we should just switch this builder over to constructing
+        // via config::Test::parse.
         cache_policies: Vec<CachePolicy>,
+        needs_worktree: Vec<bool>,
     }
 
     impl TestScriptFixtureBuilder {
@@ -990,14 +1011,24 @@ mod tests {
             while self.cache_policies.len() < self.num_tests {
                 self.cache_policies.push(CachePolicy::ByCommit);
             }
+            while self.needs_worktree.len() < self.num_tests {
+                self.needs_worktree.push(true);
+            }
             self
         }
 
         // cache_policies[i] will be the cache policy for the ith test.
         pub fn cache_policies(mut self, pols: impl IntoIterator<Item = CachePolicy>) -> Self {
             self.cache_policies = pols.into_iter().collect();
-            self.num_tests = self.cache_policies.len();
-            self
+            let len = self.cache_policies.len();
+            self.num_tests(len)
+        }
+
+        // needs_worktrees[i] will decide if the ith test requires a worktree.
+        pub fn needs_worktree(mut self, needs_worktree: impl IntoIterator<Item = bool>) -> Self {
+            self.needs_worktree = needs_worktree.into_iter().collect();
+            let len = self.needs_worktree.len();
+            self.num_tests(len)
         }
     }
 
@@ -1010,16 +1041,18 @@ mod tests {
                 .await
                 .expect("couldn't create base commit");
             let scripts: Vec<TestScript> = (0..self.num_tests)
-                .map(|i| TestScript::new(format!("test_{i}")))
+                // Here we pass needs_worktree[i] to configure whether the script should
+                // try to detect sharing a worktree with another test run. If it
+                // doesn't a worktree then that sharing is harmless and
+                // expected.
+                .map(|i| TestScript::new(format!("test_{i}"), self.needs_worktree[i]))
                 .collect();
             let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
             let manager = Manager::builder(
                 repo.clone(),
                 Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-                scripts
-                    .iter()
-                    .zip(&self.cache_policies)
-                    .map(|(s, &c)| s.as_test(c)),
+                izip!(&scripts, &self.cache_policies, &self.needs_worktree)
+                    .map(|(s, &c, &w)| s.as_test(c, w)),
                 [],
             )
             .num_worktrees(self.num_worktrees)
@@ -1041,6 +1074,7 @@ mod tests {
                 num_worktrees: 2,
                 num_tests: 2,
                 cache_policies: vec![CachePolicy::ByCommit; 2],
+                needs_worktree: vec![true; 2],
             }
         }
 
@@ -1305,7 +1339,7 @@ mod tests {
                     .expect("couldn't create test commit"),
             );
         }
-        let script = TestScript::new("my_test");
+        let script = TestScript::new("my_test", true);
         // We only have 2 tokens
         let resource_tokens = HashMap::from([(
             ResourceKey::UserToken("foo".into()),
@@ -1592,6 +1626,38 @@ mod tests {
             _ = f.scripts[1].started(&hash_fail) => ()
         );
     }
+
+    #[test_log::test(tokio::test)]
+    async fn should_not_require_worktree() {
+        let mut f = TestScriptFixture::builder()
+            .needs_worktree([false, false, false])
+            .num_worktrees(1)
+            .build()
+            .await;
+        let test_hash = f
+            .repo
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+            .await
+            .expect("couldn't create test commit");
+        let head_hash = f
+            .repo
+            .commit("woodly doodly", some_time())
+            .await
+            .expect("couldn't create test commit");
+        f.manager
+            .set_revisions(vec![test_hash.clone()])
+            .await
+            .unwrap();
+        // Even though we have three tests that never finish, and only one
+        // worktree, they should all start.
+        timeout_5s(join_all(f.scripts.iter().map(|s| s.started(&test_hash))))
+            .await
+            .expect("not all scripts run for hash");
+        // We were testing test_hash but we shouldn't have checked it out, since
+        // we don't "own" the worktree.
+        assert_eq!(f.repo.rev_parse("HEAD").await.unwrap(), Some(head_hash));
+    }
+
     // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
     // to do with panic and drop order I think.
 }
