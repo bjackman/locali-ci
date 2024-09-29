@@ -25,7 +25,6 @@ Bugs (high to low priority):
 
 Needed features (high to low priority):
 
- - Need a way to delete stored results
  - Need a way for test command to report "error" as distinguished from failure.
  - Support running tests that don't need worktrees.
  - Store output and artifacts. WIP but:
@@ -33,10 +32,15 @@ Needed features (high to low priority):
    - Location of this should be configurable.
    - Probably need to split it up by tested repo.
    - Need to present it to the user in some convenient way
+ - Make output results easier to reach. In particular at the moment if you have
+   no hyperlinks support in your terminal you're basically out of luck.
  - Provide a way to quickly check that tests in your configuration actually work.
+ - Need a way to delete stored results. Or do we? If we had an error reporting
+   mechanism then there would be no need for this since you'd just modify the
+   configuration to adopt the error reporting, and in that case the cache would
+   be invalidated anyway.
  - Support other resources than worktrees and "tokens". Could e.g. be used for
    dev servers.
- - Make output results easier to reach.
  - Support saving artifacts so the user can reuse or analyze them later.
  - Fix output format, probably have to implement a pager in `ratatui`.
  - Support bailing out more quickly if the worktree teardown is too slow.
