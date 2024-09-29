@@ -67,10 +67,7 @@ pub type ConfigHash = u64;
 pub type TestName = String;
 
 // A test task that will need to be repeated for each commit.
-// We have tests that use these as hash keys for historical reasons. I think
-// this is fine but I'm not sure if it's really something to reasonably take
-// advantage of in prod code so we only derive the necessary traits for test.
-#[cfg_attr(test, derive(Hash, PartialEq, Eq))]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Test {
     pub name: TestName,
     // Hash of the configuration that created this Test.
@@ -534,7 +531,7 @@ impl TestJob {
 type TestCaseId = String;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(test, derive(Hash, PartialEq, Eq))] // See comment on Test.
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct TestCase {
     // Commit that will be checked out to run the test.
     pub commit_hash: CommitHash,
@@ -873,9 +870,9 @@ mod tests {
         }
     }
 
-    fn dump_want_statuses(want: &HashMap<TestCase, VecDeque<TestStatus>>) -> String {
+    fn dump_want_statuses(want: &HashMap<TestCaseId, (TestCase, VecDeque<TestStatus>)>) -> String {
         let mut ret = String::from("");
-        for (test_case, statuses) in want {
+        for (test_case, statuses) in want.values() {
             ret.push_str(&format!("{:?}\n", test_case));
             for status in statuses {
                 ret.push_str(&format!("\t{:?}\n", status));
@@ -888,9 +885,13 @@ mod tests {
     // Panics if any of the input series are empty.
     async fn expect_notifs_10s(
         results: &mut broadcast::Receiver<Arc<Notification>>,
-        mut want: HashMap<TestCase, VecDeque<TestStatus>>,
+        want: impl IntoIterator<Item = (TestCase, VecDeque<TestStatus>)>,
     ) -> anyhow::Result<()> {
         let timeout = Instant::now() + Duration::from_secs(10);
+        let mut want: HashMap<TestCaseId, _> = want
+            .into_iter()
+            .map(|(test_case, statuses)| (test_case.id(), (test_case, statuses)))
+            .collect();
         while !want.is_empty() {
             let notif = select!(
                 _ = sleep_until(timeout) => {
@@ -903,12 +904,12 @@ mod tests {
                         dump_want_statuses(&want)))?
                 }
             );
-            let want_statuses = want.get_mut(&notif.test_case).context(format!(
+            let (_tc, want_statuses) = want.get_mut(&notif.test_case.id()).context(format!(
                 "got notification for unexpected test case: {notif:?}",
             ))?;
             let want_status = want_statuses.pop_front().expect("empty status series");
             if want_statuses.is_empty() {
-                want.remove(&notif.test_case);
+                want.remove(&notif.test_case.id());
             }
             if notif.status != want_status {
                 bail!(
@@ -1037,7 +1038,7 @@ mod tests {
         // We should get a singular result because we only fed in one revision.
         expect_notifs_10s(
             &mut results,
-            HashMap::from([(
+            [(
                 f.test_case(&hash, 0).await,
                 vec![
                     TestStatus::Enqueued,
@@ -1045,7 +1046,7 @@ mod tests {
                     TestStatus::Completed(TestResult { exit_code: 0 }),
                 ]
                 .into(),
-            )]),
+            )],
         )
         .await
         .expect("bad test result");
@@ -1088,7 +1089,7 @@ mod tests {
         expect_notifs_10s(
             &mut results,
             // awu weh, weh mah
-            HashMap::from([
+            [
                 (
                     f.test_case(&hash1, 0).await,
                     vec![
@@ -1127,7 +1128,7 @@ mod tests {
                     ]
                     .into(),
                 ),
-            ]),
+            ],
         )
         .await
         .unwrap();
@@ -1235,7 +1236,7 @@ mod tests {
             .build()
             .await;
         let mut hashes = Vec::new();
-        let mut want_results = HashMap::new();
+        let mut want_results = Vec::new();
         for i in 0..50 {
             let hash = f
                 .repo
@@ -1243,7 +1244,7 @@ mod tests {
                 .await
                 .expect("couldn't create test commit");
             for j in 0..num_tests {
-                want_results.insert(
+                want_results.push((
                     f.test_case(&hash, j).await,
                     vec![
                         TestStatus::Enqueued,
@@ -1251,7 +1252,7 @@ mod tests {
                         TestStatus::Completed(TestResult { exit_code: i }),
                     ]
                     .into(),
-                );
+                ));
             }
             hashes.push(hash);
         }
@@ -1396,10 +1397,10 @@ mod tests {
         // wait for first test to get started.
         expect_notifs_10s(
             &mut results,
-            HashMap::from([(
+            [(
                 f.test_case(&hashes[0], 0).await,
                 vec![TestStatus::Enqueued, TestStatus::Started].into(),
-            )]),
+            )],
         )
         .await
         .expect("bad test result");
@@ -1411,10 +1412,10 @@ mod tests {
             .unwrap();
         expect_notifs_10s(
             &mut results,
-            HashMap::from([(
+            [(
                 f.test_case(&hashes[1], 0).await,
                 vec![TestStatus::Enqueued].into(),
-            )]),
+            )],
         )
         .await
         .expect("bad test result");
@@ -1423,10 +1424,10 @@ mod tests {
         f.manager.set_revisions(Vec::new()).await.unwrap();
         expect_notifs_10s(
             &mut results,
-            HashMap::from([(
+            [(
                 f.test_case(&hashes[0], 0).await,
                 vec![TestStatus::Canceled].into(),
-            )]),
+            )],
         )
         .await
         .expect("bad test result");
@@ -1472,7 +1473,7 @@ mod tests {
             .unwrap();
         expect_notifs_10s(
             &mut results,
-            HashMap::from([
+            [
                 (
                     f.test_case(&hash_error, 0).await,
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
@@ -1489,7 +1490,7 @@ mod tests {
                     f.test_case(&hash_fail, 1).await,
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
-            ]),
+            ],
         )
         .await
         .expect("bad test result");
@@ -1501,10 +1502,10 @@ mod tests {
         started_script.sigterm();
         expect_notifs_10s(
             &mut results,
-            HashMap::from([(
+            [(
                 f.test_case(&hash_error, 0).await,
                 vec![TestStatus::Error(String::from("terminated by signal 15"))].into(),
-            )]),
+            )],
         )
         .await
         .expect("didn't get error after killing script");
@@ -1514,7 +1515,7 @@ mod tests {
         f.manager.set_revisions(vec![]).await.unwrap();
         expect_notifs_10s(
             &mut results,
-            HashMap::from([
+            [
                 (
                     f.test_case(&hash_error, 1).await,
                     vec![TestStatus::Canceled].into(),
@@ -1527,7 +1528,7 @@ mod tests {
                     f.test_case(&hash_fail, 1).await,
                     vec![TestStatus::Canceled].into(),
                 ),
-            ]),
+            ],
         )
         .await
         .expect("didn't see test cancellation");
