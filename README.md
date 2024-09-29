@@ -34,10 +34,13 @@ Needed features (high to low priority):
  - Make output results easier to reach. In particular at the moment if you have
    no hyperlinks support in your terminal you're basically out of luck.
  - Provide a way to quickly check that tests in your configuration actually work.
- - Need a way to delete stored results. Or do we? If we had an error reporting
+ - Need a way to delete stored results. 
+ 
+   (Or do we? If we had an error reporting
    mechanism then there would be no need for this since you'd just modify the
    configuration to adopt the error reporting, and in that case the cache would
-   be invalidated anyway.
+   be invalidated anyway. But, also need to consider cases where something was
+   wrong in the host system)
  - Support saving artifacts so the user can reuse or analyze them later.
  - Fix output format, probably have to implement a pager in `ratatui`.
  - Support bailing out more quickly if the worktree teardown is too slow.
