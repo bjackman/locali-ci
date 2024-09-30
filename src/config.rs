@@ -3,7 +3,6 @@ use std::{
     ffi::OsString,
     fs,
     hash::{DefaultHasher, Hash as _, Hasher as _},
-    iter,
     path::Path,
     sync::Arc,
     time::Duration,
@@ -100,19 +99,21 @@ impl Test {
             }
             seen_resources.insert(resource.name());
         }
+        let mut needs_resources: HashMap<ResourceKey, usize> = self
+            .resources
+            .as_ref()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|r| (ResourceKey::UserToken(r.name().to_owned()), r.count()))
+            .collect();
+        if self.requires_worktree {
+            needs_resources.insert(ResourceKey::Worktree, 1);
+        }
         Ok(test::Test {
             name: self.name.clone(),
             program: self.command.program(),
             args: self.command.args(),
-            needs_resources: self
-                .resources
-                .as_ref()
-                .unwrap_or(&vec![])
-                .iter()
-                .map(|r| (ResourceKey::UserToken(r.name().to_owned()), r.count()))
-                // At present we assume all tests require a worktree.
-                .chain(iter::once((ResourceKey::Worktree, 1)))
-                .collect(),
+            needs_resources,
             shutdown_grace_period: Duration::from_secs(self.shutdown_grace_period_s),
             cache_policy: self.cache,
             config_hash: {
