@@ -42,6 +42,9 @@ Needed features (high to low priority):
    be invalidated anyway. But, also need to consider cases where something was
    wrong in the host system)
  - Support saving artifacts so the user can reuse or analyze them later.
+ - I think maybe we want inter-job dependencies. For example if you have a
+   hardware testing resource, you don't want to block that resource while you
+   build. So you probably want seperate build and test jobs...
  - Fix output format, probably have to implement a pager in `ratatui`.
  - Support bailing out more quickly if the worktree teardown is too slow.
  - Support configuring a shell, with the default based on the user's
