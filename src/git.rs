@@ -180,7 +180,11 @@ pub trait Worktree: Debug {
             .execute()
             .await
             .context("'git rev-parse --git-dir' failed")?;
-        Ok(OsStr::from_bytes(&output.stderr).into())
+        let mut bytes = output.stdout;
+        while bytes.last() == Some(&b'\n') {
+            bytes.pop();
+        }
+        Ok(OsStr::from_bytes(&bytes).into())
     }
 
     async fn rev_list<S>(&self, range_spec: S) -> anyhow::Result<Vec<CommitHash>>
@@ -322,14 +326,14 @@ pub trait Worktree: Debug {
             },
             Config::default(),
         )?;
-        watcher
-            .watch(self.path(), RecursiveMode::Recursive)
-            .context("setting up watcher")?;
-
         // This logic "debounces" consecutive events within the same 1s window, to avoid thrashing
         // on the downstream logic as Git works its way through changes.
         Ok(try_stream! {
-            let _watcher = watcher; // Capture so it doesn't get dropped
+            let git_dir = &self.git_dir().await.context("getting git dir")?;
+            debug!("watching {git_dir:?}");
+            watcher
+                .watch(git_dir, RecursiveMode::Recursive)
+                .context("setting up watcher")?;
 
             // Produce an initial update.
             yield self.rev_list(range_spec).await?;
