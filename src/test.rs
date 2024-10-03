@@ -633,9 +633,7 @@ impl TestCase {
     // database. Note that results get stored in the database even when caching
     // is disabled, so that the user can see the output..
     pub fn storage_hash(&self) -> &Hash {
-        self.cache_hash
-            .as_ref()
-            .unwrap_or(self.commit_hash.as_ref())
+        self.cache_hash.as_ref().unwrap_or(&self.commit_hash)
     }
 
     pub fn id(&self) -> TestCaseId {

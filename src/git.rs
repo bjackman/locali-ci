@@ -75,12 +75,6 @@ impl Deref for CommitHash {
     }
 }
 
-impl AsRef<Hash> for CommitHash {
-    fn as_ref(&self) -> &Hash {
-        &self.0
-    }
-}
-
 impl AsRef<OsStr> for CommitHash {
     fn as_ref(&self) -> &OsStr {
         self.0.as_ref()
@@ -113,12 +107,6 @@ impl Deref for TreeHash {
 impl From<TreeHash> for Hash {
     fn from(h: TreeHash) -> Hash {
         h.0
-    }
-}
-
-impl AsRef<Hash> for TreeHash {
-    fn as_ref(&self) -> &Hash {
-        &self.0
     }
 }
 
