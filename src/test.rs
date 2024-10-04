@@ -128,6 +128,7 @@ pub struct ManagerBuilder<W> {
     num_worktrees: usize,
     worktree_prefix: String,
     worktree_dir: PathBuf,
+    job_env: Vec<(String, String)>,
 }
 
 impl<W> ManagerBuilder<W> {
@@ -185,6 +186,7 @@ impl<W> ManagerBuilder<W> {
             tests,
             result_db,
             resource_tokens,
+            job_env,
             num_worktrees: _,
             worktree_prefix: _,
             worktree_dir: _,
@@ -205,7 +207,7 @@ impl<W> ManagerBuilder<W> {
         // probably doesn't handle very gracefully. We should instead just block the sender.
         let (result_tx, _) = broadcast::channel(4096);
         Ok(Manager {
-            origin_path: Arc::new(repo.path().to_owned()),
+            job_env: Arc::new(job_env),
             repo,
             result_tx,
             job_cts: HashMap::new(),
@@ -229,8 +231,7 @@ pub struct Manager<W: Worktree> {
     // will be referenced by Test::needs_resource_idx values.
     resource_pools: Arc<Pools>,
     result_db: Database,
-    // Path of original repo.
-    origin_path: Arc<PathBuf>,
+    job_env: Arc<Vec<(String, String)>>,
 }
 
 impl<W: Worktree + Sync + Send + 'static> Manager<W> {
@@ -252,7 +253,6 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         R: IntoIterator<Item = (ResourceKey, Vec<String>)>,
     {
         ManagerBuilder {
-            repo,
             tests: tests.into_iter().collect(),
             resource_tokens: resource_tokens.into_iter().collect(),
             result_db,
@@ -260,6 +260,12 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             num_worktrees: 1,
             worktree_prefix: "worktree-".to_owned(),
             worktree_dir: env::temp_dir(),
+            job_env: vec![(
+                "LCI_ORIGIN".into(),
+                repo.path().to_string_lossy().into_owned(),
+            )],
+
+            repo,
         }
     }
 
@@ -400,7 +406,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 _token: self.job_counter.get(),
                 output,
                 test_case,
-                origin_path: self.origin_path.clone(),
+                env: self.job_env.clone(),
             });
         }
         Ok(())
@@ -487,8 +493,7 @@ struct TestJob {
     test_case: TestCase,
     _token: JobToken,
     output: TestCaseOutput,
-    // Path of original repo we are testing (not our worktree).
-    origin_path: Arc<PathBuf>,
+    env: Arc<Vec<(String, String)>>,
 }
 
 impl<'a> TestJob {
@@ -522,13 +527,15 @@ impl<'a> TestJob {
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
             .env("LCI_COMMIT", self.test_case.commit_hash.to_string())
-            .env("LCI_ORIGIN", self.origin_path.as_os_str())
             // Killing on drop is not what we want. We really want this job to
             // get awaited so that the worktree can be safely reused and we can
             // be sure the test script has cleaned up after itself. But, in case
             // local-ci shuts down unexpectedly we'll try to at least limit the
             // damage.
             .kill_on_drop(true);
+        for (k, v) in self.env.iter() {
+            cmd = cmd.env(k, v);
+        }
         // Set up env vars to communicate token values.
         for (resource_name, tokens) in resources.tokens() {
             for (i, token) in tokens.iter().enumerate() {
@@ -1457,10 +1464,12 @@ mod tests {
         let env: HashMap<&str, &str> = env_dump
             .trim()
             .split("\n")
-            .map(|line| {
+            .filter_map(|line| {
                 let parts: Vec<_> = line.splitn(2, "=").collect();
-                assert!(parts.len() == 2, "can't parse line in env dump: {line:?}");
-                (parts[0], parts[1])
+                if parts.len() != 2 {
+                    return None;
+                }
+                Some((parts[0], parts[1]))
             })
             .collect();
         assert_eq!(
