@@ -34,8 +34,11 @@ Needed features (high to low priority):
  - Make output results easier to reach. In particular at the moment if you have
    no hyperlinks support in your terminal you're basically out of luck.
  - Provide a way to quickly check that tests in your configuration actually work.
- - Need a way to delete stored results. 
- 
+   Can't you just write them as a script and then test the script? Well if we
+   rely on that then we need the result caching logic to be aware of when the
+   script changes.
+ - Need a way to delete stored results.
+
    (Or do we? If we had an error reporting
    mechanism then there would be no need for this since you'd just modify the
    configuration to adopt the error reporting, and in that case the cache would
