@@ -28,13 +28,21 @@ use crate::process::{OutputExt, SyncCommandExt};
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Hash(String);
 
-// My hacky and hasty attempts to implement types for hashes. I haven't reall
-// thought through this properly. Basically we want CommitHash and TreeHash to
-// be subtypes of Hash, but all of them are really nothing but Strings. I don't
-// really wanna figure this out for myself I just wanna see how a smart
-// Rustacean would do this. So for now just do whatever.
+// My attempt at newtypery for Git IDs. Why is this so damned verbose?
+// The answer is that Deref lets you do some stuff on the inner type via
+// expressions of the outer type, but it doesn't actually make the outer type
+// implement the traits of the inner type. So we have to manually forward all
+// those traits.
 
+// A Hash is an ID for referring to an object in a git repository, I think the
+// proper name would be ObjectId but... whatever.
 impl Hash {
+    // Note that this is infallible. That's because having a Hash doesn't
+    // guarantee you that the ID refers to an object in an actual repo. Even if
+    // we checked that at construction time, it's not possible to enforce that
+    // variant going forward. So, you'll just have to do error handling whenever
+    // you are dealing with Git objects, like you would with any mutable
+    // database.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
