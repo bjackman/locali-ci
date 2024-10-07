@@ -12,6 +12,9 @@ Bugs (high to low priority):
 
  - Tests don't work on my work computer. I think this is because I made false
    assumptions abuot the conditions for Git commit hashes to be deterministic.
+ - `should_not_cache` test is flaky; occasionally the detector triggers that
+   suggests two tests were sharing the same worktree. _Probably_ a bug in the
+   test.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.
