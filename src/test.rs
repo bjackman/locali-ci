@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::fmt::Debug;
+use std::fmt::Formatter;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -48,11 +49,11 @@ pub trait ResultExt {
 
 impl<T, E> ResultExt for Result<T, E>
 where
-    E: Debug,
+    E: Display,
 {
     fn or_log_error(&self, s: &str) {
         if let Err(e) = self {
-            error!("{} - {:?}", s, e);
+            error!("{} - {}", s, e);
         }
     }
 }
@@ -380,7 +381,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             .collect();
         info!(
             "Enqueueing {:?}, cancelling {:?} jobs",
-            to_start,
+            to_start.values().collect::<Vec<_>>(),
             to_cancel.len()
         );
         for id in to_cancel {
@@ -596,7 +597,7 @@ impl<'a> TestJob {
 // An identifier that uniquely identifies a TestCase among all that can exist for a given Manager.
 type TestCaseId = String;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct TestCase {
     // Commit that will be checked out to run the test.
@@ -605,6 +606,17 @@ pub struct TestCase {
     // otherwise it matches the commit hash.
     pub cache_hash: Option<Hash>,
     pub test: Arc<Test>,
+}
+
+impl Debug for TestCase {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TestCase({:?}, {:?})",
+            self.commit_hash.abbrev(),
+            self.test.name
+        )
+    }
 }
 
 impl TestCase {

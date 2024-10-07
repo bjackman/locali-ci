@@ -45,6 +45,10 @@ impl Hash {
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
+
+    pub fn abbrev(&self) -> &str {
+        &self.0[..12]
+    }
 }
 
 impl AsRef<OsStr> for Hash {
