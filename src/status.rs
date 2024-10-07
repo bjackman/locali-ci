@@ -303,7 +303,7 @@ impl OutputBuffer {
             // it to a str it skips the colour rendering.
             .to_string();
             let url = format!(
-                "{}/{}",
+                "{}/{}/stdout.txt",
                 result_url_base,
                 Database::result_relpath(&tracked_case.test_case).to_string_lossy()
             );
