@@ -44,6 +44,7 @@ Needed features (high to low priority):
    configuration to adopt the error reporting, and in that case the cache would
    be invalidated anyway. But, also need to consider cases where something was
    wrong in the host system)
+ - Need timeouts!
  - Support saving artifacts so the user can reuse or analyze them later.
  - I think maybe we want inter-job dependencies. For example if you have a
    hardware testing resource, you don't want to block that resource while you
