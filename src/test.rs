@@ -615,7 +615,14 @@ impl<'a> TestJob {
 }
 
 // An identifier that uniquely identifies a TestCase among all that can exist for a given Manager.
-type TestCaseId = String;
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct TestCaseId(String);
+
+impl TestCaseId {
+    fn new(commit_hash: &CommitHash, test_name: &TestName) -> Self {
+        Self(format!("{}:{}", commit_hash, test_name))
+    }
+}
 
 #[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -668,9 +675,9 @@ impl TestCase {
         self.cache_hash.as_ref().unwrap_or(&self.commit_hash)
     }
 
-    pub fn id(&self) -> TestCaseId {
+    fn id(&self) -> TestCaseId {
         // The hash_cache is redundant information here so we don't need to include it.
-        format!("{}:{}", self.commit_hash, self.test.name)
+        TestCaseId::new(&self.commit_hash, &self.test.name)
     }
 }
 
