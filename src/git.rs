@@ -9,7 +9,6 @@ use std::process::Command as SyncCommand;
 use std::str;
 use std::time::Duration;
 
-#[cfg(test)]
 use anyhow::anyhow;
 use anyhow::{bail, Context};
 use async_stream::try_stream;
@@ -147,6 +146,7 @@ impl Worktree for PersistentWorktree {
 // different fields and drop behaviours) to share the functionality that users actually care about.
 // Not really sure if this is the Rust Way or not.
 pub trait Worktree: Debug {
+    // Directory where git commands should be run.
     fn path(&self) -> &Path;
 
     // Convenience function to create a git command with some pre-filled args.
@@ -170,17 +170,28 @@ pub trait Worktree: Debug {
         cmd
     }
 
-    async fn git_dir(&self) -> anyhow::Result<PathBuf> {
+    async fn lookup_git_dir(&self, rev_parse_arg: &str) -> anyhow::Result<PathBuf> {
         let output = self
-            .git(["rev-parse", "--git-dir"])
+            .git(["rev-parse", rev_parse_arg])
             .execute()
             .await
-            .context("'git rev-parse --git-dir' failed")?;
+            .map_err(|e| anyhow!("'git rev-parse {rev_parse_arg}' failed: {e}"))?;
         let mut bytes = output.stdout;
         while bytes.last() == Some(&b'\n') {
             bytes.pop();
         }
         Ok(OsStr::from_bytes(&bytes).into())
+    }
+
+    // Directory where the main git database lives, shared by all worktrees.
+    async fn git_common_dir(&self) -> anyhow::Result<PathBuf> {
+        self.lookup_git_dir("--git-common-dir").await
+    }
+
+    // Directory where this workrtee's local git database lives.
+    // See https://git-scm.com/docs/git-worktree#_details (I haven't read this properly lmao).
+    async fn git_dir(&self) -> anyhow::Result<PathBuf> {
+        self.lookup_git_dir("--absolute-git-dir").await
     }
 
     async fn rev_list<S>(&self, range_spec: S) -> anyhow::Result<Vec<CommitHash>>
@@ -325,11 +336,17 @@ pub trait Worktree: Debug {
         // This logic "debounces" consecutive events within the same 1s window, to avoid thrashing
         // on the downstream logic as Git works its way through changes.
         Ok(try_stream! {
-            let git_dir = &self.git_dir().await.context("getting git dir")?;
-            debug!("watching {git_dir:?}");
+            let git_common_dir = &self.git_common_dir().await.context("getting git common dir")?;
+            let git_dir = &self.git_dir().await.context("getting git common dir")?;
+            debug!("watching {git_dir:?} [and {git_common_dir:?}");
             watcher
                 .watch(git_dir, RecursiveMode::Recursive)
                 .context("setting up watcher")?;
+            if git_dir != git_common_dir {
+                watcher
+                    .watch(git_common_dir, RecursiveMode::Recursive)
+                    .context("setting up watcher")?;
+            }
 
             // Produce an initial update.
             yield self.rev_list(range_spec).await?;
@@ -534,7 +551,7 @@ mod tests {
             path: tmp_dir.path().to_path_buf(),
         };
         assert!(
-            wt.git_dir().await.is_err(),
+            wt.git_common_dir().await.is_err(),
             "opening repo with no .git didn't fail"
         );
     }
@@ -551,7 +568,7 @@ mod tests {
             path: tmp_dir.path().to_path_buf(),
         };
         assert!(
-            wt.git_dir().await.is_err(),
+            wt.git_common_dir().await.is_err(),
             "opening repo with bogus .git file didn't fail"
         );
     }

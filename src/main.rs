@@ -170,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
         path: args.repo.to_owned().into(),
     };
     // Check repo is valid.
-    repo.git_dir()
+    repo.git_common_dir()
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
