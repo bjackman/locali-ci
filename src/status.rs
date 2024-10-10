@@ -9,7 +9,7 @@ use regex::Regex;
 use crate::{
     git::{CommitHash, Worktree},
     result::Database,
-    test::{Notification, TestCase, TestStatus},
+    test::{Notification, TestCase, TestName, TestStatus},
 };
 
 struct TrackedTestCase {
@@ -21,7 +21,7 @@ struct TrackedTestCase {
 // two-level map instead of a flat one by TestCaseId, because that
 // conveniently lets us grab all the TestCases for a given commit when
 // rendering the output.
-type TrackedCases = HashMap<CommitHash, HashMap<String, TrackedTestCase>>;
+type TrackedCases = HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>;
 
 // Updates the awkward nested hashmap to reflect a new notification coming in.
 // Standalone function for convenient use in tests.
@@ -258,7 +258,7 @@ impl OutputBuffer {
     fn render(
         &self,
         output: &mut impl Write,
-        statuses: &HashMap<CommitHash, HashMap<String, TrackedTestCase>>,
+        statuses: &HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>,
         result_url_base: &str,
     ) -> anyhow::Result<usize> {
         if self.lines.is_empty() {
@@ -280,10 +280,10 @@ impl OutputBuffer {
     fn render_cases(
         &self,
         output: &mut impl Write,
-        tracked_cases: &HashMap<String, TrackedTestCase>,
+        tracked_cases: &HashMap<TestName, TrackedTestCase>,
         result_url_base: &str,
     ) -> anyhow::Result<()> {
-        let mut tracked_cases: Vec<(&String, &TrackedTestCase)> = tracked_cases.iter().collect();
+        let mut tracked_cases: Vec<(&TestName, &TrackedTestCase)> = tracked_cases.iter().collect();
         // Sort by test case name. Would like sort_by_key here but
         // there's lifetime pain.
         tracked_cases.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
@@ -308,7 +308,8 @@ impl OutputBuffer {
                 Database::result_relpath(&tracked_case.test_case).to_string_lossy()
             );
             let status_part = hyperlink(&status_part, &url);
-            output.write_all(format!("{}: {} ", name.bold(), status_part).as_bytes())?;
+            output
+                .write_all(format!("{}: {} ", name.to_string().bold(), status_part).as_bytes())?;
         }
         Ok(())
     }
@@ -338,9 +339,9 @@ mod tests {
 
     use super::*;
 
-    fn fake_test(name: impl Into<TestName>, cache_policy: CachePolicy) -> Arc<Test> {
+    fn fake_test(name: &str, cache_policy: CachePolicy) -> Arc<Test> {
         Arc::new(Test {
-            name: name.into(),
+            name: TestName::new(name),
             cache_policy,
             // Don't care abou any of the other fields in these tests
             config_hash: 0,

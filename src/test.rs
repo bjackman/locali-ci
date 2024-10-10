@@ -3,6 +3,7 @@ use core::fmt::Display;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::env;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -69,7 +70,26 @@ pub enum CachePolicy {
 // Some unspecified hash, don't care too much about stability across builds.
 pub type ConfigHash = u64;
 
-pub type TestName = String;
+#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub struct TestName(String);
+
+impl TestName {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
+impl AsRef<Path> for TestName {
+    fn as_ref(&self) -> &Path {
+        Path::new(OsStr::new(&self.0))
+    }
+}
+
+impl Display for TestName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 // A test task that will need to be repeated for each commit.
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -762,7 +782,7 @@ mod tests {
 
         // Creates a script, this will create a temporary directory, which will
         // be destroyed on drop.
-        pub fn new(test_name: impl Into<TestName>, use_lockfile: bool) -> Self {
+        pub fn new(test_name: TestName, use_lockfile: bool) -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
             // The script will touch a special file to notify us that it has been started. On
             // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
@@ -813,7 +833,7 @@ mod tests {
 
             Self {
                 dir,
-                test_name: test_name.into(),
+                test_name,
                 script: script.into(),
             }
         }
@@ -1080,7 +1100,9 @@ mod tests {
                 // try to detect sharing a worktree with another test run. If it
                 // doesn't a worktree then that sharing is harmless and
                 // expected.
-                .map(|i| TestScript::new(format!("test_{i}"), self.needs_worktree[i]))
+                .map(|i| {
+                    TestScript::new(TestName::new(format!("test_{i}")), self.needs_worktree[i])
+                })
                 .collect();
             let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
             let manager = Manager::builder(
@@ -1374,7 +1396,7 @@ mod tests {
                     .expect("couldn't create test commit"),
             );
         }
-        let script = TestScript::new("my_test", true);
+        let script = TestScript::new(TestName::new("my_test"), true);
         // We only have 2 tokens
         let resource_tokens = HashMap::from([(
             ResourceKey::UserToken("foo".into()),
@@ -1382,7 +1404,7 @@ mod tests {
         )]);
         // And a test that requires one of those tokens.
         let tests = [Test {
-            name: "my_test".to_owned(),
+            name: TestName::new("my_test"),
             program: script.program(),
             args: script.args(),
             needs_resources: HashMap::from([
@@ -1434,7 +1456,7 @@ mod tests {
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
             [Test {
-                name: "my_test".to_owned(),
+                name: TestName::new("my_test"),
                 program: OsString::from("bash"),
                 args: vec![
                     "-c".into(),

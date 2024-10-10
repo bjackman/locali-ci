@@ -36,17 +36,17 @@ impl Database {
     }
 
     pub fn result_relpath(test_case: &TestCase) -> PathBuf {
-        PathBuf::from(test_case.storage_hash()).join(test_case.test.name.clone())
+        Path::new(test_case.storage_hash()).join(&test_case.test.name)
     }
 
-    fn result_path(&self, hash: &Hash, test_name: impl Into<TestName>) -> PathBuf {
-        self.base_dir.join(hash.as_ref()).join(test_name.into())
+    fn result_path(&self, hash: &Hash, test_name: &TestName) -> PathBuf {
+        self.base_dir.join(hash.as_ref()).join(test_name)
     }
 
     pub fn cached_result(
         &self,
         hash: &Hash,
-        test_name: impl Into<TestName>,
+        test_name: &TestName,
         // Hash of the config that created the test.
         config_hash: ConfigHash,
     ) -> Result<Option<TestResult>> {
@@ -71,7 +71,7 @@ impl Database {
     pub fn create_output(
         &self,
         hash: &Hash,
-        test_name: impl Into<TestName>,
+        test_name: &TestName,
         // Hash of the config that created the test.
         config_hash: ConfigHash,
     ) -> anyhow::Result<TestCaseOutput> {

@@ -15,7 +15,7 @@ use crate::{
     git::{self, PersistentWorktree},
     resource::ResourceKey,
     result::Database,
-    test::{self, CachePolicy},
+    test::{self, CachePolicy, TestName},
 };
 
 #[derive(Deserialize, Debug, Hash)]
@@ -110,7 +110,7 @@ impl Test {
             needs_resources.insert(ResourceKey::Worktree, 1);
         }
         Ok(test::Test {
-            name: self.name.clone(),
+            name: TestName::new(self.name.clone()),
             program: self.command.program(),
             args: self.command.args(),
             needs_resources,
