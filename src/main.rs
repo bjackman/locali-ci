@@ -40,7 +40,7 @@ struct Args {
     /// Directory (must exist) to create temporary worktrees in.
     #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()})]
     worktree_dir: String,
-    /// Command to test. Note this is _not_ run via the shell.
+    /// Path to TOML config file.
     #[arg(short, long, required = true)]
     config: PathBuf,
     /// Socket address in the form "$ip:$port" to listen on for serving files
