@@ -64,6 +64,8 @@ struct WatchArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    /// The main command. Watch a repository and run tests whenever the revision
+    /// ranges changes.
     Watch(WatchArgs),
 }
 
