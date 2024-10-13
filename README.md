@@ -23,6 +23,10 @@ Bugs (high to low priority):
  - No tests for checking config cache...
  - No tests for actual contents of config cache. (E.g: Nothing to catch bug
    where we deleted stdouts and stderrs).
+ - Result database entries are stored with a hash of the test configuration. If
+   the hash changes, the test needs to be re-run i.e. the cached is invalidated.
+   But, this hash is not strong, this will break if there are collisions. We
+   should store the whole config.
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.
 
