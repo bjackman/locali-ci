@@ -52,28 +52,12 @@ impl ChildExt for Child {
     }
 }
 
-// An instance of the binary, running as a child process.
-struct LocalCiChild {
+struct LocalCiChildBuilder {
     temp_dir: TempDir,
-    child: Child,
 }
 
-trait ExitStatusExt {
-    fn check_exit_ok(&self) -> anyhow::Result<()>;
-}
-
-impl ExitStatusExt for ExitStatus {
-    fn check_exit_ok(&self) -> anyhow::Result<()> {
-        if self.success() {
-            Ok(())
-        } else {
-            bail!("command failed: {self:?}")
-        }
-    }
-}
-
-impl LocalCiChild {
-    async fn new(config: String) -> anyhow::Result<Self> {
+impl LocalCiChildBuilder {
+    async fn new() -> anyhow::Result<Self> {
         let temp_dir = TempDir::new()?;
 
         Command::new("git")
@@ -97,9 +81,13 @@ impl LocalCiChild {
                 .context("git commit")?;
         }
 
-        let worktree_dir = temp_dir.path().join("worktrees");
+        Ok(Self { temp_dir })
+    }
+
+    async fn start(self, config: String) -> anyhow::Result<LocalCiChild> {
+        let worktree_dir = self.temp_dir.path().join("worktrees");
         create_dir(&worktree_dir).unwrap();
-        let cache_dir = temp_dir.path().join("cache");
+        let cache_dir = self.temp_dir.path().join("cache");
         create_dir(&cache_dir).unwrap();
 
         let mut cmd: Command = get_test_bin("local-ci").into();
@@ -113,7 +101,7 @@ impl LocalCiChild {
                 "--worktree-prefix",
                 "test-worktree-",
                 "--repo",
-                temp_dir.path().to_str().unwrap(),
+                self.temp_dir.path().to_str().unwrap(),
                 "--result-db",
                 cache_dir.to_str().unwrap(),
             ])
@@ -124,9 +112,34 @@ impl LocalCiChild {
         let mut stdin = child.stdin.take().unwrap();
 
         stdin.write_all(config.as_bytes()).await.unwrap();
-        Ok(Self { temp_dir, child })
+        Ok(LocalCiChild {
+            temp_dir: self.temp_dir,
+            child,
+        })
     }
+}
 
+// An instance of the binary, running as a child process.
+struct LocalCiChild {
+    temp_dir: TempDir,
+    child: Child,
+}
+
+trait ExitStatusExt {
+    fn check_exit_ok(&self) -> anyhow::Result<()>;
+}
+
+impl ExitStatusExt for ExitStatus {
+    fn check_exit_ok(&self) -> anyhow::Result<()> {
+        if self.success() {
+            Ok(())
+        } else {
+            bail!("command failed: {self:?}")
+        }
+    }
+}
+
+impl LocalCiChild {
     // Returns true if any worktree of this child currently exists.
     fn has_worktrees(&mut self) -> anyhow::Result<bool> {
         let mut pattern = self.temp_dir.path().join("worktrees").to_owned();
@@ -165,16 +178,19 @@ impl LocalCiChild {
 #[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
 #[tokio::test]
 async fn test_worktree_teardown(test_command: &str) {
-    let mut lci = LocalCiChild::new(format!(
-        r##"
+    let mut lci = LocalCiChildBuilder::new()
+        .await
+        .unwrap()
+        .start(format!(
+            r##"
         num_worktrees = 1
         [[tests]]
         name = "my_test"
         command = {test_command:?}
     "##
-    ))
-    .await
-    .unwrap();
+        ))
+        .await
+        .unwrap();
 
     wait_for(|| lci.has_worktrees(), Duration::from_secs(5)).expect("worktree not found after 5s");
 
@@ -196,18 +212,21 @@ async fn shouldnt_leak_jobs() {
 
     // This config has a test that does not respect SIGINT. We should not leak
     // that job.
-    let mut lci = LocalCiChild::new(format!(
-        r##"
+    let mut lci = LocalCiChildBuilder::new()
+        .await
+        .unwrap()
+        .start(format!(
+            r##"
         num_worktrees = 1
         [[tests]]
         name = "my_test"
         command = "echo $$ > {}/test_pid; while true; do sleep infinity; done"
         shutdown_grace_period_s = 1
     "##,
-        temp_dir.path().to_string_lossy()
-    ))
-    .await
-    .unwrap();
+            temp_dir.path().to_string_lossy()
+        ))
+        .await
+        .unwrap();
 
     // Wait for test to start up
     let test_pid_path = temp_dir.path().join("test_pid");
