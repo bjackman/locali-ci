@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, Context as _};
 use glob::glob;
 use nix::{
     libc::pid_t,
@@ -73,7 +73,7 @@ impl ExitStatusExt for ExitStatus {
 }
 
 impl LocalCiChild {
-    async fn new(config: String) -> Result<Self> {
+    async fn new(config: String) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new()?;
 
         Command::new("git")
@@ -128,7 +128,7 @@ impl LocalCiChild {
     }
 
     // Returns true if any worktree of this child currently exists.
-    fn has_worktrees(&mut self) -> Result<bool> {
+    fn has_worktrees(&mut self) -> anyhow::Result<bool> {
         let mut pattern = self.temp_dir.path().join("worktrees").to_owned();
         pattern.push("test-worktree-*");
         Ok(!glob(pattern.to_string_lossy().as_ref())?
@@ -136,7 +136,7 @@ impl LocalCiChild {
             .is_empty())
     }
 
-    fn terminate(&mut self) -> Result<()> {
+    fn terminate(&mut self) -> anyhow::Result<()> {
         self.child.signal(Signal::SIGINT).unwrap();
         wait_for(
             || {
