@@ -9,6 +9,8 @@ use std::{
 };
 
 use anyhow::{bail, Context as _};
+#[allow(unused_imports)]
+use log::debug;
 use serde::Deserialize;
 
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
     resource::ResourceKey,
     result::Database,
     test::{self, CachePolicy, TestName},
+    util::{visit_all, GraphNode},
 };
 
 #[derive(Deserialize, Debug, Hash)]
@@ -82,45 +85,75 @@ pub struct Test {
     shutdown_grace_period_s: u64,
     #[serde(default = "default_cache_policy")]
     cache: CachePolicy,
+    #[serde(default = "default_depends_on")]
+    depends_on: Vec<String>,
+}
+
+fn default_depends_on() -> Vec<String> {
+    vec![]
 }
 
 fn default_requires_worktree() -> bool {
     true
 }
 
+// This implementation is only valid for Tests among those registered for a single Manager.
+impl GraphNode<String> for Test {
+    fn id(&self) -> &String {
+        &self.name
+    }
+
+    fn child_ids(&self) -> &Vec<String> {
+        &self.depends_on
+    }
+}
+
 impl Test {
-    // Convert to the "real" object.
-    pub fn parse(&self) -> anyhow::Result<test::Test> {
+    // Convert to the "real" object. Takes a vec and an index because the test
+    // nodes actually form DAGs, and this is taken into account to form the
+    // config hash.
+    pub fn parse(tests: &Vec<Self>, idx: usize) -> anyhow::Result<test::Test> {
+        let test = &tests[idx];
         let mut seen_resources = HashSet::new();
-        for resource in self.resources.as_ref().unwrap_or(&vec![]) {
+        for resource in test.resources.as_ref().unwrap_or(&vec![]) {
             if seen_resources.contains(&resource.name()) {
                 // TODO: Need better error messages.
                 bail!("duplicate resource reference {:?}", resource.name());
             }
             seen_resources.insert(resource.name());
         }
-        let mut needs_resources: HashMap<ResourceKey, usize> = self
+        let mut needs_resources: HashMap<ResourceKey, usize> = test
             .resources
             .as_ref()
             .unwrap_or(&vec![])
             .iter()
             .map(|r| (ResourceKey::UserToken(r.name().to_owned()), r.count()))
             .collect();
-        if self.requires_worktree {
+        if test.requires_worktree {
             needs_resources.insert(ResourceKey::Worktree, 1);
         }
+
+        // Hash the config, also taking into account the hashes of the
+        // dependency test configs.
+        // This is wildly inefficient, hopefully it doesn't matter lol. (no
+        // memoization or anything).
+        let mut hasher = DefaultHasher::new();
+        visit_all(tests, idx, |test: &Test| {
+            debug!("hashing {test:?}");
+            test.hash(&mut hasher)
+        });
+        let config_hash = hasher.finish();
+        debug!("hash: {config_hash}");
+
         Ok(test::Test {
-            name: TestName::new(self.name.clone()),
-            program: self.command.program(),
-            args: self.command.args(),
+            name: TestName::new(test.name.clone()),
+            program: test.command.program(),
+            args: test.command.args(),
             needs_resources,
-            shutdown_grace_period: Duration::from_secs(self.shutdown_grace_period_s),
-            cache_policy: self.cache,
-            config_hash: {
-                let mut h = DefaultHasher::new();
-                self.hash(&mut h);
-                h.finish()
-            },
+            shutdown_grace_period: Duration::from_secs(test.shutdown_grace_period_s),
+            cache_policy: test.cache,
+            config_hash,
+            depends_on: test.depends_on.iter().map(TestName::new).collect(),
         })
     }
 }
@@ -172,10 +205,8 @@ pub fn manager_builder(
         .collect();
 
     // Parse all the tests, with reference to the named resource idxs.
-    let tests = config
-        .tests
-        .iter()
-        .map(|t| t.parse())
+    let tests = (0..config.tests.len())
+        .map(|i| Test::parse(&config.tests, i))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     // Check for invalid resource references.

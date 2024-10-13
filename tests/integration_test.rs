@@ -1,6 +1,6 @@
 use std::{
-    fs::{self, create_dir},
-    path::Path,
+    fs::{self, create_dir, remove_file},
+    path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     str::FromStr,
     time::{Duration, Instant},
@@ -54,6 +54,7 @@ impl ChildExt for Child {
 
 struct LocalCiChildBuilder {
     temp_dir: TempDir,
+    db_dir: PathBuf,
 }
 
 impl LocalCiChildBuilder {
@@ -81,14 +82,19 @@ impl LocalCiChildBuilder {
                 .context("git commit")?;
         }
 
-        Ok(Self { temp_dir })
+        let db_dir = temp_dir.path().join("cache");
+        create_dir(&db_dir).unwrap();
+        Ok(Self { temp_dir, db_dir })
+    }
+
+    fn db_dir(mut self, dir: PathBuf) -> Self {
+        self.db_dir = dir;
+        self
     }
 
     async fn start(self, config: String) -> anyhow::Result<LocalCiChild> {
         let worktree_dir = self.temp_dir.path().join("worktrees");
         create_dir(&worktree_dir).unwrap();
-        let cache_dir = self.temp_dir.path().join("cache");
-        create_dir(&cache_dir).unwrap();
 
         let mut cmd: Command = get_test_bin("local-ci").into();
         let cmd = cmd
@@ -103,7 +109,7 @@ impl LocalCiChildBuilder {
                 "--repo",
                 self.temp_dir.path().to_str().unwrap(),
                 "--result-db",
-                cache_dir.to_str().unwrap(),
+                self.db_dir.to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -236,4 +242,65 @@ async fn shouldnt_leak_jobs() {
 
     lci.terminate().unwrap();
     assert!(!pid_running(pid));
+}
+
+#[test_log::test(tokio::test)]
+async fn should_invalidate_cache_when_dep_changes() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_dir = temp_dir.path().join("results");
+    create_dir(&db_dir).unwrap();
+
+    let test_ran_path = temp_dir.path().join("test_ran");
+    {
+        let _lci = LocalCiChildBuilder::new()
+            .await
+            .unwrap()
+            .db_dir(db_dir.clone())
+            .start(format!(
+                r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "my_dependency"
+            command = "echo jello verld"
+            [[tests]]
+            name = "my_test"
+            command = "echo bello burld > {}"
+            depends_on = ["my_dependency"]
+        "##,
+                test_ran_path.as_os_str().to_string_lossy(),
+            ))
+            .await
+            .unwrap();
+        wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5)).expect("test not ran");
+
+        // Shut down child by dropping it. This is racy, it's possible we
+        // haven't finished writing the test DB yet. In that case this test
+        // could pass when it shoudl fail, but it shouldn't make the test fail
+        // when it should pass.
+    }
+
+    // Now we'll run it again but with a different config for the dependency.
+    // The dependee should get run again even though its config hasn't changed.
+    remove_file(&test_ran_path).unwrap();
+    let _lci = LocalCiChildBuilder::new()
+        .await
+        .unwrap()
+        .db_dir(db_dir)
+        .start(format!(
+            r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "my_dependency"
+            command = "echo its all ogre now"
+            [[tests]]
+            name = "my_test"
+            command = "echo bello burld > {}"
+            depends_on = ["my_dependency"]
+        "##,
+            test_ran_path.as_os_str().to_string_lossy(),
+        ))
+        .await
+        .unwrap();
+    wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
+        .expect("test not re-ran when dependency config changed");
 }

@@ -22,6 +22,7 @@ mod resource;
 mod result;
 mod status;
 mod test;
+mod util;
 
 #[cfg(test)]
 mod test_utils;
