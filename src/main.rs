@@ -34,10 +34,6 @@ struct Args {
     // https://stackoverflow.com/questions/76341332/clap-default-value-for-pathbuf
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo: String,
-    /// Maximum number of tests to run concurrently. Each concurrent thread
-    /// requires creating a worktree, which is why we don't default to $nproc.
-    #[arg(short, long, default_value_t = 8)]
-    num_threads: u32,
     /// Filename prefix for temporary worktrees.
     #[arg(long, default_value_t = {"local-ci-worktree".to_string()})]
     worktree_prefix: String,
