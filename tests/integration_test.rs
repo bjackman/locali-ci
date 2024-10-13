@@ -99,15 +99,16 @@ impl LocalCiChildBuilder {
         let mut cmd: Command = get_test_bin("local-ci").into();
         let cmd = cmd
             .args([
-                "HEAD^",
                 "--config",
                 "/dev/stdin",
+                "--repo",
+                self.temp_dir.path().to_str().unwrap(),
+                "watch",
+                "HEAD^",
                 "--worktree-dir",
                 worktree_dir.to_str().unwrap(),
                 "--worktree-prefix",
                 "test-worktree-",
-                "--repo",
-                self.temp_dir.path().to_str().unwrap(),
                 "--result-db",
                 self.db_dir.to_str().unwrap(),
             ])

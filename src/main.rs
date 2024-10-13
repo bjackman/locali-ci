@@ -1,5 +1,5 @@
 use anyhow::Context;
-use clap::{arg, value_parser, Arg, ArgMatches, FromArgMatches, Parser as _};
+use clap::{arg, value_parser, Arg, ArgMatches, FromArgMatches, Parser as _, Subcommand};
 use futures::StreamExt;
 use log::info;
 use nix::sys::utsname::uname;
@@ -34,15 +34,21 @@ struct Args {
     // https://stackoverflow.com/questions/76341332/clap-default-value-for-pathbuf
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo: String,
+    /// Path to TOML config file.
+    #[arg(short, long, required = true)]
+    config: PathBuf,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Args)]
+struct WatchArgs {
     /// Filename prefix for temporary worktrees.
     #[arg(long, default_value_t = {"local-ci-worktree".to_string()})]
     worktree_prefix: String,
     /// Directory (must exist) to create temporary worktrees in.
     #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()})]
     worktree_dir: String,
-    /// Path to TOML config file.
-    #[arg(short, long, required = true)]
-    config: PathBuf,
     /// Socket address in the form "$ip:$port" to listen on for serving files
     /// over HTTP. For example "127.0.0.1:8080" or ""[::1]:1234". Set the port
     /// to 0 to let the OS pick a port for us.
@@ -54,6 +60,11 @@ struct Args {
     /// HEAD (inclusive). Whenever HEAD changes, this string will be re-evaluated
     /// to find the base of the range.
     base: String,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    Watch(WatchArgs),
 }
 
 // Clap's derive API doesn't support argument defaults that depend on runtime
@@ -127,31 +138,12 @@ impl clap::Args for RuntimeDefaultArgs {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    env_logger::init();
-
-    let args = Args::parse();
-
-    // Set up shutdown first, to ensure we correctly handle early signals.
-    // As well as doing it early, it seems to be important that we do this with
-    // a single global signal::ctrl_c call, if I call this in the select loop I
-    // would occasionally observe that SIGINT kills the program instead of
-    // triggering Tokio's signal handler, this is because we require the ctrl_c
-    // future to get polled before we do any work, since that's where it
-    // installs the signal handler.
-    // TOOD: this still seems racy though, because in theory we could get all
-    // the way into the setup below before the task here ever gets to polling
-    // the future. It seems like this just means the ctrl_c design is bad and we
-    // should probably just not use it.
-    let cancellation_token = CancellationToken::new();
-    let token = cancellation_token.clone();
-    tokio::spawn(async move {
-        signal::ctrl_c().await.expect("error listening for ctrl-C");
-        token.cancel()
-    });
-
-    let listener = tokio::net::TcpListener::bind(args.http_sockaddr)
+async fn watch(
+    cancellation_token: CancellationToken,
+    args: &Args,
+    watch_args: &WatchArgs,
+) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(watch_args.http_sockaddr.clone())
         .await
         .unwrap();
     let http_port = listener
@@ -160,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
         .port();
     tokio::spawn(http::serve_dir(
         listener,
-        args.runtime_default.result_db.clone(),
+        watch_args.runtime_default.result_db.clone(),
     ));
 
     let repo = git::PersistentWorktree {
@@ -171,14 +163,20 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
-    let manager_builder =
-        config::manager_builder(repo.clone(), &args.runtime_default.result_db, &args.config)?
-            .worktree_prefix(&args.worktree_prefix)
-            .worktree_dir(&args.worktree_dir);
+    let manager_builder = config::manager_builder(
+        repo.clone(),
+        &watch_args.runtime_default.result_db,
+        &args.config,
+    )?
+    .worktree_prefix(&watch_args.worktree_prefix)
+    .worktree_dir(&watch_args.worktree_dir);
     let mut test_manager = manager_builder.build().await?;
-    let range_spec: OsString = format!("{}..HEAD", args.base).into();
+    let range_spec: OsString = format!("{}..HEAD", watch_args.base).into();
     let mut notifs = test_manager.results();
-    let result_url_base = format!("http://{}:{}", args.runtime_default.hostname, http_port);
+    let result_url_base = format!(
+        "http://{}:{}",
+        watch_args.runtime_default.hostname, http_port
+    );
     let mut status_tracker = status::Tracker::new(repo.clone(), stdout(), result_url_base);
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
@@ -212,4 +210,33 @@ async fn main() -> anyhow::Result<()> {
     }
     test_manager.settled().await;
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
+    let args = Args::parse();
+
+    // Set up shutdown first, to ensure we correctly handle early signals.
+    // As well as doing it early, it seems to be important that we do this with
+    // a single global signal::ctrl_c call, if I call this in the select loop I
+    // would occasionally observe that SIGINT kills the program instead of
+    // triggering Tokio's signal handler, this is because we require the ctrl_c
+    // future to get polled before we do any work, since that's where it
+    // installs the signal handler.
+    // TOOD: this still seems racy though, because in theory we could get all
+    // the way into the setup below before the task here ever gets to polling
+    // the future. It seems like this just means the ctrl_c design is bad and we
+    // should probably just not use it.
+    let cancellation_token = CancellationToken::new();
+    let token = cancellation_token.clone();
+    tokio::spawn(async move {
+        signal::ctrl_c().await.expect("error listening for ctrl-C");
+        token.cancel()
+    });
+
+    match args.command {
+        Command::Watch(ref watch_args) => watch(cancellation_token, &args, watch_args).await,
+    }
 }
