@@ -1,22 +1,17 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
-    fs,
     hash::{DefaultHasher, Hash as _, Hasher as _},
-    path::Path,
-    sync::Arc,
     time::Duration,
 };
 
-use anyhow::{bail, Context as _};
+use anyhow::bail;
 #[allow(unused_imports)]
 use log::debug;
 use serde::Deserialize;
 
 use crate::{
-    git::{self, PersistentWorktree},
     resource::ResourceKey,
-    result::Database,
     test::{self, CachePolicy, TestName},
     util::{visit_all, GraphNode},
 };
@@ -181,7 +176,7 @@ fn default_shutdown_grace_period() -> u64 {
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    num_worktrees: usize,
+    pub num_worktrees: usize,
     resources: Option<Vec<Resource>>,
     tests: Vec<Test>,
 }
@@ -231,21 +226,4 @@ impl Config {
 
         Ok(tests)
     }
-}
-
-pub fn manager_builder(
-    repo: Arc<git::PersistentWorktree>,
-    cache_path: &Path,
-    config_path: &Path,
-) -> anyhow::Result<test::ManagerBuilder<PersistentWorktree>> {
-    let config_content = fs::read_to_string(config_path).context("couldn't read config")?;
-    let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
-    let resource_tokens = config.parse_resource_tokens();
-    Ok(test::Manager::builder(
-        repo.clone(),
-        Database::create_or_open(cache_path)?,
-        config.parse_tests(&resource_tokens)?,
-        resource_tokens,
-    )
-    .num_worktrees(config.num_worktrees))
 }

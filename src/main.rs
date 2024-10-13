@@ -1,14 +1,17 @@
 use anyhow::Context;
 use clap::{arg, Parser as _, Subcommand};
+use config::Config;
 use futures::StreamExt;
 use log::info;
 use nix::sys::utsname::uname;
+use result::Database;
 use std::ffi::OsString;
 use std::io::stdout;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;
-use std::{env, str};
+use std::{env, fs, str};
+use test::Manager;
 use tokio::{select, signal};
 use tokio_util::sync::CancellationToken;
 use util::DisplayablePathBuf;
@@ -85,14 +88,23 @@ fn default_hostname() -> String {
         .expect("hostname wasn't utf-8")
 }
 
+#[derive(clap::Args)]
+struct TestArgs {
+    /// Name of the test to run, per the "name" field in the config file.
+    test: String,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// The main command. Watch a repository and run tests whenever the revision
-    /// ranges changes.
+    /// range changes.
     Watch(WatchArgs),
+    /// Run a one-shot test in the specified repo. Do not cache the results.
+    Test(TestArgs),
 }
 
 async fn watch(
+    config: Config,
     cancellation_token: CancellationToken,
     args: &Args,
     watch_args: &WatchArgs,
@@ -114,10 +126,16 @@ async fn watch(
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
-    let manager_builder =
-        config::manager_builder(repo.clone(), &watch_args.result_db, &args.config)?
-            .worktree_prefix(&watch_args.worktree_prefix)
-            .worktree_dir(&watch_args.worktree_dir);
+    let resource_tokens = config.parse_resource_tokens();
+    let manager_builder = Manager::builder(
+        repo.clone(),
+        Database::create_or_open(&watch_args.result_db)?,
+        config.parse_tests(&resource_tokens)?,
+        resource_tokens,
+    )
+    .num_worktrees(config.num_worktrees)
+    .worktree_prefix(&watch_args.worktree_prefix)
+    .worktree_dir(&watch_args.worktree_dir);
     let mut test_manager = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", watch_args.base).into();
     let mut notifs = test_manager.results();
@@ -157,11 +175,18 @@ async fn watch(
     Ok(())
 }
 
+async fn test(
+    _config: Config,
+    _cancellation_token: CancellationToken,
+    _args: &Args,
+    _test_args: &TestArgs,
+) -> anyhow::Result<()> {
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
-
-    let args = Args::parse();
 
     // Set up shutdown first, to ensure we correctly handle early signals.
     // As well as doing it early, it seems to be important that we do this with
@@ -181,7 +206,14 @@ async fn main() -> anyhow::Result<()> {
         token.cancel()
     });
 
+    let args = Args::parse();
+    let config_content = fs::read_to_string(&args.config).context("couldn't read config")?;
+    let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
+
     match args.command {
-        Command::Watch(ref watch_args) => watch(cancellation_token, &args, watch_args).await,
+        Command::Watch(ref watch_args) => {
+            watch(config, cancellation_token, &args, watch_args).await
+        }
+        Command::Test(ref test_args) => test(config, cancellation_token, &args, test_args).await,
     }
 }
