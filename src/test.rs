@@ -1756,7 +1756,4 @@ mod tests {
         // we don't "own" the worktree.
         assert_eq!(f.repo.rev_parse("HEAD").await.unwrap(), Some(head_hash));
     }
-
-    // TODO: if the tests fail, the TempWorktree cleanup goes haywire, something
-    // to do with panic and drop order I think.
 }
