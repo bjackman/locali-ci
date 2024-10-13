@@ -416,11 +416,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             }
 
             let ct = CancellationToken::new();
-            let output = self.result_db.create_output(
-                test_case.storage_hash(),
-                &test_case.test.name,
-                test_case.test.config_hash,
-            )?;
+            let output = self.result_db.create_output(&test_case)?;
             self.job_cts.insert(id, ct.clone());
             self.spawn_job(TestJob {
                 ct,
