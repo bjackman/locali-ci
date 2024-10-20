@@ -265,6 +265,8 @@ impl<W> ManagerBuilder<W> {
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager<W: Worktree> {
     repo: Arc<W>,
+    // Oops, be extremely careful about mutating this. set_revisions has some
+    // pretty strong implicit assumptions about this field.
     job_cts: HashMap<TestCaseId, CancellationToken>,
     job_counter: JobCounter,
     result_tx: broadcast::Sender<Arc<Notification>>,
@@ -454,6 +456,12 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // completion. Rust really hates to mutate one map value based on
         // another value in the same map, so we do this via an intermediate map
         // :(
+        // Note that we assume if we are starting a job here, then we must also
+        // be starting all of its dependency jobs. This is the spooky assumption
+        // mentioned on the comment on job_cts.
+        // This assumption kinda works because we "start jobs" here even when
+        // the result is actually cached - so that cached reuslt will go through
+        // the normal notifier mechanism as if we really ran it.
         let mut wait_subs: HashMap<TestCaseId, Vec<(TestName, broadcast::Receiver<TestStatus>)>> =
             jobs.iter()
                 .map(|(id, job)| {
