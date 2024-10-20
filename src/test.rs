@@ -954,7 +954,7 @@ mod tests {
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT); exit\" SIGINT
                 echo $$ >> {pid_path_prefix:?}$(git rev-parse $LCI_COMMIT)
 
-                if [ -n \"{lock_filename}\" ]; then 
+                if [ -n \"{lock_filename}\" ]; then
                     if [ -e ./{lock_filename:?} ]; then
                         echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
                     fi
