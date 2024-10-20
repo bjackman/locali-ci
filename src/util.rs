@@ -19,13 +19,13 @@ pub trait GraphNode<I: Hash + Eq + Clone> {
 
 // Starting from the node at start_idx, visit all connected nodes and call f.
 // This will hang if there are cycles in the specified graph.
-pub fn visit_all<I: Hash + Eq + Clone, G: GraphNode<I>, F: FnMut(&G)>(
-    nodes: &Vec<G>,
+pub fn visit_all<'a, I: Hash + Eq + Clone, G: GraphNode<I>, F: FnMut(&'a G)>(
+    nodes: &'a Vec<G>,
     start_idx: usize,
     mut f: F,
 ) {
-    fn recurse<I: Hash + Eq + Clone, G: GraphNode<I>, F: FnMut(&G)>(
-        nodes: &Vec<G>,
+    fn recurse<'a, I: Hash + Eq + Clone, G: GraphNode<I>, F: FnMut(&'a G)>(
+        nodes: &'a Vec<G>,
         start_idx: usize,
         id_to_idx: &HashMap<I, usize>,
         f: &mut F,
