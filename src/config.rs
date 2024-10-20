@@ -98,9 +98,7 @@ fn default_requires_worktree() -> bool {
 }
 
 // This implementation is only valid for Tests among those registered for a single Manager.
-impl GraphNode for Test {
-    type NodeId = String;
-
+impl GraphNode<String> for Test {
     fn id(&self) -> &String {
         &self.name
     }
