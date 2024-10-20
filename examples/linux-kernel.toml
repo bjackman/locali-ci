@@ -8,6 +8,11 @@ command = "./scripts/checkpatch.pl --git $LCI_COMMIT"
 requires_worktree = false
 
 [[tests]]
+name = "sleep"
+command = "sleep 1"
+
+[[tests]]
+depends_on = ["sleep"]
 name = "vmlinux-defconfig"
 command = """
 set -e

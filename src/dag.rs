@@ -206,7 +206,6 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
 
     // Iterate all the descendants of the relevant node, visiting parents before
     // their children.
-    #[cfg(test)]
     pub fn top_down_from(&self, id: &I) -> Option<TopDown<I, G>> {
         Some(TopDown {
             dag: self,

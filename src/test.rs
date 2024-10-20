@@ -126,6 +126,13 @@ impl Test {
         cmd.stdin(Stdio::null());
         cmd
     }
+
+    pub fn needs_worktree(&self) -> bool {
+        self.needs_resources
+            .get(&ResourceKey::Worktree)
+            .unwrap_or(&0)
+            != &0
+    }
 }
 
 impl Display for Test {
@@ -353,7 +360,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                     .map(|tc_id| {
                         (
                             test_case.test.name.clone(),
-                            jobs[tc_id.borrow()].notifier.subscribe_completion(),
+                            jobs[tc_id.borrow()].subscribe_completion(),
                         )
                     })
                     .collect();
@@ -618,6 +625,10 @@ pub struct TestJob<O: TestJobOutput> {
 }
 
 impl<'a, O: TestJobOutput> TestJob<O> {
+    pub fn subscribe_completion(&self) -> broadcast::Receiver<TestStatus> {
+        self.notifier.subscribe_completion()
+    }
+
     pub async fn get_resources_and_run(
         &mut self,
         pools: &Pools,
@@ -645,7 +656,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
 
     // Blocks until all dependency jobs have succeeded, or returns an error
     // reporting the name of the job that terminated without success.
-    async fn await_dep_success(&mut self) -> Result<(), TestName> {
+    pub async fn await_dep_success(&mut self) -> Result<(), TestName> {
         // This is another thing where the tokio::sync::watch API is a bit
         // weird, there's no way to wait for a message without passing a
         // predicate, so we have to pass a dummy one.
@@ -678,7 +689,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
     }
 
     // Returns Ok(None) when canceled.
-    async fn checkout_and_run<W>(
+    pub async fn checkout_and_run<W>(
         &mut self,
         worktree: &W,
         resources: &Resources<'a>,
@@ -691,7 +702,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
     }
 
     // Returns Ok(None) when canceled. Does not return until the child process has shut down.
-    async fn run(
+    pub async fn run(
         &mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
@@ -777,7 +788,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
 
 // An identifier that uniquely identifies a TestCase among all that can exist for a given Manager.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct TestCaseId(String);
+pub struct TestCaseId(String);
 
 impl TestCaseId {
     fn new(commit_hash: &CommitHash, test_name: &TestName) -> Self {
