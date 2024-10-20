@@ -28,10 +28,10 @@ impl OutputExt for Output {
         match self.code_not_killed()? {
             0 => Ok(()),
             code => Err(anyhow!(
-                "failed with exit code {:?}. stderr:\n{:?}\nstdout:\n{:?}",
+                "failed with exit code {:?}. stderr:\n{}\nstdout:\n{}",
                 code,
-                OsStr::from_bytes(&self.stderr),
-                OsStr::from_bytes(&self.stdout),
+                OsStr::from_bytes(&self.stderr).to_string_lossy(),
+                OsStr::from_bytes(&self.stdout).to_string_lossy(),
             )),
         }
     }
