@@ -875,6 +875,7 @@ mod tests {
         collections::VecDeque,
         fs::{self, remove_file, File},
         io::{self, BufRead as _},
+        mem::ManuallyDrop,
         path::PathBuf,
         thread::panicking,
         time::Duration,
@@ -1201,7 +1202,7 @@ mod tests {
     }
 
     struct TestScriptFixture {
-        _db_dir: TempDir,
+        db_dir: ManuallyDrop<TempDir>,
         repo: Arc<TempRepo>,
         scripts: Vec<TestScript>,
         manager: Manager<TempRepo>,
@@ -1268,6 +1269,17 @@ mod tests {
         }
     }
 
+    impl Drop for TestScriptFixture {
+        fn drop(&mut self) {
+            // SAFETY: The field is never accessed again.
+            let db_dir = unsafe { ManuallyDrop::take(&mut self.db_dir) };
+            if env::var("LCI_TESTS_LEAK_RESULT_DB").unwrap_or("0".to_owned()) != "0" {
+                let db_dir_path = db_dir.into_path(); // Stops it from being deleted.
+                info!("Leaking database directory {:?}", db_dir_path);
+            }
+        }
+    }
+
     async fn nonempty_temp_repo() -> Arc<TempRepo> {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         // TODO: We need to have a commit in the repo otherwise manager
@@ -1319,7 +1331,7 @@ mod tests {
                 manager,
                 scripts,
                 repo,
-                _db_dir: db_dir,
+                db_dir: ManuallyDrop::new(db_dir),
             }
         }
     }
