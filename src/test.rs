@@ -1124,7 +1124,7 @@ mod tests {
         // to "fail with an error". This preferable to SIGKILL because that will
         // prevent the underlying script from performing its cleanup.
         pub fn sigterm(&self) {
-            kill(self.pid, Signal::SIGTERM).expect("couldn't SIGKILL test script");
+            kill(self.pid, Signal::SIGTERM).expect("couldn't SIGTERM test script");
         }
 
         // Forget "started" state so that TestScript::started can usefully be called again.
