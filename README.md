@@ -15,6 +15,16 @@ Bugs (high to low priority):
  - `should_not_cache` test is flaky; occasionally the detector triggers that
    suggests two tests were sharing the same worktree. _Probably_ a bug in the
    test.
+
+   I added some hacks to try and debug this. With
+
+   ```
+   RUST_LOG=info TMPDIR=/tmp/mytmp/ LCI_TESTS_LEAK_RESULT_DB=1 while cargo test -- --nocapture; continue ; end`
+   ```
+
+   I'm able to reproduce it and see the `-x` output of the test scripts but they
+   don't make any sense to me, I got stuck and decided to work on something
+   else.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.
