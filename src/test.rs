@@ -910,8 +910,9 @@ mod tests {
     }
 
     impl TestScript {
-        // Each time the script gets started it echoes a line to this file.
         const PID_FILENAME_PREFIX: &'static str = "pid.";
+        // Each time the script gets started it echoes a line to this file.
+        const RUN_COUNT_FILENAME_PREFIX: &'static str = "runs.";
         const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
         const LOCK_FILENAME: &'static str = "lockfile";
         const BUG_DETECTED_PATH: &'static str = "bug_detected";
@@ -952,7 +953,13 @@ mod tests {
             // need more Bash hackery to ensure that the signal gets forwarded to it.
             let script = format!(
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT); exit\" SIGINT
-                echo $$ >> {pid_path_prefix:?}$(git rev-parse $LCI_COMMIT)
+
+                # Write then move, to make populated file appear atomically
+                pid_file=$(mktemp)
+                echo $$ >> $pid_file
+                mv $pid_file {pid_path_prefix:?}$(git rev-parse $LCI_COMMIT)
+
+                echo >> {run_count_path_prefix:?}$(git rev-parse $LCI_COMMIT)
 
                 if [ -n \"{lock_filename}\" ]; then
                     if [ -e ./{lock_filename:?} ]; then
@@ -977,6 +984,7 @@ mod tests {
                 # Extract the exit code and pass it to exit if there is one, otherwise pass 0.
                 exit ${{exit_code:-0}}
                 ",
+                run_count_path_prefix = dir.path().join(Self::RUN_COUNT_FILENAME_PREFIX),
                 pid_path_prefix = dir.path().join(Self::PID_FILENAME_PREFIX),
                 siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
                 lock_filename = if use_lockfile { Self::LOCK_FILENAME } else { "" },
@@ -1024,18 +1032,11 @@ mod tests {
             let pid_path = self.signalling_path(Self::PID_FILENAME_PREFIX, hash);
             path_exists(&pid_path).await;
             let content = fs::read_to_string(pid_path).expect("couldn't read PID file");
-            // The script appends a PID to the file each time, this is handy for num_runs.
-            // So we just take the last one.
-            let line = content
-                .trim()
-                .split("\n")
-                .last()
-                .expect("PID file existed but contained no PIDs");
             StartedTestScript {
                 script: self,
                 hash: hash.to_owned(),
-                pid: Pid::from_raw(line.parse().unwrap_or_else(|_| {
-                    panic!("couldn't parse PID file as integer (content: {content:?}")
+                pid: Pid::from_raw(content.trim().parse().unwrap_or_else(|_| {
+                    panic!("couldn't parse PID file as integer (content: {content:?})")
                 })),
             }
         }
@@ -1043,7 +1044,7 @@ mod tests {
         // Number of times the script has been successfully spawned for this
         // commit, since StartedTestScript::reset_started was called for it.
         pub fn num_runs(&self, hash: &CommitHash) -> usize {
-            let path = self.signalling_path(Self::PID_FILENAME_PREFIX, hash);
+            let path = self.signalling_path(Self::RUN_COUNT_FILENAME_PREFIX, hash);
             if !path.exists() {
                 return 0;
             }
