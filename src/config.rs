@@ -186,6 +186,53 @@ pub struct Config {
     tests: Vec<Test>,
 }
 
+type ResourceTokens = HashMap<ResourceKey, Vec<String>>;
+
+impl Config {
+    pub fn parse_resource_tokens(&self) -> ResourceTokens {
+        self.resources
+            .as_ref()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|resource| {
+                (
+                    ResourceKey::UserToken(resource.name().to_owned()),
+                    match resource {
+                        Resource::Explicit { name: _, tokens } => tokens.clone(),
+                        _ => (0..resource.count())
+                            .map(|i| format!("{}-{}", resource.name(), i))
+                            .collect(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    pub fn parse_tests(&self, resource_tokens: &ResourceTokens) -> anyhow::Result<Vec<test::Test>> {
+        // Parse all the tests, with reference to the named resource idxs.
+        let tests = (0..self.tests.len())
+            .map(|i| Test::parse(&self.tests, i))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        // Check for invalid resource references.
+        for test in tests.iter() {
+            for key in test.needs_resources.keys() {
+                if let ResourceKey::UserToken(name) = key {
+                    if !resource_tokens.contains_key(key) {
+                        bail!(
+                            "undefined resource {:?} referenced in test {:?}",
+                            name,
+                            test.name
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(tests)
+    }
+}
+
 pub fn manager_builder(
     repo: Arc<git::PersistentWorktree>,
     cache_path: &Path,
@@ -193,50 +240,11 @@ pub fn manager_builder(
 ) -> anyhow::Result<test::ManagerBuilder<PersistentWorktree>> {
     let config_content = fs::read_to_string(config_path).context("couldn't read config")?;
     let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
-
-    // Build map of resource name to numerical index.
-    let resource_tokens: HashMap<ResourceKey, Vec<String>> = config
-        .resources
-        .as_ref()
-        .unwrap_or(&vec![])
-        .iter()
-        .map(|resource| {
-            (
-                ResourceKey::UserToken(resource.name().to_owned()),
-                match resource {
-                    Resource::Explicit { name: _, tokens } => tokens.clone(),
-                    _ => (0..resource.count())
-                        .map(|i| format!("{}-{}", resource.name(), i))
-                        .collect(),
-                },
-            )
-        })
-        .collect();
-
-    // Parse all the tests, with reference to the named resource idxs.
-    let tests = (0..config.tests.len())
-        .map(|i| Test::parse(&config.tests, i))
-        .collect::<anyhow::Result<Vec<_>>>()?;
-
-    // Check for invalid resource references.
-    for test in tests.iter() {
-        for key in test.needs_resources.keys() {
-            if let ResourceKey::UserToken(name) = key {
-                if !resource_tokens.contains_key(key) {
-                    bail!(
-                        "undefined resource {:?} referenced in test {:?}",
-                        name,
-                        test.name
-                    );
-                }
-            }
-        }
-    }
-
+    let resource_tokens = config.parse_resource_tokens();
     Ok(test::Manager::builder(
         repo.clone(),
         Database::create_or_open(cache_path)?,
-        tests,
+        config.parse_tests(&resource_tokens)?,
         resource_tokens,
     )
     .num_worktrees(config.num_worktrees))
