@@ -956,7 +956,8 @@ mod tests {
 
                 if [ -n \"{lock_filename}\" ]; then
                     if [ -e ./{lock_filename:?} ]; then
-                        echo 'Overlapping test script runs used the same worktree' >> {bug_detected_path:?}
+                        echo 'Overlapping test script runs used the same worktree (detected by {test_name:?}' \
+                            >> {bug_detected_path:?}
                     fi
                     trap \"rm {lock_filename:?}\" EXIT
                     touch ./{lock_filename:?}
@@ -1084,7 +1085,10 @@ mod tests {
             if path.exists() {
                 let content =
                     std::fs::read_to_string(path).expect("couldn't read bug-detected path");
-                let msg = format!("The test script detected one or more bugs: {}", content);
+                let msg = format!(
+                    "The test script {:?} detected one or more bugs: {}",
+                    self.test_name, content
+                );
                 if panicking() {
                     // If you panic during a panic (i.e. if this fails when the test had already
                     // failed) you get a huge splat. Just log instead.
