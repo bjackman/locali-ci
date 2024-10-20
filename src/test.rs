@@ -149,7 +149,9 @@ impl Debug for Test {
 }
 
 // This implementation is only valid for Tests among those registered for a single Manager.
-impl GraphNode<TestName> for Test {
+impl GraphNode for Test {
+    type NodeId = TestName;
+
     fn id(&self) -> &TestName {
         &self.name
     }
