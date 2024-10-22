@@ -25,8 +25,14 @@ use crate::{
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum Resource {
+    /// Shorthand for describing a singular resource, equivalent to setting count=1.
     Bare(String),
+    /// Specify resources where you don't care about the value of the token.
     Counted { name: String, count: usize },
+    /// Specify resources with explicitly set token values. These will be passed
+    /// into the job environment via LCI_RESOURCE_<name>_<n> where n is 0-indexed.
+    // TODO: If there's only one, we should also export it without the _<n>
+    Explicit { name: String, tokens: Vec<String> },
 }
 
 impl Resource {
@@ -34,6 +40,7 @@ impl Resource {
         match self {
             Self::Bare(n) => n,
             Self::Counted { name: n, count: _ } => n,
+            Self::Explicit { name: n, tokens: _ } => n,
         }
     }
 
@@ -41,6 +48,7 @@ impl Resource {
         match self {
             Self::Bare(_) => 1,
             Self::Counted { name: _, count: c } => *c,
+            Self::Explicit { name: _, tokens: t } => t.len(),
         }
     }
 }
@@ -195,11 +203,12 @@ pub fn manager_builder(
         .map(|resource| {
             (
                 ResourceKey::UserToken(resource.name().to_owned()),
-                // Here we'll eventually allow the user to name the resources
-                // explicitly. For now we just pick a unique name.
-                (0..resource.count())
-                    .map(|i| format!("{}-{}", resource.name(), i))
-                    .collect(),
+                match resource {
+                    Resource::Explicit { name: _, tokens } => tokens.clone(),
+                    _ => (0..resource.count())
+                        .map(|i| format!("{}-{}", resource.name(), i))
+                        .collect(),
+                },
             )
         })
         .collect();
