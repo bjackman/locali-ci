@@ -69,11 +69,19 @@ Needed features (high to low priority):
    wrong in the host system)
  - Need timeouts!
  - Support saving artifacts so the user can reuse or analyze them later.
+ - Probably want a (default?) option to merge stderr and stdout.
  - Fix output format, probably have to implement a pager in `ratatui`.
  - Support bailing out more quickly if the worktree teardown is too slow.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
  - Support re-using worktrees.
+ - Probably need to have the system handle cleaning the worktree for you. If
+   your build system etc can't be trusted to avoid polluting the workspace/being
+   resilient against a polluted workspace, you'll wanna put `git clean -fdx` in
+   your test script. However, once we have the `test` subcommand we'll also be
+   running in the "main" worktree where the user probably doesn't wanna do that.
+   So we probably need a higher-level notion of "cleaning the worktree" that's
+   aware of this.
  - Provide a
    [jobserver](https://www.gnu.org/software/make/manual/html_node/Job-Slots.html).
    Issue with this will be when test commands crash and leak job slots. I think
