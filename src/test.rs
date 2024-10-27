@@ -948,7 +948,7 @@ mod tests {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
             // The script will touch a special file to notify us that it has been started. On
             // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
-            // on input, which it will never receive.
+            // forever.
             //
             // The "lockfile" lets us detect if the worktree gets assigned to multiple script
             // instances at once. We would ideally actually do this with flock but it turns out to
@@ -957,9 +957,6 @@ mod tests {
             // produce false positive failures. I am sure that it can produce false negatives, but
             // we could get false negatives here even with flock, since there is always a window
             // between the script starting and it actually taking the lock.
-            //
-            // Note that the blocking thing (maybe_read) must be a shell builtin; otherwise we would
-            // need more Bash hackery to ensure that the signal gets forwarded to it.
             let script = format!(
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT); exit\" SIGINT
 
