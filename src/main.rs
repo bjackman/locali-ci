@@ -74,9 +74,9 @@ enum Command {
 // we use the tricks from
 // https://docs.rs/clap/latest/clap/_derive/index.html#flattening-hand-implemented-args-into-a-derived-application
 // to combine the derive and builder APIs.
-// This builder-API based part is absolutely fucking insane,
-// I think there's very likely a less totally fucking insane way to write it
-// but this is too tedious, I can't be bothered to figure it out.
+// This builder-API based part seems increadibly verbose,
+// I think there's very likely a less ridiculous way to write it
+// but I've been too lazy to figure it out.
 struct RuntimeDefaultArgs {
     /// Directory where results will be stored.
     result_db: PathBuf,
@@ -84,9 +84,9 @@ struct RuntimeDefaultArgs {
     hostname: String,
 }
 
-// IIUC this diabolical bullshit is to take the parsed arguments ant put thme
-// into theo RuntimeDefaultArgs struct that we flatten into the derive'd struct
-// above.
+// IIUC this enormous repetitive pain is all to take the parsed arguments and
+// put them into the RuntimeDefaultArgs struct that we flatten into the derive'd
+// struct above.
 impl FromArgMatches for RuntimeDefaultArgs {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
         let mut matches = matches.clone();
