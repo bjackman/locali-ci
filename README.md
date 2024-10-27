@@ -25,12 +25,6 @@ Bugs (high to low priority):
    I'm able to reproduce it and see the `-x` output of the test scripts but they
    don't make any sense to me, I got stuck and decided to work on something
    else.
-
-   Pondering this some more, I thought of something weird: the bash test script
-   uses an EXIT trap to remove the lockfile. But the Rust test code seems to act
-   like bash should be terminated by SIGTERM. How can bash both a) be terminated
-   by SIGTERM and b) be able to execute complex code before shutdown? This
-   probably requires further research.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.

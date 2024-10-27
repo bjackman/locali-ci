@@ -957,6 +957,14 @@ mod tests {
             // produce false positive failures. I am sure that it can produce false negatives, but
             // we could get false negatives here even with flock, since there is always a window
             // between the script starting and it actually taking the lock.
+            //
+            // A confusing note about Bash: even though we have traps in place,
+            // if bash gets signalled it will appear to have been terminated by
+            // that signal. I dunno how this happens, but I did check and it
+            // does happen. Either there's a way to set up signal handlers so
+            // that you can both have a handler _and_ be terminated, or Bash
+            // does something weird like run its handler and then signal itself
+            // again.
             let script = format!(
                 "trap \"touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT); exit\" SIGINT
 
