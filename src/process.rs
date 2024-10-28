@@ -2,8 +2,25 @@ use anyhow::{anyhow, Context};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt as _;
-use std::process::{Command as SyncCommand, Output};
+use std::process::{Command as SyncCommand, ExitStatus, Output};
 use tokio::process::Command;
+
+pub trait ExitStatusExt {
+    // Returns exit code, fails verbosely if the process was killed by a signal.
+    fn code_not_killed(&self) -> anyhow::Result<i32>;
+}
+
+impl ExitStatusExt for ExitStatus {
+    fn code_not_killed(&self) -> anyhow::Result<i32> {
+        self.code().ok_or_else(|| {
+            anyhow!(
+                "terminated by signal {}",
+                self.signal()
+                    .expect("ExitStatus::code() and ExitStatus::signal() both None")
+            )
+        })
+    }
+}
 
 pub trait OutputExt {
     // Returns exit code, fails verbosely if the process was killed by a signal.

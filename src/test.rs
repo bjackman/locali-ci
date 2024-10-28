@@ -14,7 +14,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use futures::future::select_all;
 use futures::future::FutureExt;
 use futures::future::{self, try_join_all, Either};
@@ -23,11 +23,11 @@ use log::debug;
 use log::error;
 use log::info;
 use log::warn;
-use nix::sys::signal::kill;
-use nix::sys::signal::Signal;
+use nix::sys::signal::{kill, killpg, Signal};
 use nix::unistd::Pid;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::process::Child;
 use tokio::process::Command;
 use tokio::select;
 use tokio::sync::broadcast;
@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::git::TempWorktree;
 use crate::git::{CommitHash, Hash, Worktree};
-use crate::process::OutputExt;
+use crate::process::ExitStatusExt as _;
 use crate::resource::Pools;
 use crate::resource::Resource;
 use crate::resource::ResourceKey;
@@ -619,6 +619,25 @@ impl Drop for JobToken {
     }
 }
 
+// A drop guard which attempts to ensure child processes can be cleaned up quite
+// brutally, by killing the entire process group with the PID of the child.
+// This is a bad idea if you haven't made some effort to ensure that the child's
+// process group ID is its PID. I initially tried to ensure that with Rust
+// jiggery pokery but it produced just godawful nonsense verbosity so... just be
+// careful yeah?
+#[derive(Debug)]
+struct ChildDropGuard(Child);
+
+impl Drop for ChildDropGuard {
+    fn drop(&mut self) {
+        let pid = match self.0.id() {
+            None => return, // Must already have shut down.
+            Some(p) => Pid::from_raw(p.try_into().unwrap()),
+        };
+        killpg(pid, Signal::SIGINT).or_log_error("SIGKILLing child process group");
+    }
+}
+
 // This is not really a proper type, it doesn't really mean anything except as an implementation
 // detail of its user. I tried to get rid of it but then you run into issues with getting references
 // to individual fields while a mutable reference exists to the overall struct. I think this is
@@ -697,13 +716,7 @@ impl<'a> TestJob {
             .current_dir(current_dir)
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
-            .env("LCI_COMMIT", self.test_case.commit_hash.to_string())
-            // Killing on drop is not what we want. We really want this job to
-            // get awaited so that the worktree can be safely reused and we can
-            // be sure the test script has cleaned up after itself. But, in case
-            // local-ci shuts down unexpectedly we'll try to at least limit the
-            // damage.
-            .kill_on_drop(true);
+            .env("LCI_COMMIT", self.test_case.commit_hash.to_string());
         for (k, v) in self.env.iter() {
             cmd = cmd.env(k, v);
         }
@@ -718,19 +731,18 @@ impl<'a> TestJob {
                 cmd = cmd.env(format!("LCI_RESOURCE_{}_{}", resource_name, i), token);
             }
         }
-        let child = cmd.spawn().context("spawning test command")?;
-        // lol wat?
-        let pid = Pid::from_raw(
-            child
-                .id()
-                .ok_or(anyhow!("no PID for child job"))?
-                .try_into()
-                .unwrap(),
-        );
+        let mut child = ChildDropGuard(cmd.spawn().context("spawning test command")?);
+        // Grab the PID now if we can, since it's a pain to look it up later for
+        // silly Rust reasons. If no PID is found we just carry on assuming the
+        // process has already shut down.
+        let pid = child
+            .0
+            .id()
+            .map(|raw| Pid::from_raw(raw.try_into().unwrap()));
         // Await the child, or cancellation. Because the "right" branch still needs to do work on
         // the "left" future, tokio::select doesn't grant us any clarity or concision here so we
         // drop down to the raw function call.
-        let child_fut = pin!(child.wait_with_output());
+        let child_fut = pin!(child.0.wait());
         let cancel_fut = pin!(self.ct.cancelled());
         match future::select(child_fut, cancel_fut).await {
             Either::Left((wait_result, _)) =>
@@ -743,20 +755,29 @@ impl<'a> TestJob {
                 Ok(Some(exit_code))
             }
             Either::Right((_, child_fut)) => {
-                // Canceled. Shut down the process.
-                kill(pid, Signal::SIGINT).context("couldn't interrupt child job")?;
+                // Canceled. Shut down the process if necessary.
+                if let Some(pid) = pid {
+                    kill(pid, Signal::SIGINT).or_log_error("SIGINTing child process");
+                }
                 // We don't care about its result but we
                 // need to wait for it to shut down so that we can safely give back the
                 // worktree.
-                let timeout = sleep(self.test_case.test.shutdown_grace_period);
-                select!(
-                    _ = child_fut => (),
-                    _ = timeout => {
-                        // Canceled. Shut down the process.
-                        warn!("timeout for {:?}, SIGKILLing", self.test_case.test.name);
-                        kill(pid, Signal::SIGKILL).context("couldn't interrupt child job")?;
+                let timeout = pin!(sleep(self.test_case.test.shutdown_grace_period));
+                match future::select(child_fut, timeout).await {
+                    Either::Left(_) => (), // Done, child terminated
+                    Either::Right((_timeout, child_fut)) => {
+                        // Canceled. Shut down the process harder.
+                        warn!(
+                            "timeout for {:?}, SIGKILLing whole process group",
+                            self.test_case.test.name
+                        );
+                        killpg(pid.expect("timed out, but no child PID"), Signal::SIGINT)
+                            .or_log_error("SIGKILLing child process group");
+                        // To be sure to be sure, we'll also wait and make sure
+                        // the child is really dead.
+                        child_fut.await.expect("failed to wait on SIGKILLed child");
                     }
-                );
+                }
 
                 Ok(None)
             }
@@ -976,7 +997,8 @@ mod tests {
 
                 # Write then move, to make populated file appear atomically.
                 # Note also we mustn't make the PID file visible until after we
-                # have installed the SIGINT trap - see the comment on StartedTestScript::siginted.
+                # have installed the SIGINT trap - see the comment on
+                # StartedTestScript::siginted.
                 pid_file=$(mktemp)
                 echo $$ >> $pid_file
                 mv $pid_file {pid_path_prefix:?}$(git rev-parse $LCI_COMMIT)
