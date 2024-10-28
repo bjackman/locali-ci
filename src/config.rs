@@ -175,7 +175,7 @@ fn default_cache_policy() -> CachePolicy {
 }
 
 fn default_shutdown_grace_period() -> u64 {
-    10
+    60
 }
 
 #[derive(Deserialize, Debug)]
