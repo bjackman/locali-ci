@@ -966,9 +966,17 @@ mod tests {
             // does something weird like run its handler and then signal itself
             // again.
             let script = format!(
-                "trap \"touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT); exit\" SIGINT
+                "commit_msg=\"$(git log -n1 --format=%B $LCI_COMMIT)\"
+                exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
+                on_sigint() {{
+                    touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT)
+                    exit ${{exit_code:-0}}
+                }}
+                trap on_sigint SIGINT
 
-                # Write then move, to make populated file appear atomically
+                # Write then move, to make populated file appear atomically.
+                # Note also we mustn't make the PID file visible until after we
+                # have installed the SIGINT trap - see the comment on StartedTestScript::siginted.
                 pid_file=$(mktemp)
                 echo $$ >> $pid_file
                 mv $pid_file {pid_path_prefix:?}$(git rev-parse $LCI_COMMIT)
@@ -983,12 +991,7 @@ mod tests {
                     trap \"rm {lock_filename:?}\" EXIT
                     touch ./{lock_filename:?}
                 fi
-                commit_msg=\"$(git log -n1 --format=%B $LCI_COMMIT)\"
-                exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
                 if [[ \"$commit_msg\" =~ {block_tag} ]]; then
-                    if [[ -n \"$exit_code\" ]]; then
-                        trap \"exit $exit_code\" SIGINT
-                    fi
                     # sleep is not a builtin so we won't handle SIGINT while
                     # that's running. Hack suggested by ChatGPT: just spawn it
                     # then use wait, which is a builtin.
@@ -1125,6 +1128,10 @@ mod tests {
 
     impl<'a> StartedTestScript<'a> {
         // Blocks until the script has received a SIGINT.
+        // Note this is only available on StartedTestScript, because we cannot
+        // reliably receive notifications of the script getting SIGINTED unless
+        // we know that the script was able to get its SIGINT trap installed
+        // before it got signalled.
         pub async fn siginted(&self) {
             path_exists(
                 self.script
