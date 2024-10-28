@@ -1,6 +1,11 @@
+use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
+    fmt::{Display, Formatter},
     hash::Hash,
+    ops::Deref,
+    path::PathBuf,
+    str::FromStr,
 };
 
 use anyhow::bail;
@@ -77,4 +82,29 @@ pub fn check_no_cycles<I: Hash + Eq + Clone>(nodes: &Vec<impl GraphNode<I>>) -> 
         check(nodes, i, &HashSet::new(), &id_to_idx)?;
     }
     Ok(())
+}
+
+#[derive(Clone)]
+pub struct DisplayablePathBuf(pub PathBuf);
+
+impl FromStr for DisplayablePathBuf {
+    type Err = <PathBuf as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        PathBuf::from_str(s).map(Self)
+    }
+}
+
+impl Display for DisplayablePathBuf {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        Display::fmt(&self.0.display(), f)
+    }
+}
+
+impl Deref for DisplayablePathBuf {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
 }

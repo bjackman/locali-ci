@@ -1,5 +1,5 @@
 use anyhow::Context;
-use clap::{arg, value_parser, Arg, ArgMatches, FromArgMatches, Parser as _, Subcommand};
+use clap::{arg, Parser as _, Subcommand};
 use futures::StreamExt;
 use log::info;
 use nix::sys::utsname::uname;
@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::{env, str};
 use tokio::{select, signal};
 use tokio_util::sync::CancellationToken;
+use util::DisplayablePathBuf;
 
 use crate::git::Worktree;
 
@@ -54,12 +55,34 @@ struct WatchArgs {
     /// to 0 to let the OS pick a port for us.
     #[arg(long, default_value_t = {"0.0.0.0:0".to_string()})]
     http_sockaddr: String,
-    #[command(flatten)]
-    runtime_default: RuntimeDefaultArgs,
+    /// Directory where results will be stored.
+    #[arg(long, default_value_t = default_result_db())]
+    result_db: DisplayablePathBuf,
+    /// Hostname to use for HTTP URLs
+    #[arg(long, default_value_t = default_hostname())]
+    hostname: String,
     /// Base of range to test. Will test commits between this (exclusive) and
     /// HEAD (inclusive). Whenever HEAD changes, this string will be re-evaluated
     /// to find the base of the range.
     base: String,
+}
+
+fn default_result_db() -> DisplayablePathBuf {
+    DisplayablePathBuf(
+        directories::ProjectDirs::from("", "", "local-ci")
+            .expect("couldn't find user data dir")
+            .data_local_dir()
+            .to_owned(),
+    )
+}
+
+fn default_hostname() -> String {
+    uname()
+        .expect("couldn't get nodename")
+        .nodename()
+        .to_owned()
+        .into_string()
+        .expect("hostname wasn't utf-8")
 }
 
 #[derive(Subcommand)]
@@ -67,77 +90,6 @@ enum Command {
     /// The main command. Watch a repository and run tests whenever the revision
     /// ranges changes.
     Watch(WatchArgs),
-}
-
-// Clap's derive API doesn't support argument defaults that depend on runtime
-// computation. We don't wanna drop that API completely so
-// we use the tricks from
-// https://docs.rs/clap/latest/clap/_derive/index.html#flattening-hand-implemented-args-into-a-derived-application
-// to combine the derive and builder APIs.
-// This builder-API based part seems increadibly verbose,
-// I think there's very likely a less ridiculous way to write it
-// but I've been too lazy to figure it out.
-struct RuntimeDefaultArgs {
-    /// Directory where results will be stored.
-    result_db: PathBuf,
-    /// Hostname to use for HTTP URLs
-    hostname: String,
-}
-
-// IIUC this enormous repetitive pain is all to take the parsed arguments and
-// put them into the RuntimeDefaultArgs struct that we flatten into the derive'd
-// struct above.
-impl FromArgMatches for RuntimeDefaultArgs {
-    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
-        let mut matches = matches.clone();
-        Self::from_arg_matches_mut(&mut matches)
-    }
-    fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::Error> {
-        Ok(Self {
-            result_db: matches.get_one::<PathBuf>("result-db").unwrap().to_owned(),
-            hostname: matches.get_one::<String>("hostname").unwrap().to_owned(),
-        })
-    }
-    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
-        let mut matches = matches.clone();
-        self.update_from_arg_matches_mut(&mut matches)
-    }
-    fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), clap::Error> {
-        self.result_db = matches.get_one::<PathBuf>("result-db").unwrap().to_owned();
-        Ok(())
-    }
-}
-
-// This is where we actually define the arguments with dynamic defaults.
-impl clap::Args for RuntimeDefaultArgs {
-    fn augment_args(cmd: clap::Command) -> clap::Command {
-        let default_db = Box::leak(Box::new(
-            directories::ProjectDirs::from("", "", "local-ci")
-                .expect("couldn't find user data dir")
-                .data_local_dir()
-                .to_owned(),
-        ));
-        let default_hostname = Box::leak(Box::new(
-            uname()
-                .expect("couldn't get nodename")
-                .nodename()
-                .to_owned(),
-        ));
-        cmd.arg(
-            Arg::new("result-db")
-                .long("result-db")
-                .value_parser(value_parser!(PathBuf))
-                .default_value(default_db.to_str()),
-        )
-        .arg(
-            Arg::new("hostname")
-                .long("hostname")
-                .default_value(default_hostname.to_str()),
-        )
-    }
-    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
-        Self::augment_args(cmd)
-    }
 }
 
 async fn watch(
@@ -152,10 +104,7 @@ async fn watch(
         .local_addr()
         .expect("couldn't get local HTTP address")
         .port();
-    tokio::spawn(http::serve_dir(
-        listener,
-        watch_args.runtime_default.result_db.clone(),
-    ));
+    tokio::spawn(http::serve_dir(listener, (*watch_args.result_db).clone()));
 
     let repo = git::PersistentWorktree {
         path: args.repo.to_owned().into(),
@@ -165,20 +114,14 @@ async fn watch(
         .await
         .context(format!("opening repo {}", args.repo))?;
     let repo = Arc::new(repo);
-    let manager_builder = config::manager_builder(
-        repo.clone(),
-        &watch_args.runtime_default.result_db,
-        &args.config,
-    )?
-    .worktree_prefix(&watch_args.worktree_prefix)
-    .worktree_dir(&watch_args.worktree_dir);
+    let manager_builder =
+        config::manager_builder(repo.clone(), &watch_args.result_db, &args.config)?
+            .worktree_prefix(&watch_args.worktree_prefix)
+            .worktree_dir(&watch_args.worktree_dir);
     let mut test_manager = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", watch_args.base).into();
     let mut notifs = test_manager.results();
-    let result_url_base = format!(
-        "http://{}:{}",
-        watch_args.runtime_default.hostname, http_port
-    );
+    let result_url_base = format!("http://{}:{}", watch_args.hostname, http_port);
     let mut status_tracker = status::Tracker::new(repo.clone(), stdout(), result_url_base);
     let mut revs_stream = repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
