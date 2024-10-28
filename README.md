@@ -25,6 +25,20 @@ Bugs (high to low priority):
    I'm able to reproduce it and see the `-x` output of the test scripts but they
    don't make any sense to me, I got stuck and decided to work on something
    else.
+ - Sometimes I see issues where my `git clean -fdx` command at the beginning of
+   my test script fails like `fatal: Cannot lstat
+   'arch/x86/platform/intel/.iosf_mbi.o.d': No such file or directory`.
+
+   I've looked into one case where I see this happen, and I observed that the
+   prior user of the workspace had been a make command that got cancelled, and
+   the cancellation timed out.
+
+   Could the issue just be that when you `SIGKILL` make (which is what happens
+   when cancellation times out), it leaks child processes? What can we do about
+   that - try to block until all child processes of the job we ran have
+   terminated?
+
+   Hacky temporary fix: massively increase timeout before we SIGKILL.
  - Sometimes the system gets gummed up, I'm not sure if this is just a
    status reporting issue or if the system stops making progress at at all.
    Probably should fix all the simpler bugs first then look into this some more.
@@ -61,7 +75,11 @@ Needed features (high to low priority):
    configuration to adopt the error reporting, and in that case the cache would
    be invalidated anyway. But, also need to consider cases where something was
    wrong in the host system)
- - Need timeouts!
+ - Need to make it clear what's going on when startup/shutdown is being slow.
+ - Need timeouts! (There is a shutdown grace period, so we don't just leak
+   resources if tests get stuck forever, they'll get cancelled when te user needs
+   to run a new test. But we should also notify the user if they don't seem to
+   be getting any test results.)
  - Support saving artifacts so the user can reuse or analyze them later.
  - Probably want a (default?) option to merge stderr and stdout.
  - Fix output format, probably have to implement a pager in `ratatui`.
