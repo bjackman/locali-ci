@@ -634,7 +634,7 @@ impl Drop for ChildDropGuard {
             None => return, // Must already have shut down.
             Some(p) => Pid::from_raw(p.try_into().unwrap()),
         };
-        killpg(pid, Signal::SIGINT).or_log_error("SIGKILLing child process group");
+        killpg(pid, Signal::SIGKILL).or_log_error("SIGKILLing child process group");
     }
 }
 
