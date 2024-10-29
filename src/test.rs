@@ -23,7 +23,7 @@ use log::debug;
 use log::error;
 use log::info;
 use log::warn;
-use nix::sys::signal::{kill, killpg, Signal};
+use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use serde::Deserialize;
 use serde::Serialize;
@@ -120,8 +120,14 @@ impl Test {
     fn command(&self) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
-        // Separate process group means the child doesn't get SIGINT if the user
-        // Ctrl-C's the terminal.
+        // We want the test process to be its process group leader for two reasons:
+        // - We don't want it to get SIGINTed when the user shuts down local-ci,
+        //   in that case we want our graceful and bugless shutdown procedure to
+        //   SIGTERM it, so it can use its own graceful and bugless shutdown
+        //   procedure just like it does when jobs get cancelled as normal.
+        // - We wanna be able to killpg it, lol, because that seems to be the
+        //   most convenient way to shut down scripts...? I dunno, man, not sure
+        //   if that's a good idea.
         cmd.process_group(0);
         // Ensure we don't pass random nonsense to the test command and create
         // confusing behaviour. This is kinda annoying because IIUC this gives
@@ -761,7 +767,7 @@ impl<'a> TestJob {
             Either::Right((_, child_fut)) => {
                 // Canceled. Shut down the process if necessary.
                 if let Some(pid) = pid {
-                    kill(pid, Signal::SIGTERM).or_log_error("SIGTERMing child process");
+                    killpg(pid, Signal::SIGTERM).or_log_error("SIGTERMing child process");
                 }
                 // We don't care about its result but we
                 // need to wait for it to shut down so that we can safely give back the
@@ -1170,7 +1176,7 @@ mod tests {
         // script to "fail with an error". This preferable to SIGKILL because
         // that will prevent the underlying script from performing its cleanup.
         pub fn sigsegv(&self) {
-            kill(self.pid, Signal::SIGSEGV).expect("couldn't SIGSEGV test script");
+            killpg(self.pid, Signal::SIGSEGV).expect("couldn't SIGSEGV test script");
         }
 
         // Forget "started" state so that TestScript::started can usefully be called again.

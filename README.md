@@ -111,6 +111,16 @@ Needed features (high to low priority):
  - (Nice to have: avoid creating worktrees if they aren't actually to be used).
  - (Nice to have: let jobs that don't need worktrees start before worktrees are ready).
 
+Probably sketchy design choices:
+
+ - Test scripts are shut down by sending `SIGTERM` to the _whole process group_.
+   The rationale for this is that it's kinda annoying to write a bash script
+   that actually shuts down cleanly on `SIGTERM` otherwise - if you do any
+   background stuff then it will just leak.
+
+   I think this is probably just a symptom of me not really knowing how to do
+   Unix programming properly, I dunno. It probably needs to change.
+
 My janky test command:
 
 ```
