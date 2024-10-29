@@ -775,7 +775,7 @@ impl<'a> TestJob {
                             "timeout for {:?}, SIGKILLing whole process group",
                             self.test_case.test.name
                         );
-                        killpg(pid.expect("timed out, but no child PID"), Signal::SIGINT)
+                        killpg(pid.expect("timed out, but no child PID"), Signal::SIGKILL)
                             .or_log_error("SIGKILLing child process group");
                         // To be sure to be sure, we'll also wait and make sure
                         // the child is really dead.
