@@ -1214,7 +1214,7 @@ mod tests {
         while !want.is_empty() {
             let notif = select!(
                 _ = sleep_until(timeout) => {
-                    bail!("timeout after 5s, remaining results:\n{}",
+                    bail!("timeout after 10s, remaining results:\n{}",
                         dump_want_statuses(&want));
                 },
                 output = results.recv() => {
