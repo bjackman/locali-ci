@@ -634,6 +634,7 @@ impl Drop for ChildDropGuard {
             None => return, // Must already have shut down.
             Some(p) => Pid::from_raw(p.try_into().unwrap()),
         };
+        error!("SIGKILLing child process group, Rust object dropped unexpectedly");
         killpg(pid, Signal::SIGKILL).or_log_error("SIGKILLing child process group");
     }
 }
@@ -703,7 +704,7 @@ impl<'a> TestJob {
         self.run(worktree.path(), resources).await
     }
 
-    // Returns Ok(None) when canceled.
+    // Returns Ok(None) when canceled. Does not return until the child process has shut down.
     async fn run(
         &mut self,
         current_dir: &Path,
@@ -731,6 +732,9 @@ impl<'a> TestJob {
                 cmd = cmd.env(format!("LCI_RESOURCE_{}_{}", resource_name, i), token);
             }
         }
+        // It would be really confusing and annoying if we exited this function
+        // without ensuring the child is dead. So we wrap it in this sketchy
+        // drop guard thing.
         let mut child = ChildDropGuard(cmd.spawn().context("spawning test command")?);
         // Grab the PID now if we can, since it's a pain to look it up later for
         // silly Rust reasons. If no PID is found we just carry on assuming the
