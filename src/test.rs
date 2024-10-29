@@ -1171,11 +1171,11 @@ mod tests {
             .await;
         }
 
-        // Send SIGSEGV to the instance of the script. Use this if you want the
+        // Send SIGUSR1 to the instance of the script. Use this if you want the
         // script to "fail with an error". This preferable to SIGKILL because
         // that will prevent the underlying script from performing its cleanup.
-        pub fn sigsegv(&self) {
-            killpg(self.pid, Signal::SIGSEGV).expect("couldn't SIGSEGV test script");
+        pub fn sigurs1(&self) {
+            killpg(self.pid, Signal::SIGUSR1).expect("couldn't SIGUSR1 test script");
         }
 
         // Forget "started" state so that TestScript::started can usefully be called again.
@@ -1927,12 +1927,12 @@ mod tests {
         // this whole tool considers it an "error" when a test exits with a
         // signal instead of exiting with a nonzero code.
         let started_script = f.scripts[0].started(&hash_error).await;
-        started_script.sigsegv();
+        started_script.sigurs1();
         expect_notifs_10s(
             &mut results,
             [(
                 f.test_case(&hash_error, 0).await,
-                vec![TestStatus::Error(String::from("terminated by signal 11"))].into(),
+                vec![TestStatus::Error(String::from("terminated by signal 10"))].into(),
             )],
         )
         .await
