@@ -217,7 +217,7 @@ fn pid_running(pid: pid_t) -> bool {
 async fn shouldnt_leak_jobs() {
     let temp_dir = TempDir::new().unwrap();
 
-    // This config has a test that does not respect SIGINT. We should not leak
+    // This config has a test that does not respect SIGTERM. We should not leak
     // that job.
     let mut lci = LocalCiChildBuilder::new()
         .await

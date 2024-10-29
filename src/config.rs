@@ -86,7 +86,7 @@ pub struct Test {
     requires_worktree: bool,
     resources: Option<Vec<Resource>>,
     #[serde(default = "default_shutdown_grace_period")]
-    /// When a job is no longer needed it's SIGINTed. If it doesn't respond (by
+    /// When a job is no longer needed it's SIGTERMed. If it doesn't respond (by
     /// dying) after this duration it will then be SIGKILLed. This also affects
     /// the overall shutdown of local-ci so do not set this to longer than you are
     /// willing to wait when you terminate this program.

@@ -761,7 +761,7 @@ impl<'a> TestJob {
             Either::Right((_, child_fut)) => {
                 // Canceled. Shut down the process if necessary.
                 if let Some(pid) = pid {
-                    kill(pid, Signal::SIGINT).or_log_error("SIGINTing child process");
+                    kill(pid, Signal::SIGTERM).or_log_error("SIGTERMing child process");
                 }
                 // We don't care about its result but we
                 // need to wait for it to shut down so that we can safely give back the
@@ -947,13 +947,13 @@ mod tests {
         const PID_FILENAME_PREFIX: &'static str = "pid.";
         // Each time the script gets started it echoes a line to this file.
         const RUN_COUNT_FILENAME_PREFIX: &'static str = "runs.";
-        const SIGINTED_FILENAME_PREFIX: &'static str = "siginted.";
+        const SIGTERMED_FILENAME_PREFIX: &'static str = "sigtermed.";
         const LOCK_FILENAME: &'static str = "lockfile";
         const BUG_DETECTED_PATH: &'static str = "bug_detected";
 
         // If this appears in the commit message , the test script will block
-        // until SIGINTed, otherwise it terminates immediately. When receiving
-        // SIGINT the value depends on whether you include the results of
+        // until SIGTERMed, otherwise it terminates immediately. When receiving
+        // SIGTERM the value depends on whether you include the results of
         // exit_code_tag(). If yes, it exits with that code, otherwise it is
         // terminated directly by the signal (the latter is considered an
         // "error" by local-ci).
@@ -971,9 +971,9 @@ mod tests {
         // be destroyed on drop.
         pub fn new(test_name: TestName, use_lockfile: bool) -> Self {
             let dir = TempDir::with_prefix("test-script-").expect("couldn't make tempdir");
-            // The script will touch a special file to notify us that it has been started. On
-            // receiving SIGINT it touches a nother special file. Then if Terminate::Never it blocks
-            // forever.
+            // The script will touch a special file to notify us that it has
+            // been started. On receiving SIGTERM it touches a nother special
+            // file. Then if Terminate::Never it blocks forever.
             //
             // The "lockfile" lets us detect if the worktree gets assigned to multiple script
             // instances at once. We would ideally actually do this with flock but it turns out to
@@ -993,15 +993,15 @@ mod tests {
             let script = format!(
                 "commit_msg=\"$(git log -n1 --format=%B $LCI_COMMIT)\"
                 exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
-                on_sigint() {{
-                    touch {siginted_path_prefix:?}$(git rev-parse $LCI_COMMIT)
+                on_sigterm() {{
+                    touch {sigtermed_path_prefix:?}$(git rev-parse $LCI_COMMIT)
                     exit ${{exit_code:-0}}
                 }}
-                trap on_sigint SIGINT
+                trap on_sigterm SIGTERM
 
                 # Write then move, to make populated file appear atomically.
                 # Note also we mustn't make the PID file visible until after we
-                # have installed the SIGINT trap - see the comment on
+                # have installed the  trap - see the comment on
                 # StartedTestScript::siginted.
                 pid_file=$(mktemp)
                 echo $$ >> $pid_file
@@ -1018,7 +1018,7 @@ mod tests {
                     touch ./{lock_filename:?}
                 fi
                 if [[ \"$commit_msg\" =~ {block_tag} ]]; then
-                    # sleep is not a builtin so we won't handle SIGINT while
+                    # sleep is not a builtin so we won't handle SIGTERM while
                     # that's running. Hack suggested by ChatGPT: just spawn it
                     # then use wait, which is a builtin.
                     sleep infinity &
@@ -1029,7 +1029,7 @@ mod tests {
                 ",
                 run_count_path_prefix = dir.path().join(Self::RUN_COUNT_FILENAME_PREFIX),
                 pid_path_prefix = dir.path().join(Self::PID_FILENAME_PREFIX),
-                siginted_path_prefix = dir.path().join(Self::SIGINTED_FILENAME_PREFIX),
+                sigtermed_path_prefix = dir.path().join(Self::SIGTERMED_FILENAME_PREFIX),
                 lock_filename = if use_lockfile { Self::LOCK_FILENAME } else { "" },
                 bug_detected_path = dir.path().join(Self::BUG_DETECTED_PATH),
                 block_tag = Self::BLOCK_COMMIT_MSG_TAG,
@@ -1153,24 +1153,24 @@ mod tests {
     }
 
     impl<'a> StartedTestScript<'a> {
-        // Blocks until the script has received a SIGINT.
+        // Blocks until the script has received a SIGTERM.
         // Note this is only available on StartedTestScript, because we cannot
-        // reliably receive notifications of the script getting SIGINTED unless
-        // we know that the script was able to get its SIGINT trap installed
+        // reliably receive notifications of the script getting SIGTERMed unless
+        // we know that the script was able to get its SIGTERM trap installed
         // before it got signalled.
-        pub async fn siginted(&self) {
+        pub async fn sigtermed(&self) {
             path_exists(
                 self.script
-                    .signalling_path(TestScript::SIGINTED_FILENAME_PREFIX, &self.hash),
+                    .signalling_path(TestScript::SIGTERMED_FILENAME_PREFIX, &self.hash),
             )
             .await;
         }
 
-        // SIGTERM the instance of the script. Use this if you want the script
-        // to "fail with an error". This preferable to SIGKILL because that will
-        // prevent the underlying script from performing its cleanup.
-        pub fn sigterm(&self) {
-            kill(self.pid, Signal::SIGTERM).expect("couldn't SIGTERM test script");
+        // Send SIGSEGV to the instance of the script. Use this if you want the
+        // script to "fail with an error". This preferable to SIGKILL because
+        // that will prevent the underlying script from performing its cleanup.
+        pub fn sigsegv(&self) {
+            kill(self.pid, Signal::SIGSEGV).expect("couldn't SIGSEGV test script");
         }
 
         // Forget "started" state so that TestScript::started can usefully be called again.
@@ -1462,7 +1462,7 @@ mod tests {
         timeout_5s(join_all(
             started_hash1
                 .iter()
-                .map(|s: &StartedTestScript| s.siginted()),
+                .map(|s: &StartedTestScript| s.sigtermed()),
         ))
         .await
         .expect("hash1 tests did not all get siginted");
@@ -1879,8 +1879,8 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         // This commit's tests will shut down with an error exit-code if
-        // SIGINTED which is normally a test failure. But this should not be
-        // cached if the SIGINT was due to the job being canceled.
+        // SIGTERMed which is normally a test failure. But this should not be
+        // cached if the SIGTERM was due to the job being canceled.
         let mut commit_msg = OsString::from(TestScript::BLOCK_COMMIT_MSG_TAG);
         commit_msg.push(TestScript::exit_code_tag(1));
         let hash_fail = f
@@ -1922,12 +1922,12 @@ mod tests {
         // this whole tool considers it an "error" when a test exits with a
         // signal instead of exiting with a nonzero code.
         let started_script = f.scripts[0].started(&hash_error).await;
-        started_script.sigterm();
+        started_script.sigsegv();
         expect_notifs_10s(
             &mut results,
             [(
                 f.test_case(&hash_error, 0).await,
-                vec![TestStatus::Error(String::from("terminated by signal 15"))].into(),
+                vec![TestStatus::Error(String::from("terminated by signal 11"))].into(),
             )],
         )
         .await
