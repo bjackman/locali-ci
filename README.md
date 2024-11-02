@@ -8,6 +8,11 @@ at background priorities other than `SCHED_IDLE` you'll need to work around that
 - the man page gives an example of running `echo 10 > /proc/self/autogroup` to
 set `nice 10` for the current shell.
 
+To run the tests very hard, follow
+[this](https://askubuntu.com/questions/162229/how-do-i-increase-the-open-files-limit-for-a-non-root-user)
+then run `ulimit -Sn 524288` to embiggen the file descriptor limit. Now you can
+try using `cargo-stress`.
+
 Bugs (high to low priority):
 
  - Tests don't work on my work computer. I think this is because I made false
