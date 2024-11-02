@@ -61,10 +61,12 @@ impl<I: Debug> Error for DagError<I> {}
 
 impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
     // TODO: unit test this.
-    pub fn new(nodes: Vec<G>) -> Result<Self, DagError<I>>
+    pub fn new(nodes: impl IntoIterator<Item = G>) -> Result<Self, DagError<I>>
     where
         G: GraphNode<I>,
     {
+        let nodes: Vec<G> = nodes.into_iter().collect();
+
         // We eventually wanna have a vector and just index it by an integer, so
         // start by mapping the arbitrary "node IDs" to vec indexes.
         // At this point we also reject duplicates (this is why we don't just
