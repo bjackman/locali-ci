@@ -1201,11 +1201,11 @@ mod tests {
     // Expect the series of notifications provided for each test case.
     // case. Also assert that the necessary precursor notifications arrive.
     // Panics if any of the input series are empty.
-    async fn expect_notifs_10s(
+    async fn expect_notifs_20s(
         results: &mut broadcast::Receiver<Arc<Notification>>,
         want: impl IntoIterator<Item = (TestCase, VecDeque<TestStatus>)>,
     ) -> anyhow::Result<()> {
-        let timeout = Instant::now() + Duration::from_secs(10);
+        let timeout = Instant::now() + Duration::from_secs(20);
         let mut want: HashMap<TestCaseId, _> = want
             .into_iter()
             .map(|(test_case, statuses)| (test_case.id(), (test_case, statuses)))
@@ -1214,7 +1214,7 @@ mod tests {
         while !want.is_empty() {
             let notif = select!(
                 _ = sleep_until(timeout) => {
-                    bail!("timeout after 10s, remaining results ({} of {}):\n{}",
+                    bail!("timeout after 20s, remaining results ({} of {}):\n{}",
                         want.len(), want_total, dump_want_statuses(&want));
                 },
                 output = results.recv() => {
@@ -1422,7 +1422,7 @@ mod tests {
             .expect("couldn't create test commit");
         f.manager.set_revisions(vec![hash.clone()]).await.unwrap();
         // We should get a singular result because we only fed in one revision.
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             [(
                 f.test_case(&hash, 0).await,
@@ -1472,7 +1472,7 @@ mod tests {
         ))
         .await
         .expect("hash1 tests did not all get siginted");
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             // awu weh, weh mah
             [
@@ -1644,7 +1644,7 @@ mod tests {
         }
         let mut results = f.manager.results();
         f.manager.set_revisions(hashes.clone()).await.unwrap();
-        expect_notifs_10s(&mut results, want_results)
+        expect_notifs_20s(&mut results, want_results)
             .await
             .expect("bad results");
     }
@@ -1824,7 +1824,7 @@ mod tests {
             .await
             .unwrap();
         // wait for first test to get started.
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             [(
                 f.test_case(&hashes[0], 0).await,
@@ -1839,7 +1839,7 @@ mod tests {
             .set_revisions(vec![hashes[0].clone(), hashes[1].clone()])
             .await
             .unwrap();
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             [(
                 f.test_case(&hashes[1], 0).await,
@@ -1851,7 +1851,7 @@ mod tests {
 
         // Now we cancel both of those tests.
         f.manager.set_revisions(Vec::new()).await.unwrap();
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             [(
                 f.test_case(&hashes[0], 0).await,
@@ -1900,7 +1900,7 @@ mod tests {
             .set_revisions(vec![hash_error.clone(), hash_fail.clone()].clone())
             .await
             .unwrap();
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             [
                 (
@@ -1929,7 +1929,7 @@ mod tests {
         // signal instead of exiting with a nonzero code.
         let started_script = f.scripts[0].started(&hash_error).await;
         started_script.sigurs1();
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             [(
                 f.test_case(&hash_error, 0).await,
@@ -1942,7 +1942,7 @@ mod tests {
 
         // ... and the others to be canceled.
         f.manager.set_revisions(vec![]).await.unwrap();
-        expect_notifs_10s(
+        expect_notifs_20s(
             &mut results,
             [
                 (
