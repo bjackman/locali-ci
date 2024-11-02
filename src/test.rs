@@ -996,7 +996,16 @@ mod tests {
             // does something weird like run its handler and then signal itself
             // again.
             let script = format!(
-                "commit_msg=\"$(git log -n1 --format=%B $LCI_COMMIT)\"
+                "
+                # I dunno this is a desperate attempt to debug this crap, set -x doesn't seem
+                # to place nicely enough with traps and shit. But this also
+                # dumps a bunch of NULs to stderr. WTF.
+                debug() {{
+                    echo \"$BASH_COMMAND\" | tr -d '\\000' >&2
+                }}
+                trap debug DEBUG
+
+                commit_msg=\"$(git log -n1 --format=%B $LCI_COMMIT)\"
                 exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
                 on_sigterm() {{
                     touch {sigtermed_path_prefix:?}$(git rev-parse $LCI_COMMIT)
@@ -1354,7 +1363,8 @@ mod tests {
                     TestScript::new(TestName::new(format!("test_{i}")), self.needs_worktree[i])
                 })
                 .collect();
-            let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
+            let db_dir =
+                TempDir::with_prefix("result-db-").expect("couldn't make temp dir for result DB");
             let tests = izip!(
                 0..self.num_tests,
                 &scripts,
