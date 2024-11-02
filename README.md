@@ -30,6 +30,10 @@ Bugs (high to low priority):
    I'm able to reproduce it and see the `-x` output of the test scripts but they
    don't make any sense to me, I got stuck and decided to work on something
    else.
+
+   OK update, I can't reproduce it like that now that I fixed a bunch of related
+   bugs, but I still sometimes can with `cargo stress`. I don't fukken know this
+   is driving me mad.
  - Sometimes I see issues where my `git clean -fdx` command at the beginning of
    my test script fails like `fatal: Cannot lstat
    'arch/x86/platform/intel/.iosf_mbi.o.d': No such file or directory`.
