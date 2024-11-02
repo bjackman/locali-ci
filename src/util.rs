@@ -9,6 +9,9 @@ use std::{
     str::FromStr,
 };
 
+#[allow(unused_imports)]
+use log::debug;
+
 use anyhow::bail;
 
 // TODO: It's annoying that users of this have to explicitly specify the ID type
@@ -35,7 +38,7 @@ pub struct Dag<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
     root_idxs: Vec<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum DagError<I> {
     // Two nodes had the same ID
     DuplicateId(I),
@@ -118,12 +121,12 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
             // node's child.
             root_idxs: &mut HashSet<usize>,
         ) -> Option<usize> {
+            if visited_stack.contains(&start_idx) {
+                return Some(start_idx);
+            }
             if visited.contains(&start_idx) {
                 // Already explored from this node and found no cycles.
                 return None;
-            }
-            if visited_stack.contains(&start_idx) {
-                return Some(start_idx);
             }
             visited.insert(start_idx);
             visited_stack.insert(start_idx);
@@ -284,5 +287,50 @@ impl Deref for DisplayablePathBuf {
 
     fn deref(&self) -> &PathBuf {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    use super::*;
+
+    struct TestGraphNode {
+        id: usize,
+        child_ids: Vec<usize>,
+    }
+
+    impl GraphNode<usize> for TestGraphNode {
+        fn id(&self) -> &usize {
+            &self.id
+        }
+
+        fn child_ids(&self) -> &Vec<usize> {
+            &self.child_ids
+        }
+    }
+
+    fn nodes(edges: impl IntoIterator<Item = Vec<usize>>) -> Vec<TestGraphNode> {
+        edges
+            .into_iter()
+            .enumerate()
+            .map(|(id, child_ids)| TestGraphNode { id, child_ids })
+            .collect()
+    }
+
+    #[test_case(vec![], None; "empty")]
+    #[test_case(nodes([vec![1], vec![]]), None; "one edge")]
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![]]), None; "tree")]
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![],
+                       vec![5], vec![6, 7], vec![], vec![]]), None; "trees")]
+    #[test_case(nodes([vec![0]]), Some(DagError::Cycle(0)); "self-link")]
+    // Note we don't actually care that the Cycle is reported on node 0, but
+    // luckily that's stable behaviour so it's just easy to assert it that way.
+    #[test_case(nodes([vec![1], vec![2], vec![3], vec![0]]), Some(DagError::Cycle(0)); "a loop")]
+    #[test_case(nodes([vec![1]]), Some(DagError::NoSuchChild{parent: 0, child: 1}); "no child")]
+    #[test_log::test]
+    fn test_graph_validity(edges: Vec<TestGraphNode>, want_err: Option<DagError<usize>>) {
+        assert_eq!(Dag::new(edges).err(), want_err);
     }
 }
