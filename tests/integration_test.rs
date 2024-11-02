@@ -1,13 +1,17 @@
 use std::{
-    fs::{self, create_dir, remove_file},
+    fs::{self, create_dir, remove_file, File},
+    io::{BufRead as _, BufReader},
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     str::FromStr,
+    thread::panicking,
     time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context as _};
 use glob::glob;
+#[allow(unused_imports)]
+use log::{debug, info};
 use nix::{
     libc::pid_t,
     sys::signal::{kill, Signal},
@@ -59,8 +63,7 @@ struct LocalCiChildBuilder {
 
 impl LocalCiChildBuilder {
     async fn new() -> anyhow::Result<Self> {
-        let temp_dir = TempDir::new()?;
-
+        let temp_dir = TempDir::with_prefix("lci-child")?;
         Command::new("git")
             .stderr(Stdio::null())
             .stdout(Stdio::null())
@@ -96,6 +99,8 @@ impl LocalCiChildBuilder {
         let worktree_dir = self.temp_dir.path().join("worktrees");
         create_dir(&worktree_dir).unwrap();
 
+        let stderr = File::create(self.temp_dir.path().join("stderr.txt"))?;
+
         let mut cmd: Command = get_test_bin("local-ci").into();
         let cmd = cmd
             .args([
@@ -113,6 +118,7 @@ impl LocalCiChildBuilder {
                 self.db_dir.to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
+            .stderr(stderr)
             .stdout(Stdio::null())
             .kill_on_drop(true);
         let mut child = cmd.spawn().unwrap();
@@ -130,6 +136,34 @@ impl LocalCiChildBuilder {
 struct LocalCiChild {
     temp_dir: TempDir,
     child: Child,
+}
+
+impl Drop for LocalCiChild {
+    fn drop(&mut self) {
+        if panicking() {
+            // Hack: when running tests via cargo-stress, there's no convenient
+            // way to get stderr of the test process, let alone of its
+            // subprocesses. So just dump the child's stderr to stdout when
+            // we're panicking.
+            let file = match File::open(self.temp_dir.path().join("stderr.txt")) {
+                // Don't panic while panicking, it's messy
+                Err(err) => {
+                    eprintln!("Failed to open stderr file while panicking: {}", err);
+                    return;
+                }
+                Ok(file) => file,
+            };
+            eprintln!("Panic happening, assuming its a test failure, dumping child stderr.");
+            let reader = BufReader::new(file);
+            // Read the file line-by-line and print each line
+            for line in reader.lines() {
+                println!(
+                    "{}",
+                    line.unwrap_or_else(|e| format!("<read error: {}>", e))
+                );
+            }
+        }
+    }
 }
 
 trait ExitStatusExt {
