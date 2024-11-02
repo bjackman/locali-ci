@@ -13,10 +13,10 @@ use serde::Deserialize;
 use crate::{
     resource::ResourceKey,
     test::{self, CachePolicy, TestName},
-    util::{visit_all, GraphNode},
+    util::{visit_all, Dag, GraphNode},
 };
 
-#[derive(Deserialize, Debug, Hash)]
+#[derive(Deserialize, Debug, Hash, Clone)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum Resource {
@@ -48,7 +48,7 @@ impl Resource {
     }
 }
 
-#[derive(Deserialize, Debug, Hash)]
+#[derive(Deserialize, Debug, Hash, Clone)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum Command {
@@ -72,7 +72,7 @@ impl Command {
     }
 }
 
-#[derive(Deserialize, Debug, Hash)]
+#[derive(Deserialize, Debug, Hash, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Test {
     name: String,
@@ -204,7 +204,7 @@ impl Config {
     }
 
     pub fn parse_tests(&self, resource_tokens: &ResourceTokens) -> anyhow::Result<Vec<test::Test>> {
-        // Parse all the tests, with reference to the named resource idxs.
+        let _tests = Dag::new(self.tests.clone());
         let tests = (0..self.tests.len())
             .map(|i| Test::parse(&self.tests, i))
             .collect::<anyhow::Result<Vec<_>>>()?;

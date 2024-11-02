@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
-    fmt::{Display, Formatter},
+    fmt::{Debug, Display, Formatter},
     hash::Hash,
     ops::Deref,
     path::PathBuf,
@@ -15,6 +15,107 @@ pub trait GraphNode<I: Hash + Eq + Clone> {
     fn id(&self) -> &I;
     // IDs of nodes that have an edge from this node to that node.
     fn child_ids(&self) -> &Vec<I>;
+}
+
+// Ajacency-list for a directed acyclic "graph" (dunno maybe incorrect
+// terminology, it doesn't make any promises about connectedness so it might be
+// zero or several actual "graphs"), where nodes are identified with a usize.
+pub struct Dag<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
+    _nodes: Vec<G>,
+    // maps ids that nodes know about themselves to their index in `nodes`.
+    _id_to_idx: HashMap<I, usize>,
+    // edges[i] contains the destinations of the edges originating from node i.
+    _edges: Vec<Vec<usize>>,
+}
+
+pub enum DagError<I> {
+    // Two nodes had the same ID
+    DuplicateId(I),
+    // Node identified by `parent` referred to `child`, but the latter didn't exist.
+    NoSuchChild { _parent: I, _child: I },
+    // A cycle existed containing the node with this ID,
+    Cycle(I),
+}
+
+impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
+    // TODO: unit test this.
+    pub fn new(nodes: Vec<G>) -> Result<Self, DagError<I>>
+    where
+        G: GraphNode<I>,
+    {
+        // We eventually wanna have a vector and just index it by an integer, so
+        // start by mapping the arbitrary "node IDs" to vec indexes.
+        // At this point we also reject duplicates (this is why we don't just
+        // wanna use `ollect`).
+        let mut id_to_idx = HashMap::new();
+        for (idx, node) in nodes.iter().enumerate() {
+            let id = node.id();
+            if id_to_idx.contains_key(id) {
+                return Err(DagError::DuplicateId(id.clone()));
+            }
+            id_to_idx.insert(id.clone(), idx);
+        }
+
+        // Now build the adjacency list.
+        let mut edges = Vec::new();
+        for (idx, node) in nodes.iter().enumerate() {
+            if idx >= edges.len() {
+                edges.resize(idx + 1, Vec::new())
+            }
+            for child_id in node.child_ids() {
+                let child_idx = id_to_idx
+                    .get(child_id)
+                    .ok_or_else(|| DagError::NoSuchChild {
+                        _parent: node.id().clone(),
+                        _child: child_id.clone(),
+                    })?;
+                edges[idx].push(*child_idx);
+            }
+        }
+
+        // Check there are no cycles.
+        // This set is just used to avoid duplicating work.
+        let mut visited: HashSet<usize> = HashSet::new();
+        // This one actually detects cycles.
+        let mut visited_stack: HashSet<usize> = HashSet::new();
+        // This is a bit annoying in Rust because you cannot capture
+        // environments into a named function but you cannot recurse into a
+        // closure, so we just have to pass everything through args explicitly.
+        fn find_cycle(
+            visited: &mut HashSet<usize>,
+            visited_stack: &mut HashSet<usize>,
+            start_idx: usize,
+            edges: &Vec<Vec<usize>>,
+        ) -> Option<usize> {
+            if visited.contains(&start_idx) {
+                // Already explored from this node and found no cycles.
+                return None;
+            }
+            if visited_stack.contains(&start_idx) {
+                return Some(start_idx);
+            }
+            visited.insert(start_idx);
+            visited_stack.insert(start_idx);
+            for child in &edges[start_idx] {
+                if let Some(i) = find_cycle(visited, visited_stack, *child, edges) {
+                    return Some(i);
+                }
+            }
+            visited_stack.remove(&start_idx);
+            None
+        }
+        for i in 0..edges.len() {
+            if let Some(node_in_cycle) = find_cycle(&mut visited, &mut visited_stack, i, &edges) {
+                return Err(DagError::Cycle(nodes[node_in_cycle].id().clone()));
+            }
+        }
+
+        Ok(Self {
+            _nodes: nodes,
+            _edges: edges,
+            _id_to_idx: id_to_idx,
+        })
+    }
 }
 
 // Starting from the node at start_idx, visit all connected nodes and call f.
