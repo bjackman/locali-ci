@@ -1,5 +1,6 @@
 use core::fmt;
 use std::{
+    borrow::Borrow,
     collections::{HashMap, HashSet},
     error::Error,
     fmt::{Debug, Display, Formatter},
@@ -18,9 +19,9 @@ use log::debug;
 // much less flexible back then, so could still be worh exploring.
 pub trait GraphNode<I: Hash + Eq + Clone> {
     // Identifier for a node, unique among nodes in the set under consideration.
-    fn id(&self) -> &I;
+    fn id(&self) -> impl Borrow<I>;
     // IDs of nodes that have an edge from this node to that node.
-    fn child_ids(&self) -> Vec<&I>;
+    fn child_ids(&self) -> Vec<impl Borrow<I>>;
 }
 
 // Ajacency-list for a directed acyclic "graph" (dunno maybe incorrect
@@ -75,6 +76,7 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
         let mut id_to_idx = HashMap::new();
         for (idx, node) in nodes.iter().enumerate() {
             let id = node.id();
+            let id = id.borrow();
             if id_to_idx.contains_key(id) {
                 return Err(DagError::DuplicateId(id.clone()));
             }
@@ -88,12 +90,13 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
                 edges.resize(idx + 1, Vec::new())
             }
             for child_id in node.child_ids() {
-                let child_idx = id_to_idx
-                    .get(child_id)
-                    .ok_or_else(|| DagError::NoSuchChild {
-                        parent: node.id().clone(),
-                        child: child_id.clone(),
-                    })?;
+                let child_idx =
+                    id_to_idx
+                        .get(child_id.borrow())
+                        .ok_or_else(|| DagError::NoSuchChild {
+                            parent: node.id().borrow().clone(),
+                            child: child_id.borrow().clone(),
+                        })?;
                 edges[idx].push(*child_idx);
             }
         }
@@ -141,7 +144,7 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
             if let Some(node_in_cycle) =
                 recurse(&mut visited, &mut visited_stack, i, &edges, &mut root_idxs)
             {
-                return Err(DagError::Cycle(nodes[node_in_cycle].id().clone()));
+                return Err(DagError::Cycle(nodes[node_in_cycle].id().borrow().clone()));
             }
         }
 
@@ -236,11 +239,11 @@ mod tests {
     }
 
     impl GraphNode<usize> for TestGraphNode {
-        fn id(&self) -> &usize {
-            &self.id
+        fn id(&self) -> impl Borrow<usize> {
+            self.id
         }
 
-        fn child_ids(&self) -> Vec<&usize> {
+        fn child_ids(&self) -> Vec<impl Borrow<usize>> {
             self.child_ids.iter().collect()
         }
     }

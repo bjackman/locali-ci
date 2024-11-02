@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     collections::{HashMap, HashSet},
     ffi::OsString,
     hash::{DefaultHasher, Hash as _, Hasher as _},
@@ -103,11 +104,11 @@ fn default_requires_worktree() -> bool {
 
 // This implementation is only valid for Tests among those registered for a single Manager.
 impl GraphNode<String> for Test {
-    fn id(&self) -> &String {
+    fn id(&self) -> impl Borrow<String> {
         &self.name
     }
 
-    fn child_ids(&self) -> Vec<&String> {
+    fn child_ids(&self) -> Vec<impl Borrow<String>> {
         self.depends_on.iter().collect()
     }
 }

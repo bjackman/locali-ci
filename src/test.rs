@@ -158,11 +158,11 @@ impl Debug for Test {
 // Hack: I couldn't be bothered to figure out how to make Dag work on Arc<Test>
 // as well as test. Soooooo I juts define the trait for Arc<Test>... seems fine so far lmao.
 impl GraphNode<TestName> for Arc<Test> {
-    fn id(&self) -> &TestName {
+    fn id(&self) -> impl Borrow<TestName> {
         &self.name
     }
 
-    fn child_ids(&self) -> Vec<&TestName> {
+    fn child_ids(&self) -> Vec<impl Borrow<TestName>> {
         self.depends_on.iter().collect()
     }
 }
