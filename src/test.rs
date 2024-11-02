@@ -432,68 +432,42 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             })
             .collect();
 
-        // Now start the new jobs.
-        let mut jobs = test_cases
-            .into_iter()
-            // Don't start new jobs for test cases that are already running
-            .filter(|(tc_id, _)| !self.job_cts.contains_key(tc_id))
-            .map(
-                |(tc_id, test_case)| -> anyhow::Result<(TestCaseId, TestJob)> {
-                    Ok((
-                        tc_id,
-                        TestJob {
-                            ct: CancellationToken::new(),
-                            _token: self.job_counter.get(),
-                            output: self.result_db.create_output(&test_case)?,
-                            env: self.job_env.clone(),
-                            // We don't have anything to subscribe to yet, leave
-                            // this empty at first and populate later.
-                            wait_for: Vec::new(),
-                            notifier: TestStatusNotifier::new(
-                                test_case.clone(),
-                                self.result_tx.clone(),
-                            ),
-                            test_case,
-                        },
-                    ))
-                },
-            )
-            .collect::<anyhow::Result<HashMap<TestCaseId, TestJob>>>()?;
-
-        // Now we set up subscriptions to notify inter-job dependency
-        // completion. Rust really hates to mutate one map value based on
-        // another value in the same map, so we do this via an intermediate map
-        // :(
-        // Note that we assume if we are starting a job here, then we must also
-        // be starting all of its dependency jobs. This is the spooky assumption
-        // mentioned on the comment on job_cts.
-        // This assumption kinda works because we "start jobs" here even when
-        // the result is actually cached - so that cached reuslt will go through
-        // the normal notifier mechanism as if we really ran it.
-        let mut wait_subs: HashMap<TestCaseId, Vec<(TestName, broadcast::Receiver<TestStatus>)>> =
-            jobs.iter()
-                .map(|(id, job)| {
-                    (
-                        id.clone(),
-                        job.test_case
-                            .test
-                            .depends_on
-                            .iter()
-                            .map(|dep_name| {
-                                (
-                                    dep_name.clone(),
-                                    jobs[&TestCaseId::new(&job.test_case.commit_hash, dep_name)]
-                                        .notifier
-                                        .subscribe_completion(),
-                                )
-                            })
-                            .collect(),
-                    )
-                })
-                .collect();
-        for (id, job) in jobs.iter_mut() {
-            job.wait_for = wait_subs.remove(id).unwrap();
-        }
+        // Don't start new jobs for test cases that are already running
+        let test_cases = test_cases.into_iter().filter_map(|(tc_id, tc)| {
+            if self.job_cts.contains_key(&tc_id) {
+                None
+            } else {
+                Some(tc)
+            }
+        });
+        let test_cases = Dag::new(test_cases).expect("failed to build test case DAG");
+        let jobs = test_cases.bottom_up().try_fold(
+            HashMap::new(),
+            |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob>> {
+                let job = TestJob {
+                    ct: CancellationToken::new(),
+                    _token: self.job_counter.get(),
+                    output: self.result_db.create_output(test_case)?,
+                    env: self.job_env.clone(),
+                    wait_for: test_case
+                        .child_ids() // This gives the TestCaseIds of dependency jobs.
+                        .iter()
+                        .map(|tc_id| {
+                            (
+                                test_case.test.name.clone(),
+                                jobs[tc_id.borrow()].notifier.subscribe_completion(),
+                            )
+                        })
+                        .collect(),
+                    notifier: TestStatusNotifier::new(test_case.clone(), self.result_tx.clone()),
+                    // TODO: it would be nice if we had an into_ variant of
+                    // the bottom_up so we didn't need this clone.
+                    test_case: test_case.clone(),
+                };
+                jobs.insert(test_case.id(), job);
+                Ok(jobs)
+            },
+        )?;
 
         for (tc_id, job) in jobs.into_iter() {
             self.job_cts.insert(tc_id.clone(), job.ct.clone());
@@ -857,9 +831,25 @@ impl TestCase {
         self.cache_hash.as_ref().unwrap_or(&self.commit_hash)
     }
 
+    // TODO: this is always getting built on-demand all over the place, it
+    // doesn't really need to be.
     fn id(&self) -> TestCaseId {
         // The hash_cache is redundant information here so we don't need to include it.
         TestCaseId::new(&self.commit_hash, &self.test.name)
+    }
+}
+
+impl GraphNode<TestCaseId> for TestCase {
+    fn id(&self) -> impl Borrow<TestCaseId> {
+        self.id()
+    }
+
+    fn child_ids(&self) -> Vec<impl Borrow<TestCaseId>> {
+        self.test
+            .depends_on
+            .iter()
+            .map(|test_name| TestCaseId::new(&self.commit_hash, test_name))
+            .collect()
     }
 }
 
