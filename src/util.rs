@@ -21,11 +21,13 @@ pub trait GraphNode<I: Hash + Eq + Clone> {
 // terminology, it doesn't make any promises about connectedness so it might be
 // zero or several actual "graphs"), where nodes are identified with a usize.
 pub struct Dag<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
-    _nodes: Vec<G>,
+    nodes: Vec<G>,
     // maps ids that nodes know about themselves to their index in `nodes`.
     _id_to_idx: HashMap<I, usize>,
     // edges[i] contains the destinations of the edges originating from node i.
-    _edges: Vec<Vec<usize>>,
+    edges: Vec<Vec<usize>>,
+    // indexes of nodes that aren't anyones child.
+    root_idxs: Vec<usize>,
 }
 
 pub enum DagError<I> {
@@ -73,7 +75,9 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
             }
         }
 
-        // Check there are no cycles.
+        // Now we validate the DAG (no cycles) and find root nodes.
+        // Root nodes are those with no edges pointing to them.
+        let mut root_idxs: HashSet<usize> = (0..edges.len()).collect();
         // This set is just used to avoid duplicating work.
         let mut visited: HashSet<usize> = HashSet::new();
         // This one actually detects cycles.
@@ -81,11 +85,16 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
         // This is a bit annoying in Rust because you cannot capture
         // environments into a named function but you cannot recurse into a
         // closure, so we just have to pass everything through args explicitly.
-        fn find_cycle(
+        // Returns the index of a node which was found to be part of a cycle
+        // (in that case root_idxs won't be valid and we must bail).
+        fn recurse(
             visited: &mut HashSet<usize>,
             visited_stack: &mut HashSet<usize>,
             start_idx: usize,
             edges: &Vec<Vec<usize>>,
+            // Nodes will be removed from here if they are found to be another
+            // node's child.
+            root_idxs: &mut HashSet<usize>,
         ) -> Option<usize> {
             if visited.contains(&start_idx) {
                 // Already explored from this node and found no cycles.
@@ -97,7 +106,8 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
             visited.insert(start_idx);
             visited_stack.insert(start_idx);
             for child in &edges[start_idx] {
-                if let Some(i) = find_cycle(visited, visited_stack, *child, edges) {
+                root_idxs.remove(child);
+                if let Some(i) = recurse(visited, visited_stack, *child, edges, root_idxs) {
                     return Some(i);
                 }
             }
@@ -105,16 +115,61 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
             None
         }
         for i in 0..edges.len() {
-            if let Some(node_in_cycle) = find_cycle(&mut visited, &mut visited_stack, i, &edges) {
+            if let Some(node_in_cycle) =
+                recurse(&mut visited, &mut visited_stack, i, &edges, &mut root_idxs)
+            {
                 return Err(DagError::Cycle(nodes[node_in_cycle].id().clone()));
             }
         }
 
         Ok(Self {
-            _nodes: nodes,
-            _edges: edges,
+            nodes,
+            edges,
             _id_to_idx: id_to_idx,
+            root_idxs: root_idxs.into_iter().collect(),
         })
+    }
+
+    // Iterate over nodes, visiting children before their parents.
+    #[expect(dead_code)]
+    pub fn bottom_up(&self) -> BottomUp<'_, I, G> {
+        BottomUp {
+            dag: self,
+            visit_stack: Vec::new(),
+            unvisited_roots: self.root_idxs.clone(),
+        }
+    }
+}
+
+pub struct BottomUp<'a, I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
+    dag: &'a Dag<I, G>,
+    visit_stack: Vec<usize>,
+    unvisited_roots: Vec<usize>,
+}
+
+impl<'a, I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Iterator for BottomUp<'a, I, G> {
+    type Item = &'a G;
+
+    fn next(&mut self) -> Option<&'a G> {
+        // I found the basic non-recursive DFS post-order algorithm here:
+        // https://codingots.medium.com/tree-traversal-without-recursion-221cbea6d004
+        // This is a translation of that, where "s1" is temp_stack and s2 is
+        // self.visit_stack. In that version there is only one root node but
+        // here we have several.
+        // First phase is to build up the stack of nodes to visit using
+        // temp_stack as an intermediate.
+        if self.visit_stack.is_empty() {
+            let mut temp_stack = vec![self.unvisited_roots.pop()?];
+            while let Some(cur_idx) = temp_stack.pop() {
+                self.visit_stack.push(cur_idx);
+                for child_idx in &self.dag.edges[cur_idx] {
+                    temp_stack.push(*child_idx);
+                }
+            }
+        }
+        // Now we just cruise down the to_visit stack drinking a large bottle of
+        // cranberry juice listening to Fleetwood Mac.
+        Some(&self.dag.nodes[self.visit_stack.pop().unwrap()])
     }
 }
 
