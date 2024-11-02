@@ -11,6 +11,10 @@ use std::{
 
 use anyhow::bail;
 
+// TODO: It's annoying that users of this have to explicitly specify the ID type
+// every time. It feels like we want that to be an associated type of the trait
+// implementation. I tried that before and it didn't work, but this code was
+// much less flexible back then, so could still be worh exploring.
 pub trait GraphNode<I: Hash + Eq + Clone> {
     // Identifier for a node, unique among nodes in the set under consideration.
     fn id(&self) -> &I;
