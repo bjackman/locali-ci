@@ -44,7 +44,7 @@ use crate::resource::ResourceKey;
 use crate::resource::Resources;
 use crate::result::Database;
 use crate::result::TestCaseOutput;
-use crate::util::check_no_cycles;
+use crate::util::Dag;
 use crate::util::GraphNode;
 
 pub trait ResultExt {
@@ -155,7 +155,9 @@ impl Debug for Test {
 }
 
 // This implementation is only valid for Tests among those registered for a single Manager.
-impl GraphNode<TestName> for Test {
+// Hack: I couldn't be bothered to figure out how to make Dag work on Arc<Test>
+// as well as test. Soooooo I juts define the trait for Arc<Test>... seems fine so far lmao.
+impl GraphNode<TestName> for Arc<Test> {
     fn id(&self) -> &TestName {
         &self.name
     }
@@ -165,11 +167,13 @@ impl GraphNode<TestName> for Test {
     }
 }
 
+type TestDag = Dag<TestName, Arc<Test>>;
+
 pub struct ManagerBuilder<W> {
     // This needs to be an Arc because we hold onto a reference to it for a
     // while, and create temporary worktrees from it in the background.
     repo: Arc<W>,
-    tests: Vec<Test>,
+    tests: TestDag,
     resource_tokens: HashMap<ResourceKey, Vec<String>>,
     result_db: Database,
 
@@ -212,7 +216,6 @@ impl<W> ManagerBuilder<W> {
         // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
         W: Worktree + Sync + Send + 'static,
     {
-        check_no_cycles(&self.tests)?;
         info!(
             "Setting up {} worktrees in {:?}...",
             self.num_worktrees, self.worktree_dir
@@ -261,7 +264,7 @@ impl<W> ManagerBuilder<W> {
             result_tx,
             job_cts: HashMap::new(),
             job_counter: JobCounter::new(),
-            tests: tests.into_iter().map(Arc::new).collect(),
+            tests,
             resource_pools: Arc::new(Pools::new(resources)),
             result_db,
         })
@@ -276,7 +279,7 @@ pub struct Manager<W: Worktree> {
     job_cts: HashMap<TestCaseId, CancellationToken>,
     job_counter: JobCounter,
     result_tx: broadcast::Sender<Arc<Notification>>,
-    tests: Vec<Arc<Test>>,
+    tests: TestDag,
     // Pools contains sets of intangible arbitrary "resources" that can be used to throttle test
     // jobs, and also tracks access to reused worktrees. The indices of the token-type resources
     // will be referenced by Test::needs_resource_idx values.
@@ -286,7 +289,7 @@ pub struct Manager<W: Worktree> {
 }
 
 impl<W: Worktree + Sync + Send + 'static> Manager<W> {
-    pub fn builder<T, R>(
+    pub fn builder<R>(
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
@@ -294,17 +297,16 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // because we want it to be hard to accidentally refer to global
         // resources like that.
         result_db: Database,
-        tests: T,
+        tests: TestDag,
         // Tokens for resources, basically a HashMap from "resource type" names
         // to token values.
         resource_tokens: R,
     ) -> ManagerBuilder<W>
     where
-        T: IntoIterator<Item = Test>,
         R: IntoIterator<Item = (ResourceKey, Vec<String>)>,
     {
         ManagerBuilder {
-            tests: tests.into_iter().collect(),
+            tests,
             resource_tokens: resource_tokens.into_iter().collect(),
             result_db,
 
@@ -408,7 +410,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // Build the set test cases we need to kick off.
         let test_cases = try_join_all(
             revs.into_iter()
-                .cartesian_product(self.tests.iter())
+                .cartesian_product(self.tests.nodes())
                 .map(|(rev, test)| TestCase::new(rev, test.clone(), self.repo.as_ref())),
         )
         .await
@@ -1382,7 +1384,7 @@ mod tests {
             let manager = Manager::builder(
                 repo.clone(),
                 Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-                tests,
+                Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
                 [],
             )
             .num_worktrees(self.num_worktrees)
@@ -1410,10 +1412,16 @@ mod tests {
         }
 
         // Convenience helper to construct a TestCase referring to this fixture's configuration.
+        // yes this function is O(test_idx). you got a porblem with that?? is that a porblem?
         async fn test_case(&self, hash: impl Borrow<CommitHash>, test_idx: usize) -> TestCase {
             TestCase::new(
                 hash.borrow().to_owned(),
-                self.manager.tests[test_idx].clone(),
+                self.manager
+                    .tests
+                    .nodes()
+                    .nth(test_idx)
+                    .expect("bad test idx")
+                    .clone(),
                 self.repo.as_ref(),
             )
             .await
@@ -1694,7 +1702,7 @@ mod tests {
         let mut m = Manager::builder(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-            tests,
+            Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
             resource_tokens,
         )
         .num_worktrees(4)
@@ -1730,7 +1738,7 @@ mod tests {
         let mut m = Manager::builder(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-            [Test {
+            Dag::new([Arc::new(Test {
                 name: TestName::new("my_test"),
                 program: OsString::from("bash"),
                 args: vec![
@@ -1746,7 +1754,8 @@ mod tests {
                 cache_policy: CachePolicy::ByCommit,
                 config_hash: 0,
                 depends_on: vec![],
-            }],
+            })])
+            .expect("couldn't build test DAG"),
             [
                 (
                     ResourceKey::UserToken("my_resource".into()),
@@ -2024,54 +2033,6 @@ mod tests {
         // We were testing test_hash but we shouldn't have checked it out, since
         // we don't "own" the worktree.
         assert_eq!(f.repo.rev_parse("HEAD").await.unwrap(), Some(head_hash));
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn should_detect_dependency_loops() {
-        // Ummmmmmmmmmmmmmm I can't be bothered to write more test cases lmao
-        // algorithms are boring.
-        let tests = [
-            Test {
-                name: TestName::new("my_test"),
-                program: "foo".into(),
-                args: vec!["bar".into()],
-                needs_resources: HashMap::new(),
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy: CachePolicy::ByCommit,
-                config_hash: 0,
-                depends_on: vec![TestName::new("my_other_test")],
-            },
-            Test {
-                name: TestName::new("my_other_test"),
-                program: "foo".into(),
-                args: vec!["bar".into()],
-                needs_resources: HashMap::new(),
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy: CachePolicy::ByCommit,
-                config_hash: 0,
-                depends_on: vec![TestName::new("my_test")],
-            },
-        ];
-        let repo = nonempty_temp_repo().await;
-        let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
-        let result = Manager::builder(
-            repo.clone(),
-            Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-            tests,
-            [],
-        )
-        .build()
-        .await;
-        match result {
-            Ok(_) => panic!("Successfully created Manager with test dep cycles, should fail"),
-            // Hacky lazy attempt to detect if this test got broken and we are
-            // failing for the wrong reason.
-            Err(err) => {
-                if !err.to_string().to_lowercase().contains("cycle") {
-                    panic!("Didn't see the word 'cycle' in error message, is this test working? error: {:?}", err);
-                }
-            }
-        }
     }
 
     #[test_case(OsStr::new(TestScript::BLOCK_COMMIT_MSG_TAG), false ; "blocked¸ shouldn't start")]

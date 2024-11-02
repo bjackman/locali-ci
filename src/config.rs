@@ -2,10 +2,11 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     hash::{DefaultHasher, Hash as _, Hasher as _},
+    sync::Arc,
     time::Duration,
 };
 
-use anyhow::bail;
+use anyhow::{bail, Context as _};
 #[allow(unused_imports)]
 use log::debug;
 use serde::Deserialize;
@@ -13,7 +14,7 @@ use serde::Deserialize;
 use crate::{
     resource::ResourceKey,
     test::{self, CachePolicy, TestName},
-    util::{visit_all, Dag, GraphNode},
+    util::{Dag, GraphNode},
 };
 
 #[derive(Deserialize, Debug, Hash, Clone)]
@@ -112,51 +113,49 @@ impl GraphNode<String> for Test {
 }
 
 impl Test {
-    // Convert to the "real" object. Takes a vec and an index because the test
-    // nodes actually form DAGs, and this is taken into account to form the
-    // config hash.
-    pub fn parse(tests: &Vec<Self>, idx: usize) -> anyhow::Result<test::Test> {
-        let test = &tests[idx];
+    // Convert to the "real" object. other_tests is the set of other tests that
+    // have already been parsed, which must include all of these test's
+    // transitive dependencies (or this will panic).
+    pub fn parse(&self, other_tests: &HashMap<TestName, test::Test>) -> anyhow::Result<test::Test> {
         let mut seen_resources = HashSet::new();
-        for resource in test.resources.as_ref().unwrap_or(&vec![]) {
+        for resource in self.resources.as_ref().unwrap_or(&vec![]) {
             if seen_resources.contains(&resource.name()) {
                 // TODO: Need better error messages.
                 bail!("duplicate resource reference {:?}", resource.name());
             }
             seen_resources.insert(resource.name());
         }
-        let mut needs_resources: HashMap<ResourceKey, usize> = test
+        let mut needs_resources: HashMap<ResourceKey, usize> = self
             .resources
             .as_ref()
             .unwrap_or(&vec![])
             .iter()
             .map(|r| (ResourceKey::UserToken(r.name().to_owned()), r.count()))
             .collect();
-        if test.requires_worktree {
+        if self.requires_worktree {
             needs_resources.insert(ResourceKey::Worktree, 1);
         }
 
         // Hash the config, also taking into account the hashes of the
         // dependency test configs.
-        // This is wildly inefficient, hopefully it doesn't matter lol. (no
-        // memoization or anything).
         let mut hasher = DefaultHasher::new();
-        visit_all(tests, idx, |test: &Test| {
-            debug!("hashing {test:?}");
-            test.hash(&mut hasher)
-        });
+        self.hash(&mut hasher);
+        for dep_name in &self.depends_on {
+            other_tests[&TestName::new(dep_name)]
+                .config_hash
+                .hash(&mut hasher);
+        }
         let config_hash = hasher.finish();
-        debug!("hash: {config_hash}");
 
         Ok(test::Test {
-            name: TestName::new(test.name.clone()),
-            program: test.command.program(),
-            args: test.command.args(),
+            name: TestName::new(self.name.clone()),
+            program: self.command.program(),
+            args: self.command.args(),
             needs_resources,
-            shutdown_grace_period: Duration::from_secs(test.shutdown_grace_period_s),
-            cache_policy: test.cache,
+            shutdown_grace_period: Duration::from_secs(self.shutdown_grace_period_s),
+            cache_policy: self.cache,
             config_hash,
-            depends_on: test.depends_on.iter().map(TestName::new).collect(),
+            depends_on: self.depends_on.iter().map(TestName::new).collect(),
         })
     }
 }
@@ -203,14 +202,31 @@ impl Config {
             .collect()
     }
 
-    pub fn parse_tests(&self, resource_tokens: &ResourceTokens) -> anyhow::Result<Vec<test::Test>> {
-        let _tests = Dag::new(self.tests.clone());
-        let tests = (0..self.tests.len())
-            .map(|i| Test::parse(&self.tests, i))
-            .collect::<anyhow::Result<Vec<_>>>()?;
+    pub fn parse_tests(
+        &self,
+        resource_tokens: &ResourceTokens,
+    ) -> anyhow::Result<Dag<TestName, Arc<test::Test>>> {
+        let tests = Dag::new(self.tests.clone()).context("parsing test dependency graph")?;
+        let tests = tests
+            .bottom_up()
+            .try_fold(
+                HashMap::new(),
+                |mut parsed_tests, test_conf| -> anyhow::Result<HashMap<TestName, test::Test>> {
+                    let new_test = test_conf.parse(&parsed_tests)?;
+                    parsed_tests.insert(new_test.name.clone(), new_test);
+                    Ok(parsed_tests)
+                },
+            )
+            .context("parsing tests")?;
+        // This bit is kinda inefficient: we just did all the graph-traversal
+        // biz on the config::Test objects, and we know that the same logic
+        // would be valid for the test::Test objects. But we've lost track of
+        // that knowledge (and the graph code is based on fixed order of the
+        // nodes in a Vec, which we've lost), so now we do it all again :(
+        let tests = Dag::new(tests.into_values().map(Arc::new)).unwrap();
 
         // Check for invalid resource references.
-        for test in tests.iter() {
+        for test in tests.nodes() {
             for key in test.needs_resources.keys() {
                 if let ResourceKey::UserToken(name) = key {
                     if !resource_tokens.contains_key(key) {
