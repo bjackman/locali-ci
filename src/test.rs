@@ -1210,11 +1210,12 @@ mod tests {
             .into_iter()
             .map(|(test_case, statuses)| (test_case.id(), (test_case, statuses)))
             .collect();
+        let want_total = want.len();
         while !want.is_empty() {
             let notif = select!(
                 _ = sleep_until(timeout) => {
-                    bail!("timeout after 10s, remaining results:\n{}",
-                        dump_want_statuses(&want));
+                    bail!("timeout after 10s, remaining results ({} of {}):\n{}",
+                        want.len(), want_total, dump_want_statuses(&want));
                 },
                 output = results.recv() => {
                     output.context(format!(
