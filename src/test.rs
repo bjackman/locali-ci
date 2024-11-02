@@ -162,8 +162,8 @@ impl GraphNode<TestName> for Arc<Test> {
         &self.name
     }
 
-    fn child_ids(&self) -> &Vec<TestName> {
-        &self.depends_on
+    fn child_ids(&self) -> Vec<&TestName> {
+        self.depends_on.iter().collect()
     }
 }
 

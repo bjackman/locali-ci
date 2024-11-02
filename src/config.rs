@@ -107,8 +107,8 @@ impl GraphNode<String> for Test {
         &self.name
     }
 
-    fn child_ids(&self) -> &Vec<String> {
-        &self.depends_on
+    fn child_ids(&self) -> Vec<&String> {
+        self.depends_on.iter().collect()
     }
 }
 

@@ -20,7 +20,7 @@ pub trait GraphNode<I: Hash + Eq + Clone> {
     // Identifier for a node, unique among nodes in the set under consideration.
     fn id(&self) -> &I;
     // IDs of nodes that have an edge from this node to that node.
-    fn child_ids(&self) -> &Vec<I>;
+    fn child_ids(&self) -> Vec<&I>;
 }
 
 // Ajacency-list for a directed acyclic "graph" (dunno maybe incorrect
@@ -240,8 +240,8 @@ mod tests {
             &self.id
         }
 
-        fn child_ids(&self) -> &Vec<usize> {
-            &self.child_ids
+        fn child_ids(&self) -> Vec<&usize> {
+            self.child_ids.iter().collect()
         }
     }
 
