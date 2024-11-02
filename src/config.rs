@@ -208,6 +208,15 @@ impl Config {
         resource_tokens: &ResourceTokens,
     ) -> anyhow::Result<Dag<TestName, Arc<test::Test>>> {
         let tests = Dag::new(self.tests.clone()).context("parsing test dependency graph")?;
+        // This is beginning to be kinda cool but there's still an awkward
+        // divide between the way the fold accumulator is a HashMap but the Dag
+        // itself internally has a separate mechanism for indexing nodes (i.e.
+        // it just uses Vec). Maybe if we fixed that it would also let us fix
+        // the awkwardness where we have to repeat all the DAG traversal logic
+        // when mapping to a new graph, even when the new graph is isomorphic to
+        // the old one.
+        // It's also awkward that users of this fold mechanism have to manually
+        // insert their new nodes into the accumulator.
         let tests = tests
             .bottom_up()
             .try_fold(
