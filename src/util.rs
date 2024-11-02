@@ -1,6 +1,7 @@
 use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     ops::Deref,
@@ -30,14 +31,29 @@ pub struct Dag<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
     root_idxs: Vec<usize>,
 }
 
+#[derive(Debug)]
 pub enum DagError<I> {
     // Two nodes had the same ID
     DuplicateId(I),
     // Node identified by `parent` referred to `child`, but the latter didn't exist.
-    NoSuchChild { _parent: I, _child: I },
+    NoSuchChild { parent: I, child: I },
     // A cycle existed containing the node with this ID,
     Cycle(I),
 }
+
+impl<I: Debug> Display for DagError<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::DuplicateId(id) => write!(f, "duplicate key {:?}", id),
+            Self::NoSuchChild { parent, child } => {
+                write!(f, "{:?} refers to nonexistent {:?}", parent, child)
+            }
+            Self::Cycle(id) => write!(f, "cycle in graph, containing {:?}", id),
+        }
+    }
+}
+
+impl<I: Debug> Error for DagError<I> {}
 
 impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
     // TODO: unit test this.
@@ -68,8 +84,8 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
                 let child_idx = id_to_idx
                     .get(child_id)
                     .ok_or_else(|| DagError::NoSuchChild {
-                        _parent: node.id().clone(),
-                        _child: child_id.clone(),
+                        parent: node.id().clone(),
+                        child: child_id.clone(),
                     })?;
                 edges[idx].push(*child_idx);
             }
