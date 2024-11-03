@@ -35,6 +35,7 @@ use tokio::sync::watch;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
+use crate::dag::{Dag, GraphNode};
 use crate::git::TempWorktree;
 use crate::git::{CommitHash, Hash, Worktree};
 use crate::process::ExitStatusExt as _;
@@ -44,8 +45,6 @@ use crate::resource::ResourceKey;
 use crate::resource::Resources;
 use crate::result::Database;
 use crate::result::TestCaseOutput;
-use crate::util::Dag;
-use crate::util::GraphNode;
 
 pub trait ResultExt {
     // Log an error if it occurs, prefixed with s, otherwise return nothing.

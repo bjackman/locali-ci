@@ -19,6 +19,7 @@ use util::DisplayablePathBuf;
 use crate::git::Worktree;
 
 mod config;
+mod dag;
 mod git;
 mod http;
 mod process;

@@ -13,9 +13,9 @@ use log::debug;
 use serde::Deserialize;
 
 use crate::{
+    dag::{Dag, GraphNode},
     resource::ResourceKey,
     test::{self, CachePolicy, TestName},
-    util::{Dag, GraphNode},
 };
 
 #[derive(Deserialize, Debug, Hash, Clone)]
