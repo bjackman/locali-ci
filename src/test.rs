@@ -358,36 +358,21 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 return;
             }
 
-            // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
-            // and some of those jobs are blocking on resources held by others,
-            // we want the former jobs to observe their own cancellation before
-            // they see the resources get freed up by the latter. I don't think
-            // this totally eliminates that case, which probably means tests
-            // will be flaky. Not sure what to do about that.
-            select!(biased;
-                    _ = job.ct.cancelled() => (),
-                    resources = pools.get(job.test_case.test.needs_resources.clone()) =>  {
-                job.notifier.notify(&TestStatus::Started);
-                let result = if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
-                    // We "own" this worktree.
-                    job.checkout_and_run(worktrees[0].as_worktree(), &resources).await
-                } else {
-                    // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    job.run(origin_worktree.path(), &resources).await
-                };
-                let status = match result {
-                    Err(ref err) => TestStatus::Error(err.to_string()),
-                    Ok(None) => TestStatus::Canceled,
-                    Ok(Some(exit_code)) => {
-                        let test_result = TestResult{exit_code};
-                        job.output
-                            .set_result(&test_result)
-                            .or_log_error("couldn't save job status");
-                        TestStatus::Completed(test_result)
-                    }
-                };
-                job.notifier.notify_completion(status);
-            });
+            let status = match job
+                .get_resources_and_run(&pools, origin_worktree.path())
+                .await
+            {
+                Err(ref err) => TestStatus::Error(err.to_string()),
+                Ok(None) => TestStatus::Canceled,
+                Ok(Some(exit_code)) => {
+                    let test_result = TestResult { exit_code };
+                    job.output
+                        .set_result(&test_result)
+                        .or_log_error("couldn't save job status");
+                    TestStatus::Completed(test_result)
+                }
+            };
+            job.notifier.notify_completion(status);
         });
     }
 
@@ -714,6 +699,31 @@ pub struct TestJob {
 }
 
 impl<'a> TestJob {
+    pub async fn get_resources_and_run(
+        &mut self,
+        pools: &Pools,
+        origin_worktree_path: &Path,
+    ) -> anyhow::Result<Option<ExitCode>> {
+        // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
+        // and some of those jobs are blocking on resources held by others,
+        // we want the former jobs to observe their own cancellation before
+        // they see the resources get freed up by the latter. I don't think
+        // this totally eliminates that case, which probably means tests
+        // will be flaky. Not sure what to do about that.
+        select!(biased;
+                _ = self.ct.cancelled() => Ok(None),
+                resources = pools.get(self.test_case.test.needs_resources.clone()) =>  {
+            self.notifier.notify(&TestStatus::Started);
+            if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
+                // We "own" this worktree.
+                self.checkout_and_run(worktrees[0].as_worktree(), &resources).await
+            } else {
+                // We don't "own" the "main" worktree so the job shouldn't mess with it.
+                self.run(origin_worktree_path, &resources).await
+            }
+        })
+    }
+
     // Blocks until all dependency jobs have succeeded, or returns an error
     // reporting the name of the job that terminated without success.
     async fn await_dep_success(&mut self) -> Result<(), TestName> {
@@ -1953,10 +1963,17 @@ mod tests {
             .unwrap();
         expect_notifs_20s(
             &mut results,
-            [(
-                f.test_case(&commits[0], 0),
-                vec![TestStatus::Canceled].into(),
-            )],
+            [
+                (
+                    f.test_case(&commits[0], 0),
+                    vec![TestStatus::Canceled].into(),
+                ),
+                // Do we want a cancellation notification here? I dunno I guess whatever.
+                (
+                    f.test_case(&commits[1], 0),
+                    vec![TestStatus::Canceled].into(),
+                ),
+            ],
         )
         .await
         .expect("bad test result");
