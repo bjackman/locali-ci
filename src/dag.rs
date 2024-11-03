@@ -203,6 +203,17 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
         // TODO this is dumb lol get rid of id_to_idx
         Some(&self.nodes[*self.id_to_idx.get(id.borrow())?])
     }
+
+    // Iterate all the descendants of the relevant node, visiting parents before
+    // their children.
+    #[cfg(test)]
+    pub fn top_down_from(&self, id: &I) -> Option<TopDown<I, G>> {
+        Some(TopDown {
+            dag: self,
+            visit_stack: Vec::new(),
+            unvisited_roots: vec![*self.id_to_idx.get(id.borrow())?],
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -235,6 +246,30 @@ impl<'a, I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Iterator for BottomUp<'a
         // Now we just cruise down the to_visit stack drinking a large bottle of
         // cranberry juice listening to Fleetwood Mac.
         Some(&self.dag.nodes[self.visit_stack.pop().unwrap()])
+    }
+}
+
+#[derive(Clone)]
+pub struct TopDown<'a, I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
+    dag: &'a Dag<I, G>,
+    visit_stack: Vec<usize>,
+    // Note these "roots" don't have to be roots in the overall DAG, they are
+    // only roots of the top-down traversals we're doing.
+    unvisited_roots: Vec<usize>,
+}
+
+impl<'a, I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Iterator for TopDown<'a, I, G> {
+    type Item = &'a G;
+
+    fn next(&mut self) -> Option<&'a G> {
+        if self.visit_stack.is_empty() {
+            self.visit_stack.push(self.unvisited_roots.pop()?)
+        }
+        let cur_idx = self.visit_stack.pop().unwrap();
+        for child_idx in &self.dag.edges[cur_idx] {
+            self.visit_stack.push(*child_idx);
+        }
+        Some(&self.dag.nodes[cur_idx])
     }
 }
 
@@ -297,6 +332,9 @@ mod tests {
         let all_nodes: HashSet<usize, RandomState> = HashSet::from_iter(0..edges.len());
         let dag = Dag::new(edges).unwrap();
         let order = dag.bottom_up();
+        // For bottom_up, the order of iteration is only stable within a
+        // connected component so we need to be slightly clever here instead of
+        // asserting hard-coded values.
         assert_eq!(
             all_nodes,
             HashSet::from_iter(order.clone().map(|node| node.id)),
@@ -312,5 +350,27 @@ mod tests {
             }
             seen.insert(*node.id().borrow());
         }
+    }
+
+    #[test_case(nodes([vec![1], vec![]]), 0, vec![0, 1]; "one edge")]
+    // Most of the "want" values here are just one of many possible valid
+    // orders, but unlike for bottom_up we have a stable algorithm and I think
+    // it would be easier to just rewrite all the test cases if the algorithm
+    // changes, than have a clever (a.k.a buggy) test that tries to really just
+    // assert what mattters.
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![]]),
+                0, vec![0, 1, 3, 2]; "tree")]
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![]]),
+                1, vec![1, 3, 2]; "tree non root")]
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![],
+                       vec![5], vec![6, 7], vec![], vec![]]),
+                0, vec![0, 1, 3, 2]; "trees 1")]
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![],
+                       vec![5], vec![6, 7], vec![], vec![]]),
+                4, vec![4, 5, 7, 6]; "trees 2")]
+    fn test_top_down(edges: Vec<TestGraphNode>, from: usize, want_order: Vec<usize>) {
+        let dag = Dag::new(edges).unwrap();
+        let order = dag.top_down_from(&from).unwrap();
+        assert_eq!(order.map(|node| node.id).collect::<Vec<_>>(), want_order);
     }
 }
