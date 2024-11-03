@@ -26,11 +26,11 @@ pub trait GraphNode<I: Hash + Eq + Clone> {
 pub struct Dag<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
     nodes: Vec<G>,
     // maps ids that nodes know about themselves to their index in `nodes`.
-    _id_to_idx: HashMap<I, usize>,
+    id_to_idx: HashMap<I, usize>,
     // edges[i] contains the destinations of the edges originating from node i.
     edges: Vec<Vec<usize>>,
     // indexes of nodes that aren't anyones child.
-    root_idxs: Vec<usize>,
+    root_idxs: HashSet<usize>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -58,7 +58,15 @@ impl<I: Debug> Display for DagError<I> {
 impl<I: Debug> Error for DagError<I> {}
 
 impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
-    // TODO: unit test this.
+    pub fn empty() -> Self {
+        Self {
+            nodes: Vec::new(),
+            id_to_idx: HashMap::new(),
+            edges: Vec::new(),
+            root_idxs: HashSet::new(),
+        }
+    }
+
     pub fn new(nodes: impl IntoIterator<Item = G>) -> Result<Self, DagError<I>>
     where
         G: GraphNode<I>,
@@ -147,9 +155,35 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
         Ok(Self {
             nodes,
             edges,
-            _id_to_idx: id_to_idx,
+            id_to_idx,
             root_idxs: root_idxs.into_iter().collect(),
         })
+    }
+
+    // Return a new graph with a node added
+    pub fn with_node(mut self, node: G) -> Result<Self, DagError<I>> {
+        let new_idx = self.nodes.len();
+        self.id_to_idx.insert(node.id().borrow().clone(), new_idx);
+        self.edges.push(
+            node.child_ids()
+                .into_iter()
+                .map(|id| {
+                    self.id_to_idx
+                        .get(id.borrow())
+                        .ok_or(DagError::NoSuchChild {
+                            parent: node.id().borrow().clone(),
+                            child: id.borrow().clone(),
+                        })
+                        .copied()
+                })
+                .collect::<Result<Vec<_>, DagError<I>>>()?,
+        );
+        for child_id in node.child_ids() {
+            self.root_idxs.remove(&self.id_to_idx[child_id.borrow()]);
+        }
+        self.root_idxs.insert(new_idx);
+        self.nodes.push(node);
+        Ok(self)
     }
 
     // Iterate over nodes, visiting children before their parents.
@@ -157,12 +191,17 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
         BottomUp {
             dag: self,
             visit_stack: Vec::new(),
-            unvisited_roots: self.root_idxs.clone(),
+            unvisited_roots: self.root_idxs.iter().copied().collect(),
         }
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = &G> + Clone {
         self.nodes.iter()
+    }
+
+    pub fn node(&self, id: &I) -> Option<&G> {
+        // TODO this is dumb lol get rid of id_to_idx
+        Some(&self.nodes[*self.id_to_idx.get(id.borrow())?])
     }
 }
 

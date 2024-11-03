@@ -117,7 +117,10 @@ impl Test {
     // Convert to the "real" object. other_tests is the set of other tests that
     // have already been parsed, which must include all of these test's
     // transitive dependencies (or this will panic).
-    pub fn parse(&self, other_tests: &HashMap<TestName, test::Test>) -> anyhow::Result<test::Test> {
+    pub fn parse(
+        &self,
+        other_tests: &Dag<TestName, Arc<test::Test>>,
+    ) -> anyhow::Result<test::Test> {
         let mut seen_resources = HashSet::new();
         for resource in self.resources.as_ref().unwrap_or(&vec![]) {
             if seen_resources.contains(&resource.name()) {
@@ -142,7 +145,9 @@ impl Test {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
         for dep_name in &self.depends_on {
-            other_tests[&TestName::new(dep_name)]
+            other_tests
+                .node(&TestName::new(dep_name))
+                .unwrap()
                 .config_hash
                 .hash(&mut hasher);
         }
@@ -208,32 +213,23 @@ impl Config {
         resource_tokens: &ResourceTokens,
     ) -> anyhow::Result<Dag<TestName, Arc<test::Test>>> {
         let tests = Dag::new(self.tests.clone()).context("parsing test dependency graph")?;
-        // This is beginning to be kinda cool but there's still an awkward
-        // divide between the way the fold accumulator is a HashMap but the Dag
-        // itself internally has a separate mechanism for indexing nodes (i.e.
-        // it just uses Vec). Maybe if we fixed that it would also let us fix
-        // the awkwardness where we have to repeat all the DAG traversal logic
-        // when mapping to a new graph, even when the new graph is isomorphic to
-        // the old one.
-        // It's also awkward that users of this fold mechanism have to manually
-        // insert their new nodes into the accumulator.
+        // This is beginning to be kinda cool, we can map between DAGs of
+        // different types of objects.  It's still kinda awkward that users of
+        // this fold mechanism have to manually insert their new nodes into the
+        // accumulator, this also means there are two unwrap calls - once when
+        // adding the new node and once when referring to existing nodes.
+        // I suspect it's possible to make an even cooler API that knows that we
+        // are mapping between two isomorphic graphs and so these "dereferences" can't fail.
         let tests = tests
             .bottom_up()
             .try_fold(
-                HashMap::new(),
-                |mut parsed_tests, test_conf| -> anyhow::Result<HashMap<TestName, test::Test>> {
-                    let new_test = test_conf.parse(&parsed_tests)?;
-                    parsed_tests.insert(new_test.name.clone(), new_test);
-                    Ok(parsed_tests)
+                Dag::empty(),
+                |parsed_dag, test_conf| -> anyhow::Result<Dag<TestName, Arc<test::Test>>> {
+                    let new_node = Arc::new(test_conf.parse(&parsed_dag)?);
+                    Ok(parsed_dag.with_node(new_node).unwrap())
                 },
             )
             .context("parsing tests")?;
-        // This bit is kinda inefficient: we just did all the graph-traversal
-        // biz on the config::Test objects, and we know that the same logic
-        // would be valid for the test::Test objects. But we've lost track of
-        // that knowledge (and the graph code is based on fixed order of the
-        // nodes in a Vec, which we've lost), so now we do it all again :(
-        let tests = Dag::new(tests.into_values().map(Arc::new)).unwrap();
 
         // Check for invalid resource references.
         for test in tests.nodes() {

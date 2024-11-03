@@ -430,7 +430,14 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 Some(tc)
             }
         });
+
+        // Build the jobs. We do this bottom-up so that depending jobs can refer
+        // to the notifier of the jobs they depend on (which we can therefore
+        // trust has been constructed already).
         let test_cases = Dag::new(test_cases).expect("failed to build test case DAG");
+        // Note we don't actually need the Dag structure for the jobs, and since
+        // we don't have a GraphNode implementation for TestJob, we just collect
+        // them into a HashMap instead.
         let jobs = test_cases.bottom_up().try_fold(
             HashMap::new(),
             |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob>> {
