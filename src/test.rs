@@ -170,6 +170,16 @@ impl GraphNode<TestName> for Arc<Test> {
 
 type TestDag = Dag<TestName, Arc<Test>>;
 
+type JobEnv = Vec<(String, String)>;
+
+// Common elements that should be in a job environment with the given conditions.
+pub fn base_job_env(repo_origin: &Path) -> JobEnv {
+    vec![(
+        "LCI_ORIGIN".into(),
+        repo_origin.to_string_lossy().into_owned(),
+    )]
+}
+
 pub struct ManagerBuilder<W> {
     // This needs to be an Arc because we hold onto a reference to it for a
     // while, and create temporary worktrees from it in the background.
@@ -262,7 +272,7 @@ impl<W> ManagerBuilder<W> {
         Ok(Manager {
             job_env: Arc::new(job_env),
             repo,
-            result_tx,
+            notif_tx: result_tx,
             job_cts: HashMap::new(),
             job_counter: JobCounter::new(),
             tests,
@@ -279,7 +289,7 @@ pub struct Manager<W: Worktree> {
     // pretty strong implicit assumptions about this field.
     job_cts: HashMap<TestCaseId, CancellationToken>,
     job_counter: JobCounter,
-    result_tx: broadcast::Sender<Arc<Notification>>,
+    notif_tx: broadcast::Sender<Arc<Notification>>,
     tests: TestDag,
     // Pools contains sets of intangible arbitrary "resources" that can be used to throttle test
     // jobs, and also tracks access to reused worktrees. The indices of the token-type resources
@@ -314,11 +324,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             num_worktrees: 1,
             worktree_prefix: "worktree-".to_owned(),
             worktree_dir: env::temp_dir(),
-            job_env: vec![(
-                "LCI_ORIGIN".into(),
-                repo.path().to_string_lossy().into_owned(),
-            )],
-
+            job_env: base_job_env(repo.path()),
             repo,
         }
     }
@@ -465,26 +471,28 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         let jobs = test_cases.bottom_up().try_fold(
             HashMap::new(),
             |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob>> {
-                let job = TestJob {
-                    ct: CancellationToken::new(),
-                    _token: self.job_counter.get(),
-                    output: self.result_db.create_output(test_case)?,
-                    env: self.job_env.clone(),
-                    wait_for: test_case
-                        .child_ids() // This gives the TestCaseIds of dependency jobs.
-                        .iter()
-                        .map(|tc_id| {
-                            (
-                                test_case.test.name.clone(),
-                                jobs[tc_id.borrow()].notifier.subscribe_completion(),
-                            )
-                        })
-                        .collect(),
-                    notifier: TestStatusNotifier::new(test_case.clone(), self.result_tx.clone()),
+                let wait_for = test_case
+                    .child_ids() // This gives the TestCaseIds of dependency jobs.
+                    .iter()
+                    .map(|tc_id| {
+                        (
+                            test_case.test.name.clone(),
+                            jobs[tc_id.borrow()].notifier.subscribe_completion(),
+                        )
+                    })
+                    .collect();
+                let job = TestJobBuilder::new(
+                    CancellationToken::new(),
                     // TODO: it would be nice if we had an into_ variant of
                     // the bottom_up so we didn't need this clone.
-                    test_case: test_case.clone(),
-                };
+                    test_case.clone(),
+                    self.result_db.create_output(test_case)?,
+                    self.job_env.clone(),
+                    wait_for,
+                )
+                .with_token(self.job_counter.get())
+                .with_global_notif(self.notif_tx.clone())
+                .build();
                 jobs.insert(test_case.id(), job);
                 Ok(jobs)
             },
@@ -506,7 +514,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     //
     // I think the "proper" solution for this is to return a Stream. But I don't understand it.
     pub fn results(&self) -> broadcast::Receiver<Arc<Notification>> {
-        self.result_tx.subscribe()
+        self.notif_tx.subscribe()
     }
 
     // Completes once there are no pending jobs or results.
@@ -519,7 +527,7 @@ struct TestStatusNotifier {
     test_case: TestCase,
     // Used to feed into the overall notification channel for observers to keep
     // track of what the whole Manager is doing.
-    notif_tx: broadcast::Sender<Arc<Notification>>,
+    global_tx: Option<broadcast::Sender<Arc<Notification>>>,
     // Used to notify specifically about completion of this job. Only one mesage
     // should be sent on this channel. This is done via a separate channel so
     // that you can get notified about one job without having to wake up for a
@@ -532,11 +540,11 @@ struct TestStatusNotifier {
 }
 
 impl TestStatusNotifier {
-    fn new(test_case: TestCase, notif_tx: broadcast::Sender<Arc<Notification>>) -> Self {
+    fn new(test_case: TestCase, global_tx: Option<broadcast::Sender<Arc<Notification>>>) -> Self {
         let completion_tx = broadcast::Sender::new(1);
         Self {
             test_case,
-            notif_tx,
+            global_tx,
             completion_tx,
         }
     }
@@ -553,8 +561,9 @@ impl TestStatusNotifier {
             test_case: self.test_case.clone(),
             status: status.clone(),
         });
-        debug!("{notif:?}");
-        let _ = self.notif_tx.send(notif);
+        if let Some(tx) = &self.global_tx {
+            let _ = tx.send(notif);
+        }
     }
 
     // Report the final status of a test job. Will be observed by anyone who has
@@ -645,15 +654,72 @@ impl Drop for ChildDropGuard {
     }
 }
 
+pub struct TestJobBuilder {
+    ct: CancellationToken,
+    test_case: TestCase,
+    token: Option<JobToken>,
+    output: TestCaseOutput,
+    env: Arc<Vec<(String, String)>>,
+    wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
+    global_tx: Option<broadcast::Sender<Arc<Notification>>>,
+}
+
+impl TestJobBuilder {
+    pub fn new(
+        ct: CancellationToken,
+        test_case: TestCase,
+        output: TestCaseOutput,
+        env: Arc<JobEnv>,
+        // Job shouldn't start until all of these channels produce a result. If any
+        // is unsuccessful it should abort.
+        wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
+    ) -> Self {
+        Self {
+            ct,
+            test_case,
+            output,
+            env,
+            wait_for,
+            token: None,
+            global_tx: None,
+        }
+    }
+
+    // Have this job also report when it's done back to this weird token counter
+    // mechanism that probably shouldn't exist.
+    fn with_token(mut self, token: JobToken) -> Self {
+        self.token = Some(token);
+        self
+    }
+
+    // Have this job also report notifications about its status to this channel.
+    pub fn with_global_notif(mut self, tx: broadcast::Sender<Arc<Notification>>) -> Self {
+        self.global_tx = Some(tx);
+        self
+    }
+
+    pub fn build(self) -> TestJob {
+        TestJob {
+            ct: self.ct,
+            test_case: self.test_case.clone(),
+            _token: self.token,
+            output: self.output,
+            env: self.env,
+            wait_for: self.wait_for,
+            notifier: TestStatusNotifier::new(self.test_case, self.global_tx),
+        }
+    }
+}
+
 // This is not really a proper type, it doesn't really mean anything except as an implementation
 // detail of its user. I tried to get rid of it but then you run into issues with getting references
 // to individual fields while a mutable reference exists to the overall struct. I think this is
 // basically one an instance of "view structs" described in
 // https://smallcultfollowing.com/babysteps/blog/2024/06/02/the-borrow-checker-within/
-struct TestJob {
+pub struct TestJob {
     ct: CancellationToken,
     test_case: TestCase,
-    _token: JobToken,
+    _token: Option<JobToken>,
     output: TestCaseOutput,
     env: Arc<Vec<(String, String)>>,
     // Job shouldn't start until all of these channels produce a result. If any
