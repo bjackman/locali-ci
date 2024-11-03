@@ -146,6 +146,18 @@ impl Worktree for PersistentWorktree {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Commit {
+    pub hash: CommitHash,
+    pub tree: TreeHash,
+}
+
+impl From<Commit> for CommitHash {
+    fn from(val: Commit) -> Self {
+        val.hash
+    }
+}
+
 // This is a weird kinda inheritance type thing to enable different types of worktree (with
 // different fields and drop behaviours) to share the functionality that users actually care about.
 // Not really sure if this is the Rust Way or not.
@@ -280,17 +292,6 @@ pub trait Worktree: Debug {
         Ok(OsString::from_vec(stdout))
     }
 
-    async fn commit_tree(&self, hash: CommitHash) -> anyhow::Result<TreeHash> {
-        // Not sure why Git has such a weird interface for this.
-        Ok(TreeHash::new(
-            self.log_n1(hash, "%T")
-                .await?
-                .into_string()
-                .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?
-                .trim(),
-        ))
-    }
-
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
     // on the channel with the new resolved spec.
     fn watch_refs<'a>(
@@ -373,6 +374,38 @@ pub trait Worktree: Debug {
                 }
             }
         })
+    }
+
+    // None means we successfully looked it up but it didn't exist.
+    async fn rev_parse<S>(&self, rev_spec: S) -> anyhow::Result<Option<Commit>>
+    where
+        S: AsRef<OsStr>,
+    {
+        // We don't use log_n1 here because we want to check the exit code,
+        // that API is designed for users who assume the revision exists.
+        let mut cmd = self.git(["log", "-n1", "--format=%H %T"]);
+        let cmd = cmd.arg(rev_spec);
+        let output = cmd.output().await.context("failed to run 'git log -n1'")?;
+        // Hack: empirically, git returns 128 when the range is invalid, it's not documented
+        // but hopefully this is stable behaviour that we're supposed to be able to rely on for
+        // this...?
+        let exit_code = output.code_not_killed()?;
+        if exit_code == 128 {
+            return Ok(None);
+        }
+        if exit_code != 0 {
+            bail!("'git log -n1' failed with code {exit_code}");
+        }
+        let out_string =
+            String::from_utf8(output.stdout).context("reading git rev-parse output")?;
+        let parts: Vec<&str> = out_string.trim().splitn(2, " ").collect();
+        if parts.len() != 2 {
+            bail!("Failed to parse result of {cmd:?} - {out_string:?}",);
+        }
+        Ok(Some(Commit {
+            hash: CommitHash::new(parts[0]),
+            tree: TreeHash::new(parts[1]),
+        }))
     }
 }
 
@@ -473,11 +506,7 @@ pub mod test_utils {
     pub trait WorktreeExt: Worktree {
         // timestamp is used for both committer and author. This ought to make
         // commit hashes deterministic.
-        async fn commit<S>(
-            &self,
-            message: S,
-            timestamp: DateTime<Utc>,
-        ) -> anyhow::Result<CommitHash>
+        async fn commit<S>(&self, message: S, timestamp: DateTime<Utc>) -> anyhow::Result<Commit>
         where
             S: AsRef<OsStr>,
         {
@@ -495,28 +524,6 @@ pub mod test_utils {
             self.rev_parse("HEAD")
                 .await?
                 .ok_or(anyhow!("no HEAD after committing"))
-        }
-
-        // None means we successfully looked it up but it didn't exist.
-        async fn rev_parse<S>(&self, rev_spec: S) -> anyhow::Result<Option<CommitHash>>
-        where
-            S: AsRef<OsStr>,
-        {
-            let output = self
-                .git(["rev-parse"])
-                .arg(rev_spec)
-                .execute()
-                .await
-                .context("'git rev-parse' failed")?;
-            // Hack: empirically, rev-parse returns 128 when the range is invalid, it's not documented
-            // but hopefully this is stable behaviour that we're supposed to be able to rely on for
-            // this...?
-            if output.code_not_killed()? == 128 {
-                return Ok(None);
-            }
-            let out_string =
-                String::from_utf8(output.stdout).context("reading git rev-parse output")?;
-            Ok(Some(CommitHash::new(out_string.trim())))
         }
 
         async fn merge(

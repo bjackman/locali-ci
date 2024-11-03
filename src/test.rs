@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use futures::future::{self, select_all, try_join_all, Either, FutureExt};
 use itertools::Itertools;
 #[allow(unused_imports)]
@@ -30,8 +30,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    git::TempWorktree,
-    git::{CommitHash, Hash, Worktree},
+    git::{Commit, CommitHash, Hash, TempWorktree, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, Resource, ResourceKey, Resources},
     result::{Database, TestCaseOutput},
@@ -64,21 +63,12 @@ pub enum CachePolicy {
 impl CachePolicy {
     // Figure out the hash that should be used to store a result in the
     // database, if it should be stored at all
-    pub async fn cache_hash<W: Worktree>(
-        &self,
-        commit_hash: &CommitHash,
-        repo: &W,
-    ) -> anyhow::Result<Option<Hash>> {
-        Ok(match self {
+    pub fn cache_hash(&self, commit: &Commit) -> Option<Hash> {
+        match self {
             CachePolicy::NoCaching => None::<Hash>,
-            CachePolicy::ByCommit => Some(commit_hash.clone().into()),
-            CachePolicy::ByTree => Some(
-                repo.commit_tree(commit_hash.clone())
-                    .await
-                    .context("looking up tree from commit")?
-                    .into(),
-            ),
-        })
+            CachePolicy::ByCommit => Some(commit.hash.clone().into()),
+            CachePolicy::ByTree => Some(commit.tree.clone().into()),
+        }
     }
 }
 
@@ -414,24 +404,33 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     // not already tested or being tested.
     // It doesn't make sense to call this function if you don't have a receiver
     // from already having called [[results]].
-    pub async fn set_revisions<I>(&mut self, revs: I) -> anyhow::Result<()>
+    pub async fn set_revisions<I, R>(&mut self, revs: I) -> anyhow::Result<()>
     where
-        I: IntoIterator<Item = CommitHash>,
+        I: IntoIterator<Item = R>,
+        R: Into<CommitHash> + Debug,
     {
         // Build the set test cases we need to kick off.
         // TODO: this is kinda silly, TestCase::new looks up the tree from the
         // hash for every indiviual test, we only need to do that at most once
         // per revision. But doing this efficiently makes for code that's
         // probably more complex than necessary.
-        let test_cases = try_join_all(
-            revs.into_iter()
-                .cartesian_product(self.tests.nodes())
-                .map(|(rev, test)| TestCase::new(rev, test.clone(), self.repo.as_ref())),
-        )
-        .await
-        .context("setting up test cases")?;
-        let test_cases: HashMap<TestCaseId, TestCase> =
-            test_cases.into_iter().map(|tc| (tc.id(), tc)).collect();
+        let commits = try_join_all(revs.into_iter().map(|rev| {
+            let commit_hash = rev.into();
+            self.repo
+                .rev_parse(commit_hash.clone())
+                // TODO report nonexisting revision in the error!
+                .map(move |result| result?.ok_or(anyhow!("no such revision {commit_hash:?}")))
+        }))
+        .await?;
+
+        let test_cases: HashMap<TestCaseId, TestCase> = commits
+            .into_iter()
+            .cartesian_product(self.tests.nodes())
+            .map(|(commit, test)| {
+                let tc = TestCase::new(commit, test.clone());
+                (tc.id(), tc)
+            })
+            .collect();
 
         // Cancel jobs for test cases that we don't care about any more.
         // https://github.com/rust-lang/rust/issues/59618 would make this more convenient.
@@ -496,6 +495,10 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             self.spawn_job(job).await;
         }
         Ok(())
+    }
+
+    pub async fn cancel_running(&mut self) -> anyhow::Result<()> {
+        self.set_revisions::<_, CommitHash>([]).await
     }
 
     // Streams results back. Note you need to call this _before_ you generate the results you want
@@ -825,16 +828,12 @@ impl Debug for TestCase {
 }
 
 impl TestCase {
-    pub async fn new<W: Worktree>(
-        commit_hash: CommitHash,
-        test: Arc<Test>,
-        repo: &W,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            cache_hash: test.cache_policy.cache_hash(&commit_hash, repo).await?,
+    pub fn new(commit: Commit, test: Arc<Test>) -> Self {
+        Self {
+            cache_hash: test.cache_policy.cache_hash(&commit),
             test,
-            commit_hash,
-        })
+            commit_hash: commit.hash,
+        }
     }
 
     // Returns the hash that should be used to store the result in the result
@@ -1416,19 +1415,16 @@ mod tests {
 
         // Convenience helper to construct a TestCase referring to this fixture's configuration.
         // yes this function is O(test_idx). you got a porblem with that?? is that a porblem?
-        async fn test_case(&self, hash: impl Borrow<CommitHash>, test_idx: usize) -> TestCase {
+        fn test_case(&self, commit: impl Borrow<Commit>, test_idx: usize) -> TestCase {
             TestCase::new(
-                hash.borrow().to_owned(),
+                commit.borrow().to_owned(),
                 self.manager
                     .tests
                     .nodes()
                     .nth(test_idx)
                     .expect("bad test idx")
                     .clone(),
-                self.repo.as_ref(),
             )
-            .await
-            .unwrap()
         }
     }
 
@@ -1436,17 +1432,17 @@ mod tests {
     async fn should_run_single() {
         let mut f = TestScriptFixture::builder().num_tests(1).build().await;
         let mut results = f.manager.results();
-        let hash = f
+        let commit = f
             .repo
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        f.manager.set_revisions(vec![hash.clone()]).await.unwrap();
+        f.manager.set_revisions(vec![commit.clone()]).await.unwrap();
         // We should get a singular result because we only fed in one revision.
         expect_notifs_20s(
             &mut results,
             [(
-                f.test_case(&hash, 0).await,
+                f.test_case(&commit, 0),
                 vec![
                     TestStatus::Enqueued,
                     TestStatus::Started,
@@ -1466,28 +1462,35 @@ mod tests {
     async fn should_cancel_running() {
         let mut f = TestScriptFixture::builder().num_tests(2).build().await;
         // First commit's test will block forever.
-        let hash1 = f
+        let commit1 = f
             .repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
         let mut results = f.manager.results();
-        f.manager.set_revisions(vec![hash1.clone()]).await.unwrap();
-        let started_hash1 = timeout_5s(join_all(f.scripts.iter().map(|s| s.started(&hash1))))
+        f.manager
+            .set_revisions(vec![commit1.clone()])
             .await
-            .expect("not all scripts run for hash1");
+            .unwrap();
+        let started_commit1 =
+            timeout_5s(join_all(f.scripts.iter().map(|s| s.started(&commit1.hash))))
+                .await
+                .expect("not all scripts run for hash1");
         // Second commit's test will terminate quickly.
-        let hash2 = f
+        let commit2 = f
             .repo
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
-        f.manager.set_revisions(vec![hash2.clone()]).await.unwrap();
-        timeout_5s(f.scripts[0].started(&hash2))
+        f.manager
+            .set_revisions(vec![commit2.clone()])
+            .await
+            .unwrap();
+        timeout_5s(f.scripts[0].started(&commit2.hash))
             .await
             .expect("f.scripts[0] did not run for hash2");
         timeout_5s(join_all(
-            started_hash1
+            started_commit1
                 .iter()
                 .map(|s: &StartedTestScript| s.sigtermed()),
         ))
@@ -1498,7 +1501,7 @@ mod tests {
             // awu weh, weh mah
             [
                 (
-                    f.test_case(&hash1, 0).await,
+                    f.test_case(&commit1, 0),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1507,7 +1510,7 @@ mod tests {
                     .into(),
                 ),
                 (
-                    f.test_case(&hash1, 1).await,
+                    f.test_case(&commit1, 1),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1518,7 +1521,7 @@ mod tests {
                 // This isn't what we're testing here but we need to assert that it comes in so we can
                 // check below that nothing else comes in.
                 (
-                    f.test_case(&hash2, 0).await,
+                    f.test_case(&commit2, 0),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1527,7 +1530,7 @@ mod tests {
                     .into(),
                 ),
                 (
-                    f.test_case(&hash2, 1).await,
+                    f.test_case(&commit2, 1),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1550,13 +1553,13 @@ mod tests {
     async fn should_not_settle() {
         let mut f = TestScriptFixture::builder().num_tests(1).build().await;
         // First commit's test will block forever.
-        let hash = f
+        let commit = f
             .repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
-        f.manager.set_revisions([hash.clone()]).await.unwrap();
-        timeout_5s(f.scripts[0].started(&hash))
+        f.manager.set_revisions([commit.clone()]).await.unwrap();
+        timeout_5s(f.scripts[0].started(&commit.hash))
             .await
             .expect("script did not start");
         select!(
@@ -1587,7 +1590,7 @@ mod tests {
         // Git library. So we just take advantage of our knowledge that this
         // weirdness of the test case is irrelevant given how the implementation
         // works (it doesn't know about the structure of the history).
-        let orig_hash = f
+        let orig_commit = f
             .repo
             .commit("yarp", some_time())
             .await
@@ -1601,14 +1604,14 @@ mod tests {
 
         // Test the first commit and wait for it to be complete.
         f.manager
-            .set_revisions(vec![orig_hash.clone()])
+            .set_revisions(vec![orig_commit.clone()])
             .await
             .unwrap();
         f.manager.settled().await;
         // Sanity check that the scripts actually got run.
-        assert_eq!(f.scripts[0].num_runs(&orig_hash), 1);
-        assert_eq!(f.scripts[1].num_runs(&orig_hash), 1);
-        assert_eq!(f.scripts[2].num_runs(&orig_hash), 1);
+        assert_eq!(f.scripts[0].num_runs(&orig_commit.hash), 1);
+        assert_eq!(f.scripts[1].num_runs(&orig_commit.hash), 1);
+        assert_eq!(f.scripts[2].num_runs(&orig_commit.hash), 1);
 
         f.manager
             .set_revisions(vec![same_tree.clone()])
@@ -1616,20 +1619,20 @@ mod tests {
             .unwrap();
         f.manager.settled().await;
         // Without caching the script should get run every time.
-        assert_eq!(f.scripts[0].num_runs(&same_tree), 1);
+        assert_eq!(f.scripts[0].num_runs(&same_tree.hash), 1);
         // Commit has has changed so new commit should get retested for ByCommit.
-        assert_eq!(f.scripts[1].num_runs(&same_tree), 1);
+        assert_eq!(f.scripts[1].num_runs(&same_tree.hash), 1);
         // But not for ByTree
-        assert_eq!(f.scripts[2].num_runs(&same_tree), 0);
+        assert_eq!(f.scripts[2].num_runs(&same_tree.hash), 0);
 
         f.manager
-            .set_revisions(vec![orig_hash.clone()])
+            .set_revisions(vec![orig_commit.clone()])
             .await
             .unwrap();
         f.manager.settled().await;
-        assert_eq!(f.scripts[0].num_runs(&orig_hash), 2);
-        assert_eq!(f.scripts[1].num_runs(&orig_hash), 1);
-        assert_eq!(f.scripts[2].num_runs(&orig_hash), 1);
+        assert_eq!(f.scripts[0].num_runs(&orig_commit.hash), 2);
+        assert_eq!(f.scripts[1].num_runs(&orig_commit.hash), 1);
+        assert_eq!(f.scripts[2].num_runs(&orig_commit.hash), 1);
     }
 
     #[test_case(1, 1 ; "single worktree, one test")]
@@ -1642,17 +1645,17 @@ mod tests {
             .num_worktrees(num_worktrees)
             .build()
             .await;
-        let mut hashes = Vec::new();
+        let mut commits = Vec::new();
         let mut want_results = Vec::new();
         for i in 0..50 {
-            let hash = f
+            let commit = f
                 .repo
                 .commit(TestScript::exit_code_tag(i as u32), some_time())
                 .await
                 .expect("couldn't create test commit");
             for j in 0..num_tests {
                 want_results.push((
-                    f.test_case(&hash, j).await,
+                    f.test_case(&commit, j),
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
@@ -1661,10 +1664,10 @@ mod tests {
                     .into(),
                 ));
             }
-            hashes.push(hash);
+            commits.push(commit);
         }
         let mut results = f.manager.results();
-        f.manager.set_revisions(hashes.clone()).await.unwrap();
+        f.manager.set_revisions(commits.clone()).await.unwrap();
         expect_notifs_20s(&mut results, want_results)
             .await
             .expect("bad results");
@@ -1714,7 +1717,10 @@ mod tests {
         .expect("couldn't set up manager");
         m.set_revisions(hashes.clone()).await.unwrap();
 
-        let mut start_futs = hashes.iter().map(|h| Box::pin(script.started(h))).collect();
+        let mut start_futs = hashes
+            .iter()
+            .map(|c| Box::pin(script.started(&c.hash)))
+            .collect();
         for _ in 0..2 {
             let (_started, _index, remaining) = timeout_5s(select_all(start_futs))
                 .await
@@ -1733,7 +1739,7 @@ mod tests {
     async fn test_job_env() {
         let temp_dir = TempDir::new().unwrap();
         let repo = Arc::new(TempRepo::new().await.unwrap());
-        let hash = repo
+        let commit = repo
             .commit("hello,", some_time())
             .await
             .expect("couldn't create test commit");
@@ -1774,7 +1780,7 @@ mod tests {
         .await
         .expect("couldn't set up manager");
 
-        m.set_revisions([hash.clone()])
+        m.set_revisions([commit.clone()])
             .await
             .expect("set_revisions failed");
         m.settled().await;
@@ -1800,7 +1806,7 @@ mod tests {
         );
         assert_eq!(
             env.get("LCI_COMMIT").map(|t| CommitHash::new(*t)),
-            Some(hash)
+            Some(commit.hash)
         );
         let resource0 = env
             .get("LCI_RESOURCE_my_resource_0")
@@ -1828,9 +1834,9 @@ mod tests {
             .build()
             .await;
         let mut results = f.manager.results();
-        let mut hashes = Vec::new();
+        let mut commits = Vec::new();
         for _ in 0..5 {
-            hashes.push(
+            commits.push(
                 f.repo
                     .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
                     .await
@@ -1842,14 +1848,14 @@ mod tests {
         // for a worktree. In order to make it deterministic which one gets
         // blocked, we'll do this in two phases.
         f.manager
-            .set_revisions(vec![hashes[0].clone()])
+            .set_revisions(vec![commits[0].clone()])
             .await
             .unwrap();
         // wait for first test to get started.
         expect_notifs_20s(
             &mut results,
             [(
-                f.test_case(&hashes[0], 0).await,
+                f.test_case(&commits[0], 0),
                 vec![TestStatus::Enqueued, TestStatus::Started].into(),
             )],
         )
@@ -1858,13 +1864,13 @@ mod tests {
 
         // Now we enqueue the test that should block.
         f.manager
-            .set_revisions(vec![hashes[0].clone(), hashes[1].clone()])
+            .set_revisions(vec![commits[0].clone(), commits[1].clone()])
             .await
             .unwrap();
         expect_notifs_20s(
             &mut results,
             [(
-                f.test_case(&hashes[1], 0).await,
+                f.test_case(&commits[1], 0),
                 vec![TestStatus::Enqueued].into(),
             )],
         )
@@ -1872,11 +1878,14 @@ mod tests {
         .expect("bad test result");
 
         // Now we cancel both of those tests.
-        f.manager.set_revisions(Vec::new()).await.unwrap();
+        f.manager
+            .set_revisions::<_, CommitHash>(Vec::new())
+            .await
+            .unwrap();
         expect_notifs_20s(
             &mut results,
             [(
-                f.test_case(&hashes[0], 0).await,
+                f.test_case(&commits[0], 0),
                 vec![TestStatus::Canceled].into(),
             )],
         )
@@ -1887,7 +1896,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!f.scripts[0].was_started(&hashes[1]));
+        assert!(!f.scripts[0].was_started(&commits[1].hash));
     }
 
     #[test_log::test(tokio::test)]
@@ -1901,7 +1910,7 @@ mod tests {
 
         // This commit's tests will be terminated by SIGINT if they receive it,
         // which is "an error"
-        let hash_error = f
+        let with_error = f
             .repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
@@ -1911,7 +1920,7 @@ mod tests {
         // cached if the SIGTERM was due to the job being canceled.
         let mut commit_msg = OsString::from(TestScript::BLOCK_COMMIT_MSG_TAG);
         commit_msg.push(TestScript::exit_code_tag(1));
-        let hash_fail = f
+        let with_fail = f
             .repo
             .commit(commit_msg, some_time())
             .await
@@ -1919,26 +1928,26 @@ mod tests {
 
         // Wait until all tests are started.
         f.manager
-            .set_revisions(vec![hash_error.clone(), hash_fail.clone()].clone())
+            .set_revisions(vec![with_error.clone(), with_fail.clone()].clone())
             .await
             .unwrap();
         expect_notifs_20s(
             &mut results,
             [
                 (
-                    f.test_case(&hash_error, 0).await,
+                    f.test_case(&with_error, 0),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
                 (
-                    f.test_case(&hash_error, 1).await,
+                    f.test_case(&with_error, 1),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 0).await,
+                    f.test_case(&with_fail, 0),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 1).await,
+                    f.test_case(&with_fail, 1),
                     vec![TestStatus::Enqueued, TestStatus::Started].into(),
                 ),
             ],
@@ -1949,12 +1958,12 @@ mod tests {
         // Cause one to fail with an error. We take advantage of the fact that
         // this whole tool considers it an "error" when a test exits with a
         // signal instead of exiting with a nonzero code.
-        let started_script = f.scripts[0].started(&hash_error).await;
+        let started_script = f.scripts[0].started(&with_error.hash).await;
         started_script.sigurs1();
         expect_notifs_20s(
             &mut results,
             [(
-                f.test_case(&hash_error, 0).await,
+                f.test_case(&with_error, 0),
                 vec![TestStatus::Error(String::from("terminated by signal 10"))].into(),
             )],
         )
@@ -1963,20 +1972,20 @@ mod tests {
         started_script.reset_started();
 
         // ... and the others to be canceled.
-        f.manager.set_revisions(vec![]).await.unwrap();
+        f.manager.cancel_running().await.unwrap();
         expect_notifs_20s(
             &mut results,
             [
                 (
-                    f.test_case(&hash_error, 1).await,
+                    f.test_case(&with_error, 1),
                     vec![TestStatus::Canceled].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 0).await,
+                    f.test_case(&with_fail, 0),
                     vec![TestStatus::Canceled].into(),
                 ),
                 (
-                    f.test_case(&hash_fail, 1).await,
+                    f.test_case(&with_fail, 1),
                     vec![TestStatus::Canceled].into(),
                 ),
             ],
@@ -1986,24 +1995,24 @@ mod tests {
 
         // They should now get run a second time. i.e. none of the results should have got hashed.
         f.manager
-            .set_revisions(vec![hash_error.clone(), hash_fail.clone()].clone())
+            .set_revisions(vec![with_error.clone(), with_fail.clone()].clone())
             .await
             .unwrap();
         select!(
             _ = sleep(Duration::from_secs(5)) => panic!("error'd test not re-run"),
-            _ = f.scripts[0].started(&hash_error) => ()
+            _ = f.scripts[0].started(&with_error.hash) => ()
         );
         select!(
             _ = sleep(Duration::from_secs(5)) => panic!("canceled test not re-run"),
-            _ = f.scripts[1].started(&hash_error) => ()
+            _ = f.scripts[1].started(&with_error.hash) => ()
         );
         select!(
             _ = sleep(Duration::from_secs(5)) => panic!("error'd test not re-run"),
-            _ = f.scripts[0].started(&hash_fail) => ()
+            _ = f.scripts[0].started(&with_fail.hash) => ()
         );
         select!(
             _ = sleep(Duration::from_secs(5)) => panic!("canceled test not re-run"),
-            _ = f.scripts[1].started(&hash_fail) => ()
+            _ = f.scripts[1].started(&with_fail.hash) => ()
         );
     }
 
@@ -2014,28 +2023,33 @@ mod tests {
             .num_worktrees(1)
             .build()
             .await;
-        let test_hash = f
+        let test_commit = f
             .repo
             .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
             .await
             .expect("couldn't create test commit");
-        let head_hash = f
+        let head_commit = f
             .repo
             .commit("woodly doodly", some_time())
             .await
             .expect("couldn't create test commit");
         f.manager
-            .set_revisions(vec![test_hash.clone()])
+            .set_revisions(vec![test_commit.clone()])
             .await
             .unwrap();
         // Even though we have three tests that never finish, and only one
         // worktree, they should all start.
-        timeout_5s(join_all(f.scripts.iter().map(|s| s.started(&test_hash))))
-            .await
-            .expect("not all scripts run for hash");
+        timeout_5s(join_all(
+            f.scripts.iter().map(|s| s.started(&test_commit.hash)),
+        ))
+        .await
+        .expect("not all scripts run for hash");
         // We were testing test_hash but we shouldn't have checked it out, since
         // we don't "own" the worktree.
-        assert_eq!(f.repo.rev_parse("HEAD").await.unwrap(), Some(head_hash));
+        assert_eq!(
+            f.repo.rev_parse("HEAD").await.unwrap().map(|c| c.hash),
+            Some(head_commit.hash)
+        );
     }
 
     #[test_case(OsStr::new(TestScript::BLOCK_COMMIT_MSG_TAG), false ; "blocked¸ shouldn't start")]
@@ -2048,14 +2062,14 @@ mod tests {
             .num_worktrees(2)
             .build()
             .await;
-        let hash = f.repo.commit(commit_msg, some_time()).await.unwrap();
-        f.manager.set_revisions(vec![hash.clone()]).await.unwrap();
-        timeout_5s(f.scripts[0].started(&hash))
+        let commit = f.repo.commit(commit_msg, some_time()).await.unwrap();
+        f.manager.set_revisions(vec![commit.clone()]).await.unwrap();
+        timeout_5s(f.scripts[0].started(&commit.hash))
             .await
             .expect("Initial test did not start");
 
         if should_start {
-            timeout_5s(f.scripts[1].started(&hash))
+            timeout_5s(f.scripts[1].started(&commit.hash))
                 .await
                 .expect("Depending test did not start");
         } else {
@@ -2063,7 +2077,7 @@ mod tests {
             // started. But how long do we wait...? Just, some arbitrary time. So
             // sometimes this test can pass even if there's a bug :(
             sleep(Duration::from_secs(1)).await;
-            assert_eq!(f.scripts[1].was_started(&hash), should_start);
+            assert_eq!(f.scripts[1].was_started(&commit.hash), should_start);
         }
 
         // TODO: Test that changes to dependency config hashes invalidates

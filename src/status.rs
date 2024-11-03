@@ -369,24 +369,24 @@ mod tests {
     async fn output_buffer_smoke() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         repo.commit("1", some_time()).await.unwrap();
-        let hash2 = repo.commit("2", some_time()).await.unwrap();
-        let hash3 = repo.commit("3", some_time()).await.unwrap();
+        let commit2 = repo.commit("2", some_time()).await.unwrap();
+        let commit3 = repo.commit("3", some_time()).await.unwrap();
         let test1 = fake_test("my_test1", CachePolicy::ByCommit);
         let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
-        let ob = OutputBuffer::new(&repo, format!("{hash2}^..HEAD"), "%h %s")
+        let ob = OutputBuffer::new(&repo, format!("{}^..HEAD", commit2.hash), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
         let mut tracked_cases = HashMap::new();
         for notif in [
-            fake_notif(&hash3, &test1, TestStatus::Enqueued),
+            fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
             fake_notif(
-                &hash3,
+                &commit3.hash,
                 &test2,
                 TestStatus::Completed(TestResult { exit_code: 0 }),
             ),
-            fake_notif(&hash2, &test1, TestStatus::Error("oh no".to_owned())),
-            fake_notif(&hash2, &test2, TestStatus::Started),
+            fake_notif(&commit2.hash, &test1, TestStatus::Error("oh no".to_owned())),
+            fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
@@ -414,33 +414,36 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn output_buffer_octopus() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
-        let base_hash = repo.commit("base", some_time()).await.unwrap();
+        let base_commit = repo.commit("base", some_time()).await.unwrap();
         repo.commit("join", some_time()).await.unwrap();
-        let hash1 = repo.commit("1", some_time()).await.unwrap();
-        repo.checkout(&base_hash).await.unwrap();
-        let hash2 = repo.commit("2", some_time()).await.unwrap();
-        repo.checkout(&base_hash).await.unwrap();
-        let hash3 = repo.commit("3", some_time()).await.unwrap();
-        repo.merge(&[hash1, hash2.clone(), hash3.clone()], some_time())
-            .await
-            .unwrap();
+        let commit1 = repo.commit("1", some_time()).await.unwrap();
+        repo.checkout(&base_commit.hash).await.unwrap();
+        let commit2 = repo.commit("2", some_time()).await.unwrap();
+        repo.checkout(&base_commit.hash).await.unwrap();
+        let commit3 = repo.commit("3", some_time()).await.unwrap();
+        repo.merge(
+            &[commit1.hash, commit2.hash.clone(), commit3.hash.clone()],
+            some_time(),
+        )
+        .await
+        .unwrap();
         let test1 = fake_test("my_test1", CachePolicy::ByCommit);
         let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
-        let ob = OutputBuffer::new(&repo, format!("{base_hash}..HEAD"), "%h %s")
+        let ob = OutputBuffer::new(&repo, format!("{}..HEAD", base_commit.hash), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
 
         let mut tracked_cases = HashMap::new();
         for notif in [
-            fake_notif(&hash3, &test1, TestStatus::Enqueued),
+            fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
             fake_notif(
-                &hash3,
+                &commit3.hash,
                 &test2,
                 TestStatus::Completed(TestResult { exit_code: 0 }),
             ),
-            fake_notif(&hash2, &test1, TestStatus::Error("oh no".to_owned())),
-            fake_notif(&hash2, &test2, TestStatus::Started),
+            fake_notif(&commit2.hash, &test1, TestStatus::Error("oh no".to_owned())),
+            fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
@@ -472,32 +475,35 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn output_buffer_empty() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
-        let base_hash = repo.commit("base", some_time()).await.unwrap();
+        let base_commit = repo.commit("base", some_time()).await.unwrap();
         repo.commit("join", some_time()).await.unwrap();
-        let hash1 = repo.commit("1", some_time()).await.unwrap();
-        repo.checkout(&base_hash).await.unwrap();
-        let hash2 = repo.commit("2", some_time()).await.unwrap();
-        repo.checkout(&base_hash).await.unwrap();
-        let hash3 = repo.commit("3", some_time()).await.unwrap();
-        repo.merge(&[hash1, hash2.clone(), hash3.clone()], some_time())
-            .await
-            .unwrap();
+        let commit1 = repo.commit("1", some_time()).await.unwrap();
+        repo.checkout(&base_commit.hash).await.unwrap();
+        let commit2 = repo.commit("2", some_time()).await.unwrap();
+        repo.checkout(&base_commit.hash).await.unwrap();
+        let commit3 = repo.commit("3", some_time()).await.unwrap();
+        repo.merge(
+            &[commit1.hash, commit2.hash.clone(), commit3.hash.clone()],
+            some_time(),
+        )
+        .await
+        .unwrap();
         let test1 = fake_test("my_test1", CachePolicy::ByCommit);
         let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
-        let ob = OutputBuffer::new(&repo, format!("{base_hash}..{base_hash}"), "%h %s")
+        let ob = OutputBuffer::new(&repo, format!("{0}..{0}", base_commit.hash), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
         let mut tracked_cases = HashMap::new();
         for notif in [
-            fake_notif(&hash3, &test1, TestStatus::Enqueued),
+            fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
             fake_notif(
-                &hash3,
+                &commit3.hash,
                 &test1,
                 TestStatus::Completed(TestResult { exit_code: 0 }),
             ),
-            fake_notif(&hash2, &test2, TestStatus::Error("oh no".to_owned())),
-            fake_notif(&hash2, &test2, TestStatus::Started),
+            fake_notif(&commit2.hash, &test2, TestStatus::Error("oh no".to_owned())),
+            fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }

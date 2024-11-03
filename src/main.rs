@@ -165,7 +165,7 @@ async fn watch(
             },
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");
-                test_manager.set_revisions([]).await.context("cancelling tests")?;
+                test_manager.cancel_running().await.context("cancelling tests")?;
                 break;
             }
         )
