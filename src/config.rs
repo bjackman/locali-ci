@@ -14,8 +14,8 @@ use serde::Deserialize;
 
 use crate::{
     dag::{Dag, GraphNode},
-    resource::ResourceKey,
-    test::{self, CachePolicy, TestName},
+    resource::{self, Pools, ResourceKey},
+    test::{self, CachePolicy, TestDag, TestName},
 };
 
 #[derive(Deserialize, Debug, Hash, Clone)]
@@ -189,7 +189,7 @@ pub struct Config {
 type ResourceTokens = HashMap<ResourceKey, Vec<String>>;
 
 impl Config {
-    pub fn parse_resource_tokens(&self) -> ResourceTokens {
+    fn parse_resource_tokens(&self) -> ResourceTokens {
         self.resources
             .as_ref()
             .unwrap_or(&vec![])
@@ -208,7 +208,7 @@ impl Config {
             .collect()
     }
 
-    pub fn parse_tests(
+    fn parse_tests(
         &self,
         resource_tokens: &ResourceTokens,
     ) -> anyhow::Result<Dag<TestName, Arc<test::Test>>> {
@@ -247,5 +247,43 @@ impl Config {
         }
 
         Ok(tests)
+    }
+}
+
+// Messy type to try and capture a pretty arbitrary aspect of initialising the
+// pre-requisites to run jobs.
+// Construct via from. This does NOT create worktrees, that's why it has a
+// num_worktrees field to tell you how many you'll need to create and insert
+// into the pools.
+// The reason for this is that for some reason I decided that the num_worktrees
+// option should be ignored when running one-shot tests. This was dumb and made
+// things unnecessarily complicated.
+pub struct ParsedConfig {
+    pub num_worktrees: usize,
+    pub resource_pools: Pools,
+    pub tests: TestDag,
+}
+
+impl ParsedConfig {
+    pub fn from(config: Config) -> anyhow::Result<Self> {
+        let resource_tokens = config.parse_resource_tokens();
+        let tests = config.parse_tests(&resource_tokens)?;
+        let resources: HashMap<ResourceKey, Vec<resource::Resource>> = resource_tokens
+            .into_iter()
+            .map(|(key, tokens)| {
+                (
+                    key,
+                    tokens
+                        .into_iter()
+                        .map(resource::Resource::UserToken)
+                        .collect(),
+                )
+            })
+            .collect();
+        Ok(Self {
+            num_worktrees: config.num_worktrees,
+            resource_pools: Pools::new(resources),
+            tests,
+        })
     }
 }

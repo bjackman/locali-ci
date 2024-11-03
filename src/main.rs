@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::{arg, Parser as _, Subcommand};
-use config::Config;
+use config::{Config, ParsedConfig};
 use futures::StreamExt;
 use log::info;
 use nix::sys::utsname::uname;
@@ -106,7 +106,7 @@ enum Command {
 
 // Kitchen-sink object for global shit.
 struct Env {
-    config: Config,
+    config: ParsedConfig,
     repo: Arc<git::PersistentWorktree>,
     database: Database,
 }
@@ -125,16 +125,9 @@ async fn watch(
         .port();
     tokio::spawn(http::serve_dir(listener, env.database.base_dir.clone()));
 
-    let resource_tokens = env.config.parse_resource_tokens();
-    let manager_builder = Manager::builder(
-        env.repo.clone(),
-        env.database,
-        env.config.parse_tests(&resource_tokens)?,
-        resource_tokens,
-    )
-    .num_worktrees(env.config.num_worktrees)
-    .worktree_prefix(&watch_args.worktree_prefix)
-    .worktree_dir(&watch_args.worktree_dir);
+    let manager_builder = Manager::builder(env.repo.clone(), env.database, env.config)
+        .worktree_prefix(&watch_args.worktree_prefix)
+        .worktree_dir(&watch_args.worktree_dir);
     let mut test_manager = manager_builder.build().await?;
     let range_spec: OsString = format!("{}..HEAD", watch_args.base).into();
     let mut notifs = test_manager.results();
@@ -207,6 +200,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config_content = fs::read_to_string(&args.config).context("couldn't read config")?;
     let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
+    let config = ParsedConfig::from(config)?;
 
     let repo = git::PersistentWorktree {
         path: args.repo.to_owned().into(),

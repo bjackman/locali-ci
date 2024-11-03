@@ -58,6 +58,15 @@ impl Pools {
         }
     }
 
+    pub fn add(&mut self, new_resources: impl IntoIterator<Item = (ResourceKey, Resource)>) {
+        // Don't need the condvar since we have a mutable reference to self. We
+        // only take the mutex out of a misguided sense of decorum.
+        let mut resources = self.resources.lock();
+        for (key, resource) in new_resources.into_iter() {
+            (*resources).entry(key).or_default().push(resource);
+        }
+    }
+
     // Get the specified number of tokens from each of the pools, keys match
     // the keys used in new (or this panics).
     // The tokens are held until you drop the returned value.

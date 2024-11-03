@@ -29,6 +29,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    config::ParsedConfig,
     dag::{Dag, GraphNode},
     git::{Commit, CommitHash, Hash, TempWorktree, Worktree},
     process::ExitStatusExt as _,
@@ -168,7 +169,7 @@ impl GraphNode<TestName> for Arc<Test> {
     }
 }
 
-type TestDag = Dag<TestName, Arc<Test>>;
+pub type TestDag = Dag<TestName, Arc<Test>>;
 
 type JobEnv = Vec<(String, String)>;
 
@@ -184,22 +185,15 @@ pub struct ManagerBuilder<W> {
     // This needs to be an Arc because we hold onto a reference to it for a
     // while, and create temporary worktrees from it in the background.
     repo: Arc<W>,
-    tests: TestDag,
-    resource_tokens: HashMap<ResourceKey, Vec<String>>,
+    config: ParsedConfig,
     result_db: Database,
 
-    num_worktrees: usize,
     worktree_prefix: String,
     worktree_dir: PathBuf,
     job_env: Vec<(String, String)>,
 }
 
 impl<W> ManagerBuilder<W> {
-    pub fn num_worktrees(mut self, n: usize) -> Self {
-        self.num_worktrees = n;
-        self
-    }
-
     // Worktree temp-directories will have their name (not path!) prefixed with this.
     pub fn worktree_prefix(mut self, prefix: &str) -> Self {
         prefix.clone_into(&mut self.worktree_prefix);
@@ -229,9 +223,9 @@ impl<W> ManagerBuilder<W> {
     {
         info!(
             "Setting up {} worktrees in {:?}...",
-            self.num_worktrees, self.worktree_dir
+            self.config.num_worktrees, self.worktree_dir
         );
-        let worktrees = try_join_all((0..self.num_worktrees).map(|_| async {
+        let worktrees = try_join_all((0..self.config.num_worktrees).map(|_| async {
             // Not doing this async because I assume it's fast, there is no white-glove support,
             // and the drop will have to be synchronous anyway.
             let t = tempfile::Builder::new()
@@ -246,24 +240,24 @@ impl<W> ManagerBuilder<W> {
 
         let Self {
             repo,
-            tests,
             result_db,
-            resource_tokens,
+            config:
+                ParsedConfig {
+                    mut resource_pools,
+                    tests,
+                    num_worktrees: _,
+                },
             job_env,
-            num_worktrees: _,
             worktree_prefix: _,
             worktree_dir: _,
         } = self;
 
         // Combine the worktrees and generic tokens into reosurces that can be
         // managed by the resource module.
-        let mut resources: HashMap<ResourceKey, Vec<Resource>> = resource_tokens
-            .into_iter()
-            .map(|(key, tokens)| (key, tokens.into_iter().map(Resource::UserToken).collect()))
-            .collect();
-        resources.insert(
-            ResourceKey::Worktree,
-            worktrees.into_iter().map(Resource::Worktree).collect(),
+        resource_pools.add(
+            worktrees
+                .into_iter()
+                .map(|w| (ResourceKey::Worktree, Resource::Worktree(w))),
         );
 
         // TODO: If this capacity gets exhausted, data gets lost and we get an error which this code
@@ -276,7 +270,7 @@ impl<W> ManagerBuilder<W> {
             job_cts: HashMap::new(),
             job_counter: JobCounter::new(),
             tests,
-            resource_pools: Arc::new(Pools::new(resources)),
+            resource_pools: Arc::new(resource_pools),
             result_db,
         })
     }
@@ -300,7 +294,7 @@ pub struct Manager<W: Worktree> {
 }
 
 impl<W: Worktree + Sync + Send + 'static> Manager<W> {
-    pub fn builder<R>(
+    pub fn builder(
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
@@ -308,20 +302,11 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // because we want it to be hard to accidentally refer to global
         // resources like that.
         result_db: Database,
-        tests: TestDag,
-        // Tokens for resources, basically a HashMap from "resource type" names
-        // to token values.
-        resource_tokens: R,
-    ) -> ManagerBuilder<W>
-    where
-        R: IntoIterator<Item = (ResourceKey, Vec<String>)>,
-    {
+        config: ParsedConfig,
+    ) -> ManagerBuilder<W> {
         ManagerBuilder {
-            tests,
-            resource_tokens: resource_tokens.into_iter().collect(),
             result_db,
-
-            num_worktrees: 1,
+            config,
             worktree_prefix: "worktree-".to_owned(),
             worktree_dir: env::temp_dir(),
             job_env: base_job_env(repo.path()),
@@ -1452,10 +1437,12 @@ mod tests {
             let manager = Manager::builder(
                 repo.clone(),
                 Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-                Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
-                [],
+                ParsedConfig {
+                    num_worktrees: self.num_worktrees,
+                    tests: Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
+                    resource_pools: Pools::new([]),
+                },
             )
-            .num_worktrees(self.num_worktrees)
             .build()
             .await
             .expect("couldn't set up manager");
@@ -1754,7 +1741,10 @@ mod tests {
         // We only have 2 tokens
         let resource_tokens = HashMap::from([(
             ResourceKey::UserToken("foo".into()),
-            vec!["foo1".into(), "foo2".into()],
+            vec![
+                Resource::UserToken("foo1".into()),
+                Resource::UserToken("foo2".into()),
+            ],
         )]);
         // And a test that requires one of those tokens.
         let tests = [Test {
@@ -1774,10 +1764,12 @@ mod tests {
         let mut m = Manager::builder(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-            Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
-            resource_tokens,
+            ParsedConfig {
+                num_worktrees: 4,
+                tests: Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
+                resource_pools: Pools::new(resource_tokens),
+            },
         )
-        .num_worktrees(4)
         .build()
         .await
         .expect("couldn't set up manager");
@@ -1813,34 +1805,45 @@ mod tests {
         let mut m = Manager::builder(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-            Dag::new([Arc::new(Test {
-                name: TestName::new("my_test"),
-                program: OsString::from("bash"),
-                args: vec![
-                    "-c".into(),
-                    OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
-                ],
-                needs_resources: [
-                    (ResourceKey::Worktree, 1),
-                    (ResourceKey::UserToken("my_resource".into()), 2),
-                ]
-                .into(),
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy: CachePolicy::ByCommit,
-                config_hash: 0,
-                depends_on: vec![],
-            })])
-            .expect("couldn't build test DAG"),
-            [
-                (
-                    ResourceKey::UserToken("my_resource".into()),
-                    vec!["thing1".into(), "thing2".into(), "thing3".into()],
-                ),
-                (
-                    ResourceKey::UserToken("other_resource".into()),
-                    vec!["whing1".into(), "whing2".into(), "whing3".into()],
-                ),
-            ],
+            ParsedConfig {
+                tests: Dag::new([Arc::new(Test {
+                    name: TestName::new("my_test"),
+                    program: OsString::from("bash"),
+                    args: vec![
+                        "-c".into(),
+                        OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
+                    ],
+                    needs_resources: [
+                        (ResourceKey::Worktree, 1),
+                        (ResourceKey::UserToken("my_resource".into()), 2),
+                    ]
+                    .into(),
+                    shutdown_grace_period: Duration::from_secs(5),
+                    cache_policy: CachePolicy::ByCommit,
+                    config_hash: 0,
+                    depends_on: vec![],
+                })])
+                .expect("couldn't build test DAG"),
+                resource_pools: Pools::new([
+                    (
+                        ResourceKey::UserToken("my_resource".into()),
+                        vec![
+                            Resource::UserToken("thing1".into()),
+                            Resource::UserToken("thing2".into()),
+                            Resource::UserToken("thing3".into()),
+                        ],
+                    ),
+                    (
+                        ResourceKey::UserToken("other_resource".into()),
+                        vec![
+                            Resource::UserToken("whing1".into()),
+                            Resource::UserToken("whing2".into()),
+                            Resource::UserToken("whing3".into()),
+                        ],
+                    ),
+                ]),
+                num_worktrees: 1,
+            },
         )
         .build()
         .await
