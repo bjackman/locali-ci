@@ -1,50 +1,41 @@
-use core::fmt;
-use core::fmt::Display;
-use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::env;
-use std::ffi::OsStr;
-use std::ffi::OsString;
-use std::fmt::Debug;
-use std::fmt::Formatter;
-use std::path::Path;
-use std::path::PathBuf;
-use std::pin::pin;
-use std::process::Stdio;
-use std::sync::Arc;
-use std::time::Duration;
+use core::{fmt, fmt::Display};
+use std::{
+    borrow::Borrow,
+    collections::HashMap,
+    env,
+    ffi::{OsStr, OsString},
+    fmt::{Debug, Formatter},
+    path::{Path, PathBuf},
+    pin::pin,
+    process::Stdio,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Context;
-use futures::future::select_all;
-use futures::future::FutureExt;
-use futures::future::{self, try_join_all, Either};
+use futures::future::{self, select_all, try_join_all, Either, FutureExt};
 use itertools::Itertools;
-use log::debug;
-use log::error;
-use log::info;
-use log::warn;
+#[allow(unused_imports)]
+use log::{debug, error, info, warn};
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
-use serde::Deserialize;
-use serde::Serialize;
-use tokio::process::Child;
-use tokio::process::Command;
-use tokio::select;
-use tokio::sync::broadcast;
-use tokio::sync::watch;
-use tokio::time::sleep;
+use serde::{Deserialize, Serialize};
+use tokio::{
+    process::{Child, Command},
+    select,
+    sync::{broadcast, watch},
+    time::sleep,
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::dag::{Dag, GraphNode};
-use crate::git::TempWorktree;
-use crate::git::{CommitHash, Hash, Worktree};
-use crate::process::ExitStatusExt as _;
-use crate::resource::Pools;
-use crate::resource::Resource;
-use crate::resource::ResourceKey;
-use crate::resource::Resources;
-use crate::result::Database;
-use crate::result::TestCaseOutput;
+use crate::{
+    dag::{Dag, GraphNode},
+    git::TempWorktree,
+    git::{CommitHash, Hash, Worktree},
+    process::ExitStatusExt as _,
+    resource::{Pools, Resource, ResourceKey, Resources},
+    result::{Database, TestCaseOutput},
+};
 
 pub trait ResultExt {
     // Log an error if it occurs, prefixed with s, otherwise return nothing.
