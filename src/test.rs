@@ -34,7 +34,7 @@ use crate::{
     git::{Commit, CommitHash, Hash, TempWorktree, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, Resource, ResourceKey, Resources},
-    result::{Database, TestCaseOutput},
+    result::{Database, DatabaseEntry},
 };
 
 pub trait ResultExt {
@@ -333,7 +333,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }
     }
 
-    async fn spawn_job(&self, mut job: TestJob) {
+    async fn spawn_job(&self, mut job: TestJob<DatabaseEntry>) {
         if let Some(test_result) = self.cache_lookup(&job.test_case).await {
             let result = TestStatus::Completed(test_result);
             job.notifier.notify_completion(result.clone());
@@ -440,7 +440,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // them into a HashMap instead.
         let jobs = test_cases.bottom_up().try_fold(
             HashMap::new(),
-            |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob>> {
+            |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob<DatabaseEntry>>> {
                 let wait_for = test_case
                     .child_ids() // This gives the TestCaseIds of dependency jobs.
                     .iter()
@@ -624,21 +624,21 @@ impl Drop for ChildDropGuard {
     }
 }
 
-pub struct TestJobBuilder {
+pub struct TestJobBuilder<O> {
     ct: CancellationToken,
     test_case: TestCase,
     token: Option<JobToken>,
-    output: TestCaseOutput,
+    output: O,
     env: Arc<Vec<(String, String)>>,
     wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
     global_tx: Option<broadcast::Sender<Arc<Notification>>>,
 }
 
-impl TestJobBuilder {
+impl<O: TestJobOutput> TestJobBuilder<O> {
     pub fn new(
         ct: CancellationToken,
         test_case: TestCase,
-        output: TestCaseOutput,
+        output: O,
         env: Arc<JobEnv>,
         // Job shouldn't start until all of these channels produce a result. If any
         // is unsuccessful it should abort.
@@ -668,7 +668,7 @@ impl TestJobBuilder {
         self
     }
 
-    pub fn build(self) -> TestJob {
+    pub fn build(self) -> TestJob<O> {
         TestJob {
             ct: self.ct,
             test_case: self.test_case.clone(),
@@ -681,16 +681,25 @@ impl TestJobBuilder {
     }
 }
 
+pub trait TestJobOutput {
+    // Panics if called more than once.
+    fn stderr(&mut self) -> anyhow::Result<Stdio>;
+    // Panics if called more than once.
+    fn stdout(&mut self) -> anyhow::Result<Stdio>;
+    // Panics if called more than once.
+    fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()>;
+}
+
 // This is not really a proper type, it doesn't really mean anything except as an implementation
 // detail of its user. I tried to get rid of it but then you run into issues with getting references
 // to individual fields while a mutable reference exists to the overall struct. I think this is
 // basically one an instance of "view structs" described in
 // https://smallcultfollowing.com/babysteps/blog/2024/06/02/the-borrow-checker-within/
-pub struct TestJob {
+pub struct TestJob<O: TestJobOutput> {
     ct: CancellationToken,
     test_case: TestCase,
     _token: Option<JobToken>,
-    output: TestCaseOutput,
+    output: O,
     env: Arc<Vec<(String, String)>>,
     // Job shouldn't start until all of these channels produce a result. If any
     // is unsuccessful it should abort.
@@ -698,7 +707,7 @@ pub struct TestJob {
     notifier: TestStatusNotifier,
 }
 
-impl<'a> TestJob {
+impl<'a, O: TestJobOutput> TestJob<O> {
     pub async fn get_resources_and_run(
         &mut self,
         pools: &Pools,

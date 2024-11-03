@@ -1,6 +1,7 @@
 use std::{
     fs::{self, create_dir_all, remove_dir_all, File},
     path::{Path, PathBuf},
+    process::Stdio,
 };
 
 use anyhow::{Context, Result};
@@ -8,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     git::Hash,
-    test::{ConfigHash, TestCase, TestName, TestResult},
+    test::{ConfigHash, TestCase, TestJobOutput, TestName, TestResult},
 };
 
 // Result database similar to the design described in
@@ -68,16 +69,16 @@ impl Database {
 
     // Prepare to create the output directory for a job output, but don't actually create it yet.
     // It's created once you use one of the methods of CommitOutput for writing data.
-    pub fn create_output(&self, test_case: &TestCase) -> anyhow::Result<TestCaseOutput> {
-        TestCaseOutput::new(
+    pub fn create_output(&self, test_case: &TestCase) -> anyhow::Result<DatabaseEntry> {
+        DatabaseEntry::new(
             self.result_path(test_case.storage_hash(), &test_case.test.name),
             test_case.test.config_hash,
         )
     }
 }
 
-// Output for an individual commit.
-pub struct TestCaseOutput {
+// Output for an individual test job, stored into the database
+pub struct DatabaseEntry {
     base_dir: PathBuf,
     base_dir_created: bool,
     stdout_opened: bool,
@@ -86,7 +87,7 @@ pub struct TestCaseOutput {
     config_hash: ConfigHash,
 }
 
-impl TestCaseOutput {
+impl DatabaseEntry {
     pub fn new(base_dir: PathBuf, config_hash: ConfigHash) -> anyhow::Result<Self> {
         Ok(Self {
             base_dir,
@@ -114,24 +115,27 @@ impl TestCaseOutput {
         }
         Ok(&self.base_dir)
     }
+}
 
-    // Panics if called more than once.
-    pub fn stdout(&mut self) -> Result<File> {
+impl TestJobOutput for DatabaseEntry {
+    fn stdout(&mut self) -> Result<Stdio> {
         assert!(!self.stdout_opened);
         self.stdout_opened = true;
-        Ok(File::create(self.get_base_dir()?.join("stdout.txt"))?)
+        Ok(Stdio::from(File::create(
+            self.get_base_dir()?.join("stdout.txt"),
+        )?))
     }
 
-    // Panics if called more than once.
-    pub fn stderr(&mut self) -> Result<File> {
+    fn stderr(&mut self) -> Result<Stdio> {
         assert!(!self.stderr_opened);
         self.stderr_opened = true;
-        Ok(File::create(self.get_base_dir()?.join("stderr.txt"))?)
+        Ok(Stdio::from(File::create(
+            self.get_base_dir()?.join("stderr.txt"),
+        )?))
     }
 
     // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
-    // Panics if called more than once.
-    pub fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
+    fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
         assert!(!self.status_written);
         self.status_written = true;
         let entry = TestResultEntry {
