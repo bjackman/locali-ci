@@ -61,6 +61,27 @@ pub enum CachePolicy {
     ByTree,
 }
 
+impl CachePolicy {
+    // Figure out the hash that should be used to store a result in the
+    // database, if it should be stored at all
+    pub async fn cache_hash<W: Worktree>(
+        &self,
+        commit_hash: &CommitHash,
+        repo: &W,
+    ) -> anyhow::Result<Option<Hash>> {
+        Ok(match self {
+            CachePolicy::NoCaching => None::<Hash>,
+            CachePolicy::ByCommit => Some(commit_hash.clone().into()),
+            CachePolicy::ByTree => Some(
+                repo.commit_tree(commit_hash.clone())
+                    .await
+                    .context("looking up tree from commit")?
+                    .into(),
+            ),
+        })
+    }
+}
+
 // Some unspecified hash, don't care too much about stability across builds.
 pub type ConfigHash = u64;
 
@@ -398,6 +419,10 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         I: IntoIterator<Item = CommitHash>,
     {
         // Build the set test cases we need to kick off.
+        // TODO: this is kinda silly, TestCase::new looks up the tree from the
+        // hash for every indiviual test, we only need to do that at most once
+        // per revision. But doing this efficiently makes for code that's
+        // probably more complex than necessary.
         let test_cases = try_join_all(
             revs.into_iter()
                 .cartesian_product(self.tests.nodes())
@@ -806,16 +831,7 @@ impl TestCase {
         repo: &W,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            cache_hash: match test.cache_policy {
-                CachePolicy::NoCaching => None::<Hash>,
-                CachePolicy::ByCommit => Some(commit_hash.clone().into()),
-                CachePolicy::ByTree => Some(
-                    repo.commit_tree(commit_hash.clone())
-                        .await
-                        .context("looking up tree from commit")?
-                        .into(),
-                ),
-            },
+            cache_hash: test.cache_policy.cache_hash(&commit_hash, repo).await?,
             test,
             commit_hash,
         })
