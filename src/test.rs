@@ -1899,7 +1899,7 @@ mod tests {
     async fn should_not_start_canceled() {
         let mut f = TestScriptFixture::builder()
             .num_tests(1)
-            .num_worktrees(2)
+            .num_worktrees(1)
             .build()
             .await;
         let mut results = f.manager.results();
