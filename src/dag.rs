@@ -205,6 +205,7 @@ impl<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Dag<I, G> {
     }
 }
 
+#[derive(Clone)]
 pub struct BottomUp<'a, I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
     dag: &'a Dag<I, G>,
     visit_stack: Vec<usize>,
@@ -239,10 +240,17 @@ impl<'a, I: Hash + Eq + Clone + Debug, G: GraphNode<I>> Iterator for BottomUp<'a
 
 #[cfg(test)]
 mod tests {
+    use std::hash::RandomState;
+
     use test_case::test_case;
 
     use super::*;
 
+    // We don't have any actual need to clone these but for weird Rust reasons
+    // (https://users.rust-lang.org/t/unnecessary-trait-bound-requirement-for-clone/110045)
+    // the Clone implementation derived for BottomUp has a bound that the graph
+    // node type is Clone.
+    #[derive(Debug, Eq, PartialEq, Hash, Clone)]
     struct TestGraphNode {
         id: usize,
         child_ids: Vec<usize>,
@@ -276,8 +284,33 @@ mod tests {
     // luckily that's stable behaviour so it's just easy to assert it that way.
     #[test_case(nodes([vec![1], vec![2], vec![3], vec![0]]), Some(DagError::Cycle(0)); "a loop")]
     #[test_case(nodes([vec![1]]), Some(DagError::NoSuchChild{parent: 0, child: 1}); "no child")]
-    #[test_log::test]
     fn test_graph_validity(edges: Vec<TestGraphNode>, want_err: Option<DagError<usize>>) {
         assert_eq!(Dag::new(edges).err(), want_err);
+    }
+
+    #[test_case(vec![]; "empty")]
+    #[test_case(nodes([vec![1], vec![]]); "one edge")]
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![]]); "tree")]
+    #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![],
+                       vec![5], vec![6, 7], vec![], vec![]]); "trees")]
+    fn test_bottom_up(edges: Vec<TestGraphNode>) {
+        let all_nodes: HashSet<usize, RandomState> = HashSet::from_iter(0..edges.len());
+        let dag = Dag::new(edges).unwrap();
+        let order = dag.bottom_up();
+        assert_eq!(
+            all_nodes,
+            HashSet::from_iter(order.clone().map(|node| node.id)),
+            "Not all nodes visited"
+        );
+        let mut seen: HashSet<usize> = HashSet::new();
+        for node in order {
+            for child_id in node.child_ids() {
+                assert!(
+                    seen.contains(child_id.borrow()),
+                    "Parent visited before child"
+                );
+            }
+            seen.insert(*node.id().borrow());
+        }
     }
 }
