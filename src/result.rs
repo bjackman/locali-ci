@@ -15,7 +15,7 @@ use crate::{
 // https://github.com/bjackman/git-brisect?tab=readme-ov-file#the-result-directory
 // TODO: Actually we should probably separate it by the repo lol. But how?
 pub struct Database {
-    base_dir: PathBuf,
+    pub base_dir: PathBuf,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]

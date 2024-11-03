@@ -108,14 +108,14 @@ impl LocalCiChildBuilder {
                 "/dev/stdin",
                 "--repo",
                 self.temp_dir.path().to_str().unwrap(),
+                "--result-db",
+                self.db_dir.to_str().unwrap(),
                 "watch",
                 "HEAD^",
                 "--worktree-dir",
                 worktree_dir.to_str().unwrap(),
                 "--worktree-prefix",
                 "test-worktree-",
-                "--result-db",
-                self.db_dir.to_str().unwrap(),
             ])
             .stdin(Stdio::piped())
             .stderr(stderr)

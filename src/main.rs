@@ -42,6 +42,9 @@ struct Args {
     /// Path to TOML config file.
     #[arg(short, long, required = true)]
     config: PathBuf,
+    /// Directory where results will be stored.
+    #[arg(long, default_value_t = default_result_db())]
+    result_db: DisplayablePathBuf,
     #[command(subcommand)]
     command: Command,
 }
@@ -59,9 +62,6 @@ struct WatchArgs {
     /// to 0 to let the OS pick a port for us.
     #[arg(long, default_value_t = {"0.0.0.0:0".to_string()})]
     http_sockaddr: String,
-    /// Directory where results will be stored.
-    #[arg(long, default_value_t = default_result_db())]
-    result_db: DisplayablePathBuf,
     /// Hostname to use for HTTP URLs
     #[arg(long, default_value_t = default_hostname())]
     hostname: String,
@@ -108,6 +108,7 @@ enum Command {
 struct Env {
     config: Config,
     repo: Arc<git::PersistentWorktree>,
+    database: Database,
 }
 
 async fn watch(
@@ -122,12 +123,12 @@ async fn watch(
         .local_addr()
         .expect("couldn't get local HTTP address")
         .port();
-    tokio::spawn(http::serve_dir(listener, (*watch_args.result_db).clone()));
+    tokio::spawn(http::serve_dir(listener, env.database.base_dir.clone()));
 
     let resource_tokens = env.config.parse_resource_tokens();
     let manager_builder = Manager::builder(
         env.repo.clone(),
-        Database::create_or_open(&watch_args.result_db)?,
+        env.database,
         env.config.parse_tests(&resource_tokens)?,
         resource_tokens,
     )
@@ -218,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
     let env = Env {
         config,
         repo: Arc::new(repo),
+        database: Database::create_or_open(&args.result_db)?,
     };
 
     match args.command {
