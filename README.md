@@ -95,7 +95,6 @@ Needed features (high to low priority):
  - Support bailing out more quickly if the worktree teardown is too slow.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
- - Support re-using worktrees.
  - Probably need to have the system handle cleaning the worktree for you. If
    your build system etc can't be trusted to avoid polluting the workspace/being
    resilient against a polluted workspace, you'll wanna put `git clean -fdx` in
@@ -111,10 +110,29 @@ Needed features (high to low priority):
    make progress on a single thread when the job server starves them, as is the
    case for Make, since all jobs have one implicit job slot).
  - Document config format.
+ - Sometimes you have a test that needs access to the worktree but not
+   exclusive. In that case we could run multiple jobs in parallel in the same
+   worktree.
+   
+   ACTUALLY - I bet we could do the same thing with overlayfs even if the jobs
+   _did_ need exclusive access to the worktree.
+ - Presumably via cgroups it's reasonably to ensure that jobs don't leak child
+   processes. If you have a backdoor like the Docker daemon then that isn't
+   possible but normally it should be fine I think?
+ - Maybe it makes sense to 
  - Make it easier to share configs. At present the distinction between config
    file content and arg content may be a mit messy (e.g. `num_worktrees` is as
    much a property of the system running the service as the project being
    tested).
+ - Maybe people who are sharing configs would want to be able to make them more
+   hermetic, so it might make sense to integrate this with some sort of
+   container runtime. However, probably it's also just easy to put a `podman
+   run` command in your config or whatever? That way your hermetic configuration
+   can also easily be reused in proper CI.
+ - Support re-using existing worktrees, instead of blocking startup while they
+   are created? I dunno though maybe that's pointless with the `test` comamnd.
+   Starting the tool up shouldn't need to be something you do very often after
+   we have that.
  - Support multiple repos?
  - Respect git's color configuration.
  - (Nice to have: avoid creating worktrees if they aren't actually to be used).
