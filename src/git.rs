@@ -15,6 +15,7 @@ use async_stream::try_stream;
 use colored::control::SHOULD_COLORIZE;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
+#[allow(unused_imports)]
 use log::{debug, error, info};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tempfile::TempDir;
@@ -424,18 +425,22 @@ impl TempWorktree {
     where
         W: Worktree,
     {
+        // We create the object now even though it is not actually valid yet.
+        // This is a hack to let the drop behaviour kick in immediately even if
+        // this constructor is cancelled.
+        let zelf = Self {
+            origin: origin.path().to_owned(),
+            temp_dir,
+        };
         origin
             .git(["worktree", "add"])
-            .arg(temp_dir.path())
+            .arg(zelf.temp_dir.path())
             .arg("HEAD")
             .execute()
             .await
             .context("'git worktree add' failed")?;
 
-        Ok(Self {
-            origin: origin.path().to_owned(),
-            temp_dir,
-        })
+        Ok(zelf)
     }
 }
 
@@ -467,7 +472,9 @@ impl Drop for TempWorktree {
             .current_dir(&self.origin)
             .execute()
             .unwrap_or_else(|e| {
-                error!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
+                // This is totally normal, because the constructor creates this
+                // object before being certain the worktree was even created.
+                debug!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
             });
         debug!("Delorted worktree at {:?}", self.temp_dir.path());
     }
