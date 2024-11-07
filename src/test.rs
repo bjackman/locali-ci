@@ -212,7 +212,7 @@ impl<W> ManagerBuilder<W> {
     // this, but the solution would be to create the worktrees ondemand, when we have a revision we
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
-    pub async fn build(self) -> anyhow::Result<Manager<W>>
+    pub async fn build(self, ct: &CancellationToken) -> anyhow::Result<Manager<W>>
     where
         // We need to specify 'static here. Just because we have an Arc over the
         // repo that doesn't mean it automatically satisfies 'static:
@@ -232,7 +232,7 @@ impl<W> ManagerBuilder<W> {
                 .prefix(&self.worktree_prefix)
                 .tempdir_in(&self.worktree_dir)
                 .context("creating temp dir for worktree")?;
-            TempWorktree::new::<W>(self.repo.borrow(), t).await
+            TempWorktree::new::<W>(ct, self.repo.borrow(), t).await
         }))
         .await
         .context("setting up temporary worktrees")?;
@@ -1462,7 +1462,7 @@ mod tests {
                     resource_pools: Pools::new([]),
                 },
             )
-            .build()
+            .build(&CancellationToken::new())
             .await
             .expect("couldn't set up manager");
             TestScriptFixture {
@@ -1789,7 +1789,7 @@ mod tests {
                 resource_pools: Pools::new(resource_tokens),
             },
         )
-        .build()
+        .build(&CancellationToken::new())
         .await
         .expect("couldn't set up manager");
         m.set_revisions(hashes.clone()).await.unwrap();
@@ -1864,7 +1864,7 @@ mod tests {
                 num_worktrees: 1,
             },
         )
-        .build()
+        .build(&CancellationToken::new())
         .await
         .expect("couldn't set up manager");
 

@@ -21,6 +21,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 use crate::process::OutputExt;
 use crate::process::{CommandExt, SyncCommandExt as _};
@@ -423,7 +424,13 @@ pub struct TempWorktree {
 impl TempWorktree {
     // Create a worktree based on the origin repo, directly in the temp dir (which should be empty)
     // You must call cleanup on the result, or drop will panic.
-    pub async fn new<W>(origin: &W, temp_dir: TempDir) -> anyhow::Result<TempWorktree>
+    // Cancelling this will ensure we clean up efficiently. If you drop the
+    // future without doing that, it has the same consequences as failing to call cleanup.
+    pub async fn new<W>(
+        ct: &CancellationToken,
+        origin: &W,
+        temp_dir: TempDir,
+    ) -> anyhow::Result<TempWorktree>
     where
         W: Worktree,
     {
@@ -435,15 +442,18 @@ impl TempWorktree {
             temp_dir,
             cleaned_up: false,
         };
-        origin
-            .git(["worktree", "add"])
-            .arg(zelf.temp_dir.path())
-            .arg("HEAD")
-            .execute()
-            .await
-            .context("'git worktree add' failed")?;
-
-        Ok(zelf)
+        let mut cmd = origin.git(["worktree", "add"]);
+        let cmd = cmd.arg(zelf.temp_dir.path()).arg("HEAD");
+        select!(
+            _ = ct.cancelled().fuse() => {
+                zelf.cleanup().await;
+                bail!("canceled")
+            },
+            res = cmd.execute().fuse() => {
+                res.context("'git worktree add' failed")?;
+                Ok(zelf)
+            },
+        )
     }
 
     fn cleanup_cmd(&self) -> Option<SyncCommand> {
@@ -472,7 +482,6 @@ impl TempWorktree {
     // synchronously in drop (blocking the async runtime and with no opportunity
     // for parallelism) and you will feel like a dumb idiot and your friends
     // will laugh at you.
-    #[expect(dead_code)]
     pub async fn cleanup(mut self) {
         if let Some(cmd) = self.cleanup_cmd() {
             match Command::from(cmd).execute().await {

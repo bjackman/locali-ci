@@ -176,7 +176,7 @@ async fn watch(
     let manager_builder = Manager::builder(env.repo.clone(), env.database, env.config)
         .worktree_prefix(&watch_args.worktree_prefix)
         .worktree_dir(&watch_args.worktree_dir);
-    let mut test_manager = manager_builder.build().await?;
+    let mut test_manager = manager_builder.build(&cancellation_token).await?;
 
     // Set up the status tracker, which shows the user what's going on in the terminal.
     let result_url_base = format!("http://{}:{}", watch_args.hostname, http_port);
