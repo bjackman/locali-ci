@@ -1,12 +1,13 @@
 use anyhow::Context;
 use clap::{arg, Parser as _, Subcommand};
 use config::{Config, ParsedConfig};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
+use git::{CommitHash, PersistentWorktree};
 use log::info;
 use nix::sys::utsname::uname;
 use result::Database;
-use std::ffi::OsString;
-use std::io::stdout;
+use std::ffi::{OsStr, OsString};
+use std::io::{stdout, Stdout};
 use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;
@@ -111,29 +112,17 @@ struct Env {
     database: Database,
 }
 
-async fn watch(
-    env: Env,
+// This is the main loop of the program. Take notifications from the Git tree,
+// feed them to the test manager, feed the test manager's results to the status
+// tracker (basically the UI).
+async fn watch_loop(
     cancellation_token: CancellationToken,
-    watch_args: &WatchArgs,
+    test_manager: &mut test::Manager<PersistentWorktree>,
+    mut status_tracker: status::Tracker<PersistentWorktree, Stdout>,
+    revs_stream: impl Stream<Item = anyhow::Result<Vec<CommitHash>>>,
+    range_spec: &OsStr,
 ) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(watch_args.http_sockaddr.clone())
-        .await
-        .unwrap();
-    let http_port = listener
-        .local_addr()
-        .expect("couldn't get local HTTP address")
-        .port();
-    tokio::spawn(http::serve_dir(listener, env.database.base_dir.clone()));
-
-    let manager_builder = Manager::builder(env.repo.clone(), env.database, env.config)
-        .worktree_prefix(&watch_args.worktree_prefix)
-        .worktree_dir(&watch_args.worktree_dir);
-    let mut test_manager = manager_builder.build().await?;
-    let range_spec: OsString = format!("{}..HEAD", watch_args.base).into();
     let mut notifs = test_manager.results();
-    let result_url_base = format!("http://{}:{}", watch_args.hostname, http_port);
-    let mut status_tracker = status::Tracker::new(env.repo.clone(), stdout(), result_url_base);
-    let mut revs_stream = env.repo.watch_refs(&range_spec)?;
     let mut revs_stream = pin!(revs_stream);
     loop {
         select!(
@@ -146,7 +135,7 @@ async fn watch(
                 // (mostly just kicks off background stuff) before awaiting the
                 // status tracker reset (does synchronhous work).
                 test_manager.set_revisions(revs.clone()).await.context("setting revisions to test")?;
-                status_tracker.set_range(&range_spec).await.context("resetting status tracker")?;
+                status_tracker.set_range(range_spec).await.context("resetting status tracker")?;
                 status_tracker.repaint().context("error painting status to stdout")?;
             },
             notif = notifs.recv() => {
@@ -163,6 +152,51 @@ async fn watch(
             }
         )
     }
+    Ok(())
+}
+
+async fn watch(
+    env: Env,
+    cancellation_token: CancellationToken,
+    watch_args: &WatchArgs,
+) -> anyhow::Result<()> {
+    // Create HTTP server, to serve the result artifacts to the user when they
+    // click terminal hyperlinks.
+    let listener = tokio::net::TcpListener::bind(watch_args.http_sockaddr.clone())
+        .await
+        .unwrap();
+    let http_port = listener
+        .local_addr()
+        .expect("couldn't get local HTTP address")
+        .port();
+    tokio::spawn(http::serve_dir(listener, env.database.base_dir.clone()));
+
+    // Set up the test manager, which is the weirdly-scoped god-object that
+    // orchestrates test jobs.
+    let manager_builder = Manager::builder(env.repo.clone(), env.database, env.config)
+        .worktree_prefix(&watch_args.worktree_prefix)
+        .worktree_dir(&watch_args.worktree_dir);
+    let mut test_manager = manager_builder.build().await?;
+
+    // Set up the status tracker, which shows the user what's going on in the terminal.
+    let result_url_base = format!("http://{}:{}", watch_args.hostname, http_port);
+    let status_tracker = status::Tracker::new(env.repo.clone(), stdout(), result_url_base);
+
+    // Get a stream of sets of revisions as the git repository changes.
+    let range_spec: OsString = format!("{}..HEAD", watch_args.base).into();
+    let revs_stream = env.repo.watch_refs(&range_spec)?;
+
+    // DO THE THING.
+    watch_loop(
+        cancellation_token,
+        &mut test_manager,
+        status_tracker,
+        revs_stream,
+        &range_spec,
+    )
+    .await?;
+
+    // Ensure jobs are shut down before we delort stuff etc.
     test_manager.settled().await;
     Ok(())
 }
