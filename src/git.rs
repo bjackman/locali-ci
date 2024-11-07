@@ -16,14 +16,14 @@ use colored::control::SHOULD_COLORIZE;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
 #[allow(unused_imports)]
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::sleep;
 
-use crate::process::CommandExt;
-use crate::process::{OutputExt, SyncCommandExt};
+use crate::process::OutputExt;
+use crate::process::{CommandExt, SyncCommandExt as _};
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Hash(String);
@@ -417,10 +417,12 @@ pub trait Worktree: Debug {
 pub struct TempWorktree {
     origin: PathBuf, // Path of repo this was created from.
     temp_dir: TempDir,
+    cleaned_up: bool,
 }
 
 impl TempWorktree {
     // Create a worktree based on the origin repo, directly in the temp dir (which should be empty)
+    // You must call cleanup on the result, or drop will panic.
     pub async fn new<W>(origin: &W, temp_dir: TempDir) -> anyhow::Result<TempWorktree>
     where
         W: Worktree,
@@ -431,6 +433,7 @@ impl TempWorktree {
         let zelf = Self {
             origin: origin.path().to_owned(),
             temp_dir,
+            cleaned_up: false,
         };
         origin
             .git(["worktree", "add"])
@@ -442,6 +445,48 @@ impl TempWorktree {
 
         Ok(zelf)
     }
+
+    fn cleanup_cmd(&self) -> Option<SyncCommand> {
+        if !self.origin.exists() {
+            debug!(
+                "Not de-registering worktree at {:?} as origin repo ({:?}) is gone.",
+                self.temp_dir.path(),
+                self.origin
+            );
+            return None;
+        }
+        // We don't create a new process group here, that means if the user
+        // Ctrl-C's us while this is going on the Git command will get
+        // interrupted too and we'll shut down in a mess. I think that's
+        // actually desirable, if it gets to that point the user probably
+        // just want us to fuck off and give them their terminal back at
+        // whatever cost.
+        let mut cmd = SyncCommand::new("git");
+        cmd.args(["worktree", "remove", "--force"])
+            .arg(self.temp_dir.path())
+            .current_dir(&self.origin);
+        Some(cmd)
+    }
+
+    // Clean up asnchronously, if you don't do this it will be done
+    // synchronously in drop (blocking the async runtime and with no opportunity
+    // for parallelism) and you will feel like a dumb idiot and your friends
+    // will laugh at you.
+    #[expect(dead_code)]
+    pub async fn cleanup(mut self) {
+        if let Some(cmd) = self.cleanup_cmd() {
+            match Command::from(cmd).execute().await {
+                Err(e) => {
+                    // This is totally normal, because the constructor creates this
+                    // object before being certain the worktree was even created.
+                    debug!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
+                }
+                Ok(_) => debug!("Delorted worktree at {:?}", self.temp_dir.path()),
+            }
+        }
+
+        self.cleaned_up = true;
+    }
 }
 
 impl Worktree for TempWorktree {
@@ -452,31 +497,23 @@ impl Worktree for TempWorktree {
 
 impl Drop for TempWorktree {
     fn drop(&mut self) {
-        let mut cmd = SyncCommand::new("git");
-        if !self.origin.exists() {
-            debug!(
-                "Not de-registering worktree at {:?} as origin repo ({:?}) is gone.",
-                self.temp_dir.path(),
-                self.origin
-            );
+        if self.cleaned_up {
             return;
         }
-        // We don't create a new process group here, that means if the user
-        // Ctrl-C's us while this is going on the Git command will get
-        // interrupted too and we'll shut down in a mess. I think that's
-        // actually desirable, if it gets to that point the user probably
-        // just want us to fuck off and give them their terminal back at
-        // whatever cost.
-        cmd.args(["worktree", "remove", "--force"])
-            .arg(self.temp_dir.path())
-            .current_dir(&self.origin)
-            .execute()
-            .unwrap_or_else(|e| {
-                // This is totally normal, because the constructor creates this
-                // object before being certain the worktree was even created.
-                debug!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
-            });
-        debug!("Delorted worktree at {:?}", self.temp_dir.path());
+        warn!(
+            "TempWorktree was not cleaned up before drop. \
+                This is functionally harmless but probably slows things down."
+        );
+        if let Some(mut cmd) = self.cleanup_cmd() {
+            match cmd.execute() {
+                Err(e) => {
+                    // This is totally normal, because the constructor creates this
+                    // object before being certain the worktree was even created.
+                    debug!("Couldn't clean up worktree {:?}: {:?}", &self.temp_dir, e);
+                }
+                Ok(_) => debug!("Delorted worktree at {:?}", self.temp_dir.path()),
+            }
+        }
     }
 }
 
