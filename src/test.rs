@@ -2,10 +2,9 @@ use core::{fmt, fmt::Display};
 use std::{
     borrow::Borrow,
     collections::HashMap,
-    env,
     ffi::{OsStr, OsString},
     fmt::{Debug, Formatter},
-    path::{Path, PathBuf},
+    path::Path,
     pin::pin,
     process::Stdio,
     sync::Arc,
@@ -30,29 +29,13 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::ParsedConfig,
     dag::{Dag, GraphNode},
-    git::{Commit, CommitHash, Hash, TempWorktree, Worktree},
+    git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
-    resource::{Pools, Resource, ResourceKey, Resources},
+    resource::{Pools, ResourceKey, Resources},
     result::{Database, DatabaseEntry},
+    util::ResultExt,
 };
-
-pub trait ResultExt {
-    // Log an error if it occurs, prefixed with s, otherwise return nothing.
-    fn or_log_error(&self, s: &str);
-}
-
-impl<T, E> ResultExt for Result<T, E>
-where
-    E: Display,
-{
-    fn or_log_error(&self, s: &str) {
-        if let Err(e) = self {
-            error!("{} - {}", s, e);
-        }
-    }
-}
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, Hash, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -182,103 +165,9 @@ pub fn base_job_env(repo_origin: &Path) -> JobEnv {
     )]
 }
 
-pub struct ManagerBuilder<W> {
-    // This needs to be an Arc because we hold onto a reference to it for a
-    // while, and create temporary worktrees from it in the background.
-    repo: Arc<W>,
-    config: ParsedConfig,
-    result_db: Database,
-
-    worktree_prefix: String,
-    worktree_dir: PathBuf,
-    job_env: Vec<(String, String)>,
-}
-
-impl<W> ManagerBuilder<W> {
-    // Worktree temp-directories will have their name (not path!) prefixed with this.
-    pub fn worktree_prefix(mut self, prefix: &str) -> Self {
-        prefix.clone_into(&mut self.worktree_prefix);
-        self
-    }
-
-    // Directory to create worktrees in
-    pub fn worktree_dir<P: Into<PathBuf>>(mut self, dir: P) -> Self {
-        self.worktree_dir = dir.into();
-        self
-    }
-
-    // Starts the workers. You must call close() before dropping it.
-    //
-    // TODO: This doesn't work if there are no commits in the repository. Not sure I care about
-    // this, but the solution would be to create the worktrees ondemand, when we have a revision we
-    // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
-    // just do that for its own sake and leave the empty-repo problem as a nice freebie.
-    pub async fn build(self, ct: &CancellationToken) -> anyhow::Result<Manager<W>>
-    where
-        // We need to specify 'static here. Just because we have an Arc over the
-        // repo that doesn't mean it automatically satisfies 'static:
-        // https://users.rust-lang.org/t/why-is-t-static-constrained-when-using-arc-t-and-thread-spawn/26262/2
-        // It would be much more convenient to just specify some or all these
-        // trait bounds as subtraits of Workrtree. But I dunno, that feels Wrong.
-        W: Worktree + Sync + Send + 'static,
-    {
-        info!(
-            "Setting up {} worktrees in {:?}...",
-            self.config.num_worktrees, self.worktree_dir
-        );
-        let worktrees = try_join_all((0..self.config.num_worktrees).map(|_| async {
-            // Not doing this async because I assume it's fast, there is no white-glove support,
-            // and the drop will have to be synchronous anyway.
-            let t = tempfile::Builder::new()
-                .prefix(&self.worktree_prefix)
-                .tempdir_in(&self.worktree_dir)
-                .context("creating temp dir for worktree")?;
-            TempWorktree::new::<W>(ct, self.repo.borrow(), t).await
-        }))
-        .await
-        .context("setting up temporary worktrees")?;
-        info!("Worktree setup done.");
-
-        let Self {
-            repo,
-            result_db,
-            config:
-                ParsedConfig {
-                    mut resource_pools,
-                    tests,
-                    num_worktrees: _,
-                },
-            job_env,
-            worktree_prefix: _,
-            worktree_dir: _,
-        } = self;
-
-        // Combine the worktrees and generic tokens into reosurces that can be
-        // managed by the resource module.
-        resource_pools.add(
-            worktrees
-                .into_iter()
-                .map(|w| (ResourceKey::Worktree, Resource::Worktree(w))),
-        );
-
-        // TODO: If this capacity gets exhausted, data gets lost and we get an error which this code
-        // probably doesn't handle very gracefully. We should instead just block the sender.
-        let (result_tx, _) = broadcast::channel(4096);
-        Ok(Manager {
-            job_env: Arc::new(job_env),
-            repo,
-            notif_tx: result_tx,
-            job_cts: Mutex::new(HashMap::new()),
-            job_counter: JobCounter::new(),
-            tests,
-            resource_pools: Arc::new(resource_pools),
-            result_db,
-        })
-    }
-}
-
 // Manages a bunch of worker threads that run tests for the current set of revisions.
 pub struct Manager<W: Worktree> {
+    // We hardly need this field, it should be quite easy to remove it.
     repo: Arc<W>,
     // Oops, be extremely careful about mutating this. set_revisions has some
     // pretty strong implicit assumptions about this field.
@@ -294,8 +183,13 @@ pub struct Manager<W: Worktree> {
     job_env: Arc<Vec<(String, String)>>,
 }
 
+// We need to specify 'static here. Just because we have an Arc over the
+// repo that doesn't mean it automatically satisfies 'static:
+// https://users.rust-lang.org/t/why-is-t-static-constrained-when-using-arc-t-and-thread-spawn/26262/2
+// It would be much more convenient to just specify some or all these
+// trait bounds as subtraits of Worktree. But I dunno, that feels Wrong.
 impl<W: Worktree + Sync + Send + 'static> Manager<W> {
-    pub fn builder(
+    pub fn new(
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
@@ -303,15 +197,21 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // because we want it to be hard to accidentally refer to global
         // resources like that.
         result_db: Database,
-        config: ParsedConfig,
-    ) -> ManagerBuilder<W> {
-        ManagerBuilder {
-            result_db,
-            config,
-            worktree_prefix: "worktree-".to_owned(),
-            worktree_dir: env::temp_dir(),
-            job_env: base_job_env(repo.path()),
+        resource_pools: Arc<Pools>,
+        tests: TestDag,
+    ) -> Self {
+        // TODO: If this capacity gets exhausted, data gets lost and we get an error which this code
+        // probably doesn't handle very gracefully. We should instead just block the sender.
+        let (result_tx, _) = broadcast::channel(4096);
+        Self {
+            job_env: Arc::new(base_job_env(repo.path())),
             repo,
+            notif_tx: result_tx,
+            job_cts: Mutex::new(HashMap::new()),
+            job_counter: JobCounter::new(),
+            tests,
+            resource_pools,
+            result_db,
         }
     }
 
@@ -481,7 +381,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         Ok(())
     }
 
-    pub async fn cancel_running(&mut self) -> anyhow::Result<()> {
+    pub async fn cancel_running(&self) -> anyhow::Result<()> {
         self.set_revisions::<_, CommitHash>([]).await
     }
 
@@ -496,6 +396,10 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     // Completes once there are no pending jobs or results.
     pub async fn settled(&self) {
         self.job_counter.zero().await;
+    }
+
+    pub fn into_resource_pools(self) -> Arc<Pools> {
+        self.resource_pools
     }
 }
 
@@ -991,6 +895,7 @@ mod tests {
     use std::{
         cmp::max,
         collections::VecDeque,
+        env,
         fs::{self, remove_file, File},
         io::{self, BufRead as _},
         mem::ManuallyDrop,
@@ -1013,8 +918,9 @@ mod tests {
     use crate::{
         git::{
             test_utils::{TempRepo, WorktreeExt},
-            CommitHash,
+            CommitHash, TempWorktree,
         },
+        resource::Resource,
         test_utils::{path_exists, some_time, timeout_5s},
     };
 
@@ -1431,6 +1337,19 @@ mod tests {
         repo
     }
 
+    async fn worktree_resources(origin: &TempRepo, n: usize) -> Vec<Resource> {
+        try_join_all((0..n).map(|_| async {
+            let t = TempDir::with_prefix("worktree").context("creating tempdir")?;
+            Ok::<_, anyhow::Error>(Resource::Worktree(
+                TempWorktree::new(&CancellationToken::new(), origin, t)
+                    .await
+                    .context("creating worktree")?,
+            ))
+        }))
+        .await
+        .unwrap()
+    }
+
     impl TestScriptFixtureBuilder {
         pub async fn build(&self) -> TestScriptFixture {
             let repo = nonempty_temp_repo().await;
@@ -1459,18 +1378,15 @@ mod tests {
                     .map(|(_, to_idx)| TestName::new(format!("test_{to_idx}")));
                 script.as_test(cache_policy, needs_worktree, dep_names)
             });
-            let manager = Manager::builder(
+            let manager = Manager::new(
                 repo.clone(),
                 Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-                ParsedConfig {
-                    num_worktrees: self.num_worktrees,
-                    tests: Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
-                    resource_pools: Pools::new([]),
-                },
-            )
-            .build(&CancellationToken::new())
-            .await
-            .expect("couldn't set up manager");
+                Arc::new(Pools::new([(
+                    ResourceKey::Worktree,
+                    worktree_resources(&repo, self.num_worktrees).await,
+                )])),
+                Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
+            );
             TestScriptFixture {
                 manager,
                 scripts,
@@ -1786,18 +1702,16 @@ mod tests {
             depends_on: vec![],
         }];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
-        let m = Manager::builder(
+        let m = Manager::new(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-            ParsedConfig {
-                num_worktrees: 4,
-                tests: Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
-                resource_pools: Pools::new(resource_tokens),
-            },
-        )
-        .build(&CancellationToken::new())
-        .await
-        .expect("couldn't set up manager");
+            Arc::new(Pools::new(
+                [(ResourceKey::Worktree, worktree_resources(&repo, 4).await)]
+                    .into_iter()
+                    .chain(resource_tokens.into_iter()),
+            )),
+            Dag::new(tests.map(Arc::new)).expect("couldn't build test DAG"),
+        );
         m.set_revisions(hashes.clone()).await.unwrap();
 
         let mut start_futs = hashes
@@ -1827,52 +1741,55 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
-        let m = Manager::builder(
+        let tests = Dag::new([Arc::new(Test {
+            name: TestName::new("my_test"),
+            program: OsString::from("bash"),
+            args: vec![
+                "-c".into(),
+                OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
+            ],
+            needs_resources: [
+                (ResourceKey::Worktree, 1),
+                (ResourceKey::UserToken("my_resource".into()), 2),
+            ]
+            .into(),
+            shutdown_grace_period: Duration::from_secs(5),
+            cache_policy: CachePolicy::ByCommit,
+            config_hash: 0,
+            depends_on: vec![],
+        })])
+        .expect("couldn't build test DAG");
+        let resource_pools = Pools::new(
+            [(ResourceKey::Worktree, worktree_resources(&repo, 1).await)]
+                .into_iter()
+                .chain(
+                    [
+                        (
+                            ResourceKey::UserToken("my_resource".into()),
+                            vec![
+                                Resource::UserToken("thing1".into()),
+                                Resource::UserToken("thing2".into()),
+                                Resource::UserToken("thing3".into()),
+                            ],
+                        ),
+                        (
+                            ResourceKey::UserToken("other_resource".into()),
+                            vec![
+                                Resource::UserToken("whing1".into()),
+                                Resource::UserToken("whing2".into()),
+                                Resource::UserToken("whing3".into()),
+                            ],
+                        ),
+                    ]
+                    .into_iter(),
+                ),
+        );
+        let m = Manager::new(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
-            ParsedConfig {
-                tests: Dag::new([Arc::new(Test {
-                    name: TestName::new("my_test"),
-                    program: OsString::from("bash"),
-                    args: vec![
-                        "-c".into(),
-                        OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
-                    ],
-                    needs_resources: [
-                        (ResourceKey::Worktree, 1),
-                        (ResourceKey::UserToken("my_resource".into()), 2),
-                    ]
-                    .into(),
-                    shutdown_grace_period: Duration::from_secs(5),
-                    cache_policy: CachePolicy::ByCommit,
-                    config_hash: 0,
-                    depends_on: vec![],
-                })])
-                .expect("couldn't build test DAG"),
-                resource_pools: Pools::new([
-                    (
-                        ResourceKey::UserToken("my_resource".into()),
-                        vec![
-                            Resource::UserToken("thing1".into()),
-                            Resource::UserToken("thing2".into()),
-                            Resource::UserToken("thing3".into()),
-                        ],
-                    ),
-                    (
-                        ResourceKey::UserToken("other_resource".into()),
-                        vec![
-                            Resource::UserToken("whing1".into()),
-                            Resource::UserToken("whing2".into()),
-                            Resource::UserToken("whing3".into()),
-                        ],
-                    ),
-                ]),
-                num_worktrees: 1,
-            },
-        )
-        .build(&CancellationToken::new())
-        .await
-        .expect("couldn't set up manager");
+            Arc::new(resource_pools),
+            tests,
+        );
 
         m.set_revisions([commit.clone()])
             .await
@@ -2002,7 +1919,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_not_cache() {
-        let mut f = TestScriptFixture::builder()
+        let f = TestScriptFixture::builder()
             .num_tests(2)
             .num_worktrees(4)
             .build()

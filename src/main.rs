@@ -1,12 +1,14 @@
 use anyhow::Context;
 use clap::{arg, Parser as _, Subcommand};
 use config::{Config, ParsedConfig};
-use futures::{Stream, StreamExt};
-use git::{CommitHash, PersistentWorktree};
+use futures::future::join_all;
+use futures::StreamExt;
+use git::{PersistentWorktree, TempWorktree};
 use log::info;
 use nix::sys::utsname::uname;
+use resource::{Resource, ResourceKey};
 use result::Database;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::{stdout, Stdout};
 use std::path::PathBuf;
 use std::pin::pin;
@@ -15,7 +17,7 @@ use std::{env, fs, str};
 use test::Manager;
 use tokio::{select, signal};
 use tokio_util::sync::CancellationToken;
-use util::DisplayablePathBuf;
+use util::{DisplayablePathBuf, ErrGroup};
 
 use crate::git::Worktree;
 
@@ -117,13 +119,13 @@ struct Env {
 // tracker (basically the UI).
 async fn watch_loop(
     cancellation_token: CancellationToken,
-    test_manager: &mut test::Manager<PersistentWorktree>,
+    test_manager: Arc<test::Manager<PersistentWorktree>>,
     mut status_tracker: status::Tracker<PersistentWorktree, Stdout>,
-    revs_stream: impl Stream<Item = anyhow::Result<Vec<CommitHash>>>,
-    range_spec: &OsStr,
+    range_spec: OsString,
+    repo: Arc<PersistentWorktree>,
 ) -> anyhow::Result<()> {
+    let mut revs_stream = pin!(repo.watch_refs(&range_spec)?);
     let mut notifs = test_manager.results();
-    let mut revs_stream = pin!(revs_stream);
     loop {
         select!(
             // TODO: It's dumb that we have two different types of communication here (one exposes
@@ -135,7 +137,7 @@ async fn watch_loop(
                 // (mostly just kicks off background stuff) before awaiting the
                 // status tracker reset (does synchronhous work).
                 test_manager.set_revisions(revs.clone()).await.context("setting revisions to test")?;
-                status_tracker.set_range(range_spec).await.context("resetting status tracker")?;
+                status_tracker.set_range(&range_spec).await.context("resetting status tracker")?;
                 status_tracker.repaint().context("error painting status to stdout")?;
             },
             notif = notifs.recv() => {
@@ -148,6 +150,8 @@ async fn watch_loop(
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");
                 test_manager.cancel_running().await.context("cancelling tests")?;
+                // Ensure jobs are shut down before we delort stuff etc.
+                test_manager.settled().await;
                 break;
             }
         )
@@ -158,7 +162,7 @@ async fn watch_loop(
 async fn watch(
     env: Env,
     cancellation_token: CancellationToken,
-    watch_args: &WatchArgs,
+    watch_args: WatchArgs,
 ) -> anyhow::Result<()> {
     // Create HTTP server, to serve the result artifacts to the user when they
     // click terminal hyperlinks.
@@ -171,34 +175,82 @@ async fn watch(
         .port();
     tokio::spawn(http::serve_dir(listener, env.database.base_dir.clone()));
 
+    let Env {
+        repo,
+        database,
+        config:
+            ParsedConfig {
+                num_worktrees,
+                resource_pools,
+                tests,
+            },
+    } = env;
+    let resource_pools = Arc::new(resource_pools);
+
     // Set up the test manager, which is the weirdly-scoped god-object that
     // orchestrates test jobs.
-    let manager_builder = Manager::builder(env.repo.clone(), env.database, env.config)
-        .worktree_prefix(&watch_args.worktree_prefix)
-        .worktree_dir(&watch_args.worktree_dir);
-    let mut test_manager = manager_builder.build(&cancellation_token).await?;
+    let test_manager = Arc::new(Manager::new(
+        repo.clone(),
+        database,
+        resource_pools.clone(),
+        tests,
+    ));
 
     // Set up the status tracker, which shows the user what's going on in the terminal.
     let result_url_base = format!("http://{}:{}", watch_args.hostname, http_port);
-    let status_tracker = status::Tracker::new(env.repo.clone(), stdout(), result_url_base);
+    let status_tracker = status::Tracker::new(repo.clone(), stdout(), result_url_base);
 
-    // Get a stream of sets of revisions as the git repository changes.
-    let range_spec: OsString = format!("{}..HEAD", watch_args.base).into();
-    let revs_stream = env.repo.watch_refs(&range_spec)?;
+    // Kick off creation of the worktrees that the test manager will run jobs in.
+    //
+    // Once we've done this, we can no longer return from this function until
+    // we've also cleaned the worktrees up. This is stinky and gross. AFAICT
+    // async Rust just doesn't have a solution for that at all.
+    //
+    // TODO: This doesn't work if there are no commits in the repository. Not sure I care about
+    // this, but the solution would be to create the worktrees ondemand, when we have a revision we
+    // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
+    // just do that for its own sake and leave the empty-repo problem as a nice freebie.
+    let mut eg = ErrGroup::new(cancellation_token.clone());
+    let watch_args = Arc::new(watch_args);
+    for _ in 0..num_worktrees {
+        let repo = repo.clone();
+        let ct = cancellation_token.child_token();
+        let watch_args = watch_args.clone();
+        let resource_pools = resource_pools.clone();
+        eg.spawn(async move {
+            // Not doing this async because I assume it's fast & there is no white-glove support.
+            let t = tempfile::Builder::new()
+                .prefix(&watch_args.worktree_prefix)
+                .tempdir_in(&watch_args.worktree_dir)
+                .context("creating temp dir for worktree")?;
+            let worktree = TempWorktree::new::<PersistentWorktree>(&ct, repo.as_ref(), t).await?;
+            resource_pools.add([(ResourceKey::Worktree, Resource::Worktree(worktree))]);
+            Ok(())
+        });
+    }
 
     // DO THE THING.
-    watch_loop(
-        cancellation_token,
-        &mut test_manager,
+    eg.spawn(watch_loop(
+        cancellation_token.child_token(),
+        test_manager.clone(),
         status_tracker,
-        revs_stream,
-        &range_spec,
-    )
-    .await?;
+        format!("{}..HEAD", watch_args.base).into(),
+        repo,
+    ));
 
-    // Ensure jobs are shut down before we delort stuff etc.
-    test_manager.settled().await;
-    Ok(())
+    let end_result = eg.wait().await;
+
+    // Now we have to remember to clean up before returning the result :/
+    join_all(
+        Arc::into_inner(test_manager)
+            .expect("leaked test manager reference")
+            .into_resource_pools()
+            .try_remove_worktrees()
+            .map(|w| w.cleanup()),
+    )
+    .await;
+
+    end_result
 }
 
 async fn test(
@@ -251,7 +303,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Watch(ref watch_args) => watch(env, cancellation_token, watch_args).await,
+        Command::Watch(watch_args) => watch(env, cancellation_token, watch_args).await,
         Command::Test(ref test_args) => test(env, cancellation_token, test_args).await,
     }
 }

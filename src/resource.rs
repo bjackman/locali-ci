@@ -62,13 +62,14 @@ impl Pools {
 
     // TODO: As well as being annoying in a similar way to new, this is
     // inconsistent with it for no good reason.
-    pub fn add(&mut self, new_resources: impl IntoIterator<Item = (ResourceKey, Resource)>) {
+    pub fn add(&self, new_resources: impl IntoIterator<Item = (ResourceKey, Resource)>) {
         // Don't need the condvar since we have a mutable reference to self. We
         // only take the mutex out of a misguided sense of decorum.
         let mut resources = self.resources.lock();
         for (key, resource) in new_resources.into_iter() {
             (*resources).entry(key).or_default().push(resource);
         }
+        self.cond.notify_all();
     }
 
     // Get the specified number of tokens from each of the pools, keys match
@@ -87,7 +88,7 @@ impl Pools {
             // separate operation.
             if wants
                 .iter()
-                .all(|(key, want)| avail_tokens[key].len() >= *want)
+                .all(|(key, want)| avail_tokens.get(key).unwrap_or(&vec![]).len() >= *want)
             {
                 return Resources {
                     resources: ManuallyDrop::new(
@@ -108,6 +109,21 @@ impl Pools {
 
             guard = self.cond.wait(guard).await;
         }
+    }
+
+    // Without blocking, permanently remove all the worktrees that are currently available.
+    // specified type that are currently available, up to the specified number.
+    pub fn try_remove_worktrees(&self) -> impl Iterator<Item = TempWorktree> {
+        let mut guard = self.resources.lock();
+        let avail = &mut (*guard);
+        avail
+            .remove(&ResourceKey::Worktree)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|resource| match resource {
+                Resource::Worktree(w) => w,
+                _ => panic!("wrong resource type in worktree pool"),
+            })
     }
 
     fn put(&self, resources: HashMap<ResourceKey, Vec<Resource>>) {
