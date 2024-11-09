@@ -74,19 +74,15 @@ Bugs (high to low priority):
 Needed features (high to low priority):
 
  - BLOCKER: Document config format (and everything else).
- - BLOCKER: Store output and artifacts. 
+ - BLOCKER: Store output artifacts. 
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
  - BLOCKER: Need to clean up the logging situation. User should at least get
- - BLOCKER: Rename it.
    some feedback about the process starting up and shutting down.
+ - BLOCKER: Rename it.
  - Need a way for test command to report "error" as distinguished from failure.
  - Make output results easier to reach. In particular at the moment if you have
    no hyperlinks support in your terminal you're basically out of luck.
- - Provide a way to quickly check that tests in your configuration actually work.
-   Can't you just write them as a script and then test the script? Well if we
-   rely on that then we need the result caching logic to be aware of when the
-   script changes.
  - Need a way to delete stored results.
 
    (Or do we? If we had an error reporting
@@ -94,12 +90,10 @@ Needed features (high to low priority):
    configuration to adopt the error reporting, and in that case the cache would
    be invalidated anyway. But, also need to consider cases where something was
    wrong in the host system)
- - Need to make it clear what's going on when startup/shutdown is being slow.
  - Need timeouts! (There is a shutdown grace period, so we don't just leak
    resources if tests get stuck forever, they'll get cancelled when te user needs
    to run a new test. But we should also notify the user if they don't seem to
    be getting any test results.)
- - Support saving artifacts so the user can reuse or analyze them later.
  - Probably want a (default?) option to merge stderr and stdout.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
@@ -126,7 +120,6 @@ Needed features (high to low priority):
  - Presumably via cgroups it's reasonably to ensure that jobs don't leak child
    processes. If you have a backdoor like the Docker daemon then that isn't
    possible but normally it should be fine I think?
- - Maybe it makes sense to 
  - Make it easier to share configs. At present the distinction between config
    file content and arg content may be a mit messy (e.g. `num_worktrees` is as
    much a property of the system running the service as the project being
@@ -142,8 +135,6 @@ Needed features (high to low priority):
    we have that.
  - Support multiple repos?
  - Respect git's color configuration.
- - (Nice to have: avoid creating worktrees if they aren't actually to be used).
- - (Nice to have: let jobs that don't need worktrees start before worktrees are ready).
 
 Probably sketchy design choices:
 
