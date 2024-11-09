@@ -110,12 +110,12 @@ impl LocalCiChildBuilder {
                 self.temp_dir.path().to_str().unwrap(),
                 "--result-db",
                 self.db_dir.to_str().unwrap(),
-                "watch",
-                "HEAD^",
                 "--worktree-dir",
                 worktree_dir.to_str().unwrap(),
                 "--worktree-prefix",
                 "test-worktree-",
+                "watch",
+                "HEAD^",
             ])
             .stdin(Stdio::piped())
             .stderr(stderr)

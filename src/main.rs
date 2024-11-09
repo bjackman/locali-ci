@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;
 use std::{env, fs, str};
+use tempfile::TempDir;
 use test::Manager;
 use tokio::{select, signal};
 use tokio_util::sync::CancellationToken;
@@ -48,18 +49,18 @@ struct Args {
     /// Directory where results will be stored.
     #[arg(long, default_value_t = default_result_db())]
     result_db: DisplayablePathBuf,
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(clap::Args)]
-struct WatchArgs {
     /// Filename prefix for temporary worktrees.
     #[arg(long, default_value_t = {"local-ci-worktree".to_string()})]
     worktree_prefix: String,
     /// Directory (must exist) to create temporary worktrees in.
     #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()})]
     worktree_dir: String,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Args)]
+struct WatchArgs {
     /// Socket address in the form "$ip:$port" to listen on for serving files
     /// over HTTP. For example "127.0.0.1:8080" or ""[::1]:1234". Set the port
     /// to 0 to let the OS pick a port for us.
@@ -112,6 +113,22 @@ struct Env {
     config: ParsedConfig,
     repo: Arc<git::PersistentWorktree>,
     database: Database,
+    worktree_builder: WorktreeBuilder,
+}
+
+// Fallback instead of https://github.com/Stebalien/tempfile/pull/308
+struct WorktreeBuilder {
+    prefix: OsString,
+    parent_dir: PathBuf,
+}
+
+impl WorktreeBuilder {
+    pub fn build(&self) -> anyhow::Result<TempDir> {
+        tempfile::Builder::new()
+            .prefix(&self.prefix)
+            .tempdir_in(&self.parent_dir)
+            .context("creating temp dir for worktree")
+    }
 }
 
 // This is the main loop of the program. Take notifications from the Git tree,
@@ -184,6 +201,7 @@ async fn watch(
                 resource_pools,
                 tests,
             },
+        worktree_builder,
     } = env;
     let resource_pools = Arc::new(resource_pools);
 
@@ -211,19 +229,13 @@ async fn watch(
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
     let mut eg = ErrGroup::new(cancellation_token.clone());
-    let watch_args = Arc::new(watch_args);
     for _ in 0..num_worktrees {
         let repo = repo.clone();
         let ct = cancellation_token.child_token();
-        let watch_args = watch_args.clone();
         let resource_pools = resource_pools.clone();
+        let dir = worktree_builder.build()?;
         eg.spawn(async move {
-            // Not doing this async because I assume it's fast & there is no white-glove support.
-            let t = tempfile::Builder::new()
-                .prefix(&watch_args.worktree_prefix)
-                .tempdir_in(&watch_args.worktree_dir)
-                .context("creating temp dir for worktree")?;
-            let worktree = TempWorktree::new::<PersistentWorktree>(&ct, repo.as_ref(), t).await?;
+            let worktree = TempWorktree::new::<PersistentWorktree>(&ct, repo.as_ref(), dir).await?;
             resource_pools.add([(ResourceKey::Worktree, Resource::Worktree(worktree))]);
             Ok(())
         });
@@ -300,6 +312,10 @@ async fn main() -> anyhow::Result<()> {
         config,
         repo: Arc::new(repo),
         database: Database::create_or_open(&args.result_db)?,
+        worktree_builder: WorktreeBuilder {
+            prefix: args.worktree_prefix.into(),
+            parent_dir: args.worktree_dir.into(),
+        },
     };
 
     match args.command {
