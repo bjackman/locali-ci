@@ -394,7 +394,6 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             let commit_hash = rev.into();
             self.repo
                 .rev_parse(commit_hash.clone())
-                // TODO report nonexisting revision in the error!
                 .map(move |result| result?.ok_or(anyhow!("no such revision {commit_hash:?}")))
         }))
         .await?;
