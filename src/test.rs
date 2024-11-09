@@ -314,7 +314,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }
     }
 
-    async fn cache_lookup(&self, test_case: &TestCase) -> Option<TestResult> {
+    fn cache_lookup(&self, test_case: &TestCase) -> Option<TestResult> {
         match test_case.cache_hash {
             Some(ref hash) => {
                 match self
@@ -333,8 +333,8 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }
     }
 
-    async fn spawn_job(&self, mut job: TestJob<DatabaseEntry>) {
-        if let Some(test_result) = self.cache_lookup(&job.test_case).await {
+    fn spawn_job(&self, mut job: TestJob<DatabaseEntry>) {
+        if let Some(test_result) = self.cache_lookup(&job.test_case) {
             let result = TestStatus::Completed(test_result);
             job.notifier.notify_completion(result.clone());
             return;
@@ -469,7 +469,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
 
         for (tc_id, job) in jobs.into_iter() {
             self.job_cts.insert(tc_id.clone(), job.ct.clone());
-            self.spawn_job(job).await;
+            self.spawn_job(job);
         }
         Ok(())
     }
