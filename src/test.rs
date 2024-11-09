@@ -19,6 +19,7 @@ use itertools::Itertools;
 use log::{debug, error, info, warn};
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::{
     process::{Child, Command},
@@ -267,7 +268,7 @@ impl<W> ManagerBuilder<W> {
             job_env: Arc::new(job_env),
             repo,
             notif_tx: result_tx,
-            job_cts: HashMap::new(),
+            job_cts: Mutex::new(HashMap::new()),
             job_counter: JobCounter::new(),
             tests,
             resource_pools: Arc::new(resource_pools),
@@ -281,7 +282,7 @@ pub struct Manager<W: Worktree> {
     repo: Arc<W>,
     // Oops, be extremely careful about mutating this. set_revisions has some
     // pretty strong implicit assumptions about this field.
-    job_cts: HashMap<TestCaseId, CancellationToken>,
+    job_cts: Mutex<HashMap<TestCaseId, CancellationToken>>,
     job_counter: JobCounter,
     notif_tx: broadcast::Sender<Arc<Notification>>,
     tests: TestDag,
@@ -380,7 +381,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     // not already tested or being tested.
     // It doesn't make sense to call this function if you don't have a receiver
     // from already having called [[results]].
-    pub async fn set_revisions<I, R>(&mut self, revs: I) -> anyhow::Result<()>
+    pub async fn set_revisions<I, R>(&self, revs: I) -> anyhow::Result<()>
     where
         I: IntoIterator<Item = R>,
         R: Into<CommitHash> + Debug,
@@ -398,6 +399,13 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }))
         .await?;
 
+        self.set_commits(commits)
+    }
+
+    // Inner non-async helper for set_revisions.
+    pub fn set_commits(&self, commits: impl IntoIterator<Item = Commit>) -> anyhow::Result<()> {
+        let mut job_cts = self.job_cts.lock();
+
         let test_cases: HashMap<TestCaseId, TestCase> = commits
             .into_iter()
             .cartesian_product(self.tests.nodes())
@@ -409,8 +417,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
 
         // Cancel jobs for test cases that we don't care about any more.
         // https://github.com/rust-lang/rust/issues/59618 would make this more convenient.
-        self.job_cts = self
-            .job_cts
+        *job_cts = job_cts
             .drain()
             .filter(|(id, cancellation_token)| {
                 if !test_cases.contains_key(id) {
@@ -419,11 +426,11 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 }
                 true
             })
-            .collect();
+            .collect::<HashMap<_, _>>();
 
         // Don't start new jobs for test cases that are already running
         let test_cases = test_cases.into_iter().filter_map(|(tc_id, tc)| {
-            if self.job_cts.contains_key(&tc_id) {
+            if job_cts.contains_key(&tc_id) {
                 None
             } else {
                 Some(tc)
@@ -468,7 +475,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         )?;
 
         for (tc_id, job) in jobs.into_iter() {
-            self.job_cts.insert(tc_id.clone(), job.ct.clone());
+            job_cts.insert(tc_id.clone(), job.ct.clone());
             self.spawn_job(job);
         }
         Ok(())
@@ -1501,7 +1508,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_run_single() {
-        let mut f = TestScriptFixture::builder().num_tests(1).build().await;
+        let f = TestScriptFixture::builder().num_tests(1).build().await;
         let mut results = f.manager.results();
         let commit = f
             .repo
@@ -1531,7 +1538,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_cancel_running() {
-        let mut f = TestScriptFixture::builder().num_tests(2).build().await;
+        let f = TestScriptFixture::builder().num_tests(2).build().await;
         // First commit's test will block forever.
         let commit1 = f
             .repo
@@ -1622,7 +1629,7 @@ mod tests {
     // over-engineered.
     #[test_log::test(tokio::test)]
     async fn should_not_settle() {
-        let mut f = TestScriptFixture::builder().num_tests(1).build().await;
+        let f = TestScriptFixture::builder().num_tests(1).build().await;
         // First commit's test will block forever.
         let commit = f
             .repo
@@ -1641,7 +1648,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_cache_results() {
-        let mut f = TestScriptFixture::builder()
+        let f = TestScriptFixture::builder()
             .cache_policies([
                 CachePolicy::NoCaching,
                 CachePolicy::ByCommit,
@@ -1711,7 +1718,7 @@ mod tests {
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
     #[test_log::test(tokio::test)]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
-        let mut f = TestScriptFixture::builder()
+        let f = TestScriptFixture::builder()
             .num_tests(num_tests)
             .num_worktrees(num_worktrees)
             .build()
@@ -1779,7 +1786,7 @@ mod tests {
             depends_on: vec![],
         }];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
-        let mut m = Manager::builder(
+        let m = Manager::builder(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
             ParsedConfig {
@@ -1820,7 +1827,7 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
-        let mut m = Manager::builder(
+        let m = Manager::builder(
             repo.clone(),
             Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
             ParsedConfig {
@@ -1915,7 +1922,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_not_start_canceled() {
-        let mut f = TestScriptFixture::builder()
+        let f = TestScriptFixture::builder()
             .num_tests(1)
             .num_worktrees(1)
             .build()
@@ -2112,7 +2119,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn should_not_require_worktree() {
-        let mut f = TestScriptFixture::builder()
+        let f = TestScriptFixture::builder()
             .needs_worktree([false, false, false])
             .num_worktrees(1)
             .build()
@@ -2151,7 +2158,7 @@ mod tests {
     #[test_case(&TestScript::exit_code_tag(0), true ; "succeeded¸ should start")]
     #[test_log::test(tokio::test)]
     async fn should_wait_for_dependencies(commit_msg: &OsStr, should_start: bool) {
-        let mut f = TestScriptFixture::builder()
+        let f = TestScriptFixture::builder()
             .dependencies([(1, 0)])
             .num_worktrees(2)
             .build()
