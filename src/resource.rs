@@ -51,6 +51,8 @@ pub struct Pools {
 impl Pools {
     // Create a collection of pools where sizes specifies the initial number of tokens in each
     // pool.
+    // TODO: this key/val tuple approach is kinda annoying, maybe we should have
+    // a trait object that implements Into<Resource> or something?
     pub fn new(resources: impl IntoIterator<Item = (ResourceKey, Vec<Resource>)>) -> Self {
         Self {
             cond: Condvar::new(),
@@ -58,6 +60,8 @@ impl Pools {
         }
     }
 
+    // TODO: As well as being annoying in a similar way to new, this is
+    // inconsistent with it for no good reason.
     pub fn add(&mut self, new_resources: impl IntoIterator<Item = (ResourceKey, Resource)>) {
         // Don't need the condvar since we have a mutable reference to self. We
         // only take the mutex out of a misguided sense of decorum.
