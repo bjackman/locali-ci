@@ -38,6 +38,8 @@ fn update_tracked_cases(tracked_cases: &mut TrackedCases, notif: Arc<Notificatio
     );
 }
 
+// Tracks the status of the tests being run by observing the notification
+// stream.
 pub struct Tracker<W: Worktree, O: Write> {
     repo: Arc<W>,
     tracked_cases: TrackedCases,
@@ -54,6 +56,8 @@ lazy_static! {
 }
 
 impl<W: Worktree, O: Write> Tracker<W, O> {
+    // Construct a tracker that will write the UI to the given outut. The URL
+    // base is used to generate hyperlinks to test results.
     pub fn new(repo: Arc<W>, output: O, result_url_base: impl Into<String>) -> Self {
         Self {
             repo,
@@ -65,6 +69,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
         }
     }
 
+    // Informs the tracker of the range of tests that we expect to be testing.
     pub async fn set_range(&mut self, range_spec: &OsStr) -> anyhow::Result<()> {
         // This should eventually be configurable.
         let log_format =
@@ -74,14 +79,17 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
         Ok(())
     }
 
+    // Absorb a notification.
     pub fn update(&mut self, notif: Arc<Notification>) {
         update_tracked_cases(&mut self.tracked_cases, notif);
     }
 
+    // Update the UI by writing it to the output with fancy terminal escape
+    // codes to overwrite what was previously written.
     pub fn repaint(&mut self) -> anyhow::Result<()> {
         if self.lines_to_clear != 0 {
             // CPL is "cursor previous line" i.e. move the cursor up N lines.
-            // ED is "erase display", which by default means cleareverything after the cursor.
+            // ED is "erase display", which by default means clear everything after the cursor.
             // The library we're using here doesn't seem to provide an obvious
             // way to just get at the bytes, other than formatting it.
             write!(
