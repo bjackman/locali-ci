@@ -15,6 +15,18 @@ try using `cargo-stress`.
 
 Bugs (high to low priority):
 
+ - BLOCKER: Aside from generally being crappy and needing to be rewritten to do the
+   terminal commands properly (e.g. at present it fundamentally doesn't work if
+   the output buffer has more lines than your terminal) (this probably means
+   using Ratatui), there's some dumb bug in the terminal UI logic that means it
+   leaks lines.
+ - Sometimes when I've run this thing overnight, the next day I noticed that it
+   was no longer updating the terminal UI. It still seems to actually be running
+   the tests. I suspect some task somewhere is panicking, and I haven't done the
+   error handling properly to cause this to feed back to crashing the main
+   thread. I didn't think of this possibility before overwriting the logs that
+   would have had the panic details in there, so I'll just have to wait and see
+   until it happens again.
  - Tests don't work on my work computer. I think this is because I made false
    assumptions abuot the conditions for Git commit hashes to be deterministic.
  - `should_not_cache` test is flaky; occasionally the detector triggers that
@@ -48,10 +60,6 @@ Bugs (high to low priority):
    terminated?
 
    Hacky temporary fix: massively increase timeout before we SIGKILL.
- - Sometimes the system gets gummed up, I'm not sure if this is just a
-   status reporting issue or if the system stops making progress at at all.
-   Probably should fix all the simpler bugs first then look into this some more.
-   I don't see this when running against this repo, only when running on my big fat kernel tree.
  - Status output doesn't seem to get updated when tested range shrinks?
  - No tests for checking config cache...
  - No tests for actual contents of config cache. (E.g: Nothing to catch bug
@@ -65,12 +73,14 @@ Bugs (high to low priority):
 
 Needed features (high to low priority):
 
- - Need a way for test command to report "error" as distinguished from failure.
- - Store output and artifacts. WIP but:
+ - BLOCKER: Document config format (and everything else).
+ - BLOCKER: Store output and artifacts. 
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
-   - Probably need to split it up by tested repo.
-   - Need to present it to the user in some convenient way
+ - BLOCKER: Need to clean up the logging situation. User should at least get
+ - BLOCKER: Rename it.
+   some feedback about the process starting up and shutting down.
+ - Need a way for test command to report "error" as distinguished from failure.
  - Make output results easier to reach. In particular at the moment if you have
    no hyperlinks support in your terminal you're basically out of luck.
  - Provide a way to quickly check that tests in your configuration actually work.
@@ -91,8 +101,6 @@ Needed features (high to low priority):
    be getting any test results.)
  - Support saving artifacts so the user can reuse or analyze them later.
  - Probably want a (default?) option to merge stderr and stdout.
- - Fix output format, probably have to implement a pager in `ratatui`.
- - Support bailing out more quickly if the worktree teardown is too slow.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
  - Probably need to have the system handle cleaning the worktree for you. If
@@ -109,7 +117,6 @@ Needed features (high to low priority):
    the test manager becomes `settled` (this assumes that all test scripts can
    make progress on a single thread when the job server starves them, as is the
    case for Make, since all jobs have one implicit job slot).
- - Document config format.
  - Sometimes you have a test that needs access to the worktree but not
    exclusive. In that case we could run multiple jobs in parallel in the same
    worktree.
