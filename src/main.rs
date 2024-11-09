@@ -413,12 +413,7 @@ async fn test(
     let end_result = eg.wait().await;
 
     // Now we have to remember to clean up before returning the result :/
-    join_all(
-        resource_pools
-            .try_remove_worktrees()
-            .map(|w| w.cleanup()),
-    )
-    .await;
+    join_all(resource_pools.try_remove_worktrees().map(|w| w.cleanup())).await;
 
     end_result?;
     println!("Dependency jobs complete");
