@@ -20,6 +20,12 @@ Bugs (high to low priority):
    the output buffer has more lines than your terminal) (this probably means
    using Ratatui), there's some dumb bug in the terminal UI logic that means it
    leaks lines.
+   I spent some time looking into adopting Ratatui, but that [doesn't support
+   hyperlinks](https://github.com/ratatui/ratatui/issues/1028). I think the next
+   best thing is probably to do this manually instead of looking for a way to
+   work around that. All I really need is to implement a pager. Then if I wanna
+   get passtionate about this the right answer is probably to contribute to
+   Ratatui.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
    was no longer updating the terminal UI. It still seems to actually be running
    the tests. I suspect some task somewhere is panicking, and I haven't done the
