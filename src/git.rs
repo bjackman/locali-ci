@@ -444,7 +444,7 @@ impl TempWorktree {
         };
         let mut cmd = origin.git(["worktree", "add"]);
         let cmd = cmd.arg(zelf.temp_dir.path()).arg("HEAD");
-        select!(
+        select! {
             _ = ct.cancelled().fuse() => {
                 zelf.cleanup().await;
                 bail!("canceled")
@@ -453,7 +453,7 @@ impl TempWorktree {
                 res.context("'git worktree add' failed")?;
                 Ok(zelf)
             },
-        )
+        }
     }
 
     fn cleanup_cmd(&self) -> Option<SyncCommand> {

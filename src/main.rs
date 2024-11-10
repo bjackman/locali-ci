@@ -153,7 +153,7 @@ async fn watch_loop(
     let mut revs_stream = pin!(repo.watch_refs(&range_spec)?);
     let mut notifs = test_manager.results();
     loop {
-        select!(
+        select! {
             // TODO: It's dumb that we have two different types of communication here (one exposes
             // the channel, one implements Stream).
             revs = revs_stream.next() => {
@@ -180,7 +180,7 @@ async fn watch_loop(
                 test_manager.settled().await;
                 break;
             }
-        )
+        }
     }
     Ok(())
 }

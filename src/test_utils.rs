@@ -12,10 +12,10 @@ pub async fn timeout_5s<F, T>(fut: F) -> anyhow::Result<T>
 where
     F: Future<Output = T>,
 {
-    select!(
+    select! {
         _ = sleep(Duration::from_secs(5)) => bail!("timeout after 5s"),
         output = fut => Ok(output)
-    )
+    }
 }
 
 // Blocks until file exists, the dumb way.

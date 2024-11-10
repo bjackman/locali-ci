@@ -634,24 +634,27 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         pools: &Pools,
         origin_worktree_path: &Path,
     ) -> anyhow::Result<Option<ExitCode>> {
-        // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
-        // and some of those jobs are blocking on resources held by others,
-        // we want the former jobs to observe their own cancellation before
-        // they see the resources get freed up by the latter. I don't think
-        // this totally eliminates that case, which probably means tests
-        // will be flaky. Not sure what to do about that.
-        select!(biased;
-                _ = self.ct.cancelled() => Ok(None),
-                resources = pools.get(self.test_case.test.needs_resources.clone()) =>  {
-            self.notifier.notify(&TestStatus::Started);
-            if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
-                // We "own" this worktree.
-                self.checkout_and_run(worktrees[0].as_worktree(), &resources).await
-            } else {
-                // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                self.run(origin_worktree_path, &resources).await
+        select! {
+            // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
+            // and some of those jobs are blocking on resources held by others,
+            // we want the former jobs to observe their own cancellation before
+            // they see the resources get freed up by the latter. I don't think
+            // this totally eliminates that case, which probably means tests
+            // will be flaky. Not sure what to do about that.
+            biased;
+
+            _ = self.ct.cancelled() => Ok(None),
+            resources = pools.get(self.test_case.test.needs_resources.clone()) =>  {
+                self.notifier.notify(&TestStatus::Started);
+                if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
+                    // We "own" this worktree.
+                    self.checkout_and_run(worktrees[0].as_worktree(), &resources).await
+                } else {
+                    // We don't "own" the "main" worktree so the job shouldn't mess with it.
+                    self.run(origin_worktree_path, &resources).await
+                }
             }
-        })
+        }
     }
 
     // Blocks until all dependency jobs have succeeded, or returns an error
@@ -1218,7 +1221,7 @@ mod tests {
             .collect();
         let want_total = want.len();
         while !want.is_empty() {
-            let notif = select!(
+            let notif = select! {
                 _ = sleep_until(timeout) => {
                     bail!("timeout after 20s, remaining results ({} of {}):\n{}",
                         want.len(), want_total, dump_want_statuses(&want));
@@ -1228,7 +1231,7 @@ mod tests {
                         "test result stream terminated, remaining results:\n{}",
                         dump_want_statuses(&want)))?
                 }
-            );
+            };
             let (_tc, want_statuses) = want.get_mut(&notif.test_case.id()).context(format!(
                 "got notification for unexpected test case: {notif:?}",
             ))?;
@@ -1252,11 +1255,11 @@ mod tests {
         results: &mut broadcast::Receiver<Arc<Notification>>,
         m: &Manager<TempRepo>,
     ) -> anyhow::Result<()> {
-        select!(
+        select! {
             _ = sleep(Duration::from_secs(1)) => bail!("didn't settle after 1s"),
             result = results.recv() => bail!("unexpected test result received: {:?}", result),
             _ = m.settled() => Ok(())
-        )
+        }
     }
 
     struct TestScriptFixture {
@@ -1567,10 +1570,10 @@ mod tests {
         timeout_5s(f.scripts[0].started(&commit.hash))
             .await
             .expect("script did not start");
-        select!(
+        select! {
             _ = sleep(Duration::from_secs(1)) => (),
             _ = f.manager.settled() => panic!("manager settled unexpectedly"),
-        )
+        }
     }
 
     #[test_log::test(tokio::test)]
@@ -1737,10 +1740,10 @@ mod tests {
         }
 
         // Ugh, dunno how to do this except just wait for 1s...
-        select!(
+        select! {
             _ = sleep(Duration::from_secs(1)) => (), // OK, nothing else ran.
             _ = select_all(start_futs) => panic!("extra jobs started, resource limits not respected"),
-        )
+        }
     }
 
     #[test_log::test(tokio::test)]
@@ -2027,22 +2030,22 @@ mod tests {
             .set_revisions(vec![with_error.clone(), with_fail.clone()].clone())
             .await
             .unwrap();
-        select!(
+        select! {
             _ = sleep(Duration::from_secs(5)) => panic!("error'd test not re-run"),
             _ = f.scripts[0].started(&with_error.hash) => ()
-        );
-        select!(
+        };
+        select! {
             _ = sleep(Duration::from_secs(5)) => panic!("canceled test not re-run"),
             _ = f.scripts[1].started(&with_error.hash) => ()
-        );
-        select!(
+        };
+        select! {
             _ = sleep(Duration::from_secs(5)) => panic!("error'd test not re-run"),
             _ = f.scripts[0].started(&with_fail.hash) => ()
-        );
-        select!(
+        };
+        select! {
             _ = sleep(Duration::from_secs(5)) => panic!("canceled test not re-run"),
             _ = f.scripts[1].started(&with_fail.hash) => ()
-        );
+        };
     }
 
     #[test_log::test(tokio::test)]
