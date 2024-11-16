@@ -47,6 +47,7 @@ pub struct Tracker<W: Worktree, O: Write> {
     output_buf: OutputBuffer,
     output: O,
     result_url_base: String,
+    home_url: String,
 }
 
 // This ought to be private to Tracker::reset, rust just doesn't seem to let you do that.
@@ -58,13 +59,19 @@ lazy_static! {
 impl<W: Worktree, O: Write> Tracker<W, O> {
     // Construct a tracker that will write the UI to the given outut. The URL
     // base is used to generate hyperlinks to test results.
-    pub fn new(repo: Arc<W>, output: O, result_url_base: impl Into<String>) -> Self {
+    pub fn new(
+        repo: Arc<W>,
+        output: O,
+        result_url_base: impl Into<String>,
+        home_url: impl Into<String>,
+    ) -> Self {
         Self {
             repo,
             tracked_cases: HashMap::new(),
             output_buf: OutputBuffer::empty(),
             output,
             result_url_base: result_url_base.into(),
+            home_url: home_url.into(),
         }
     }
 
@@ -97,6 +104,11 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
         write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
         self.output_buf
             .render(&mut self.output, &self.tracked_cases, &self.result_url_base)?;
+        writeln!(
+            &mut self.output,
+            "Sorry, this TUI is crap. Try the web UI: {}",
+            self.home_url.bold().on_blue()
+        )?;
         Ok(())
     }
 }

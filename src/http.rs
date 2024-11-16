@@ -32,15 +32,19 @@ impl Ui {
         }
     }
 
-    pub fn result_url_base(&self) -> anyhow::Result<String> {
+    pub fn home_url(&self) -> anyhow::Result<String> {
         Ok(format!(
-            "http://{}:{}/results",
+            "http://{}:{}",
             self.hostname,
             self.listener
                 .local_addr()
                 .context("getting local socket addr")?
                 .port()
         ))
+    }
+
+    pub fn result_url_base(&self) -> anyhow::Result<String> {
+        Ok(self.home_url()? + "/results")
     }
 
     pub async fn serve(self) {
