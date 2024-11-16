@@ -7,8 +7,8 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::{
+    database::Database,
     git::{CommitHash, Worktree},
-    result::Database,
     test::{Notification, TestCase, TestName, TestStatus},
 };
 

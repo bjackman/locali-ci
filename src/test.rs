@@ -30,10 +30,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
+    database::{Database, DatabaseEntry},
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
-    result::{Database, DatabaseEntry},
     util::ResultExt,
 };
 
