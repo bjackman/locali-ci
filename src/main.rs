@@ -6,6 +6,7 @@ use database::{Database, DatabaseEntry};
 use futures::future::join_all;
 use futures::StreamExt;
 use git::{PersistentWorktree, TempWorktree};
+use http::Ui;
 use log::info;
 use nix::sys::utsname::uname;
 use resource::Pools;
@@ -195,11 +196,13 @@ async fn watch(
     let listener = tokio::net::TcpListener::bind(watch_args.http_sockaddr.clone())
         .await
         .unwrap();
-    let http_port = listener
-        .local_addr()
-        .expect("couldn't get local HTTP address")
-        .port();
-    tokio::spawn(http::serve_dir(listener, env.database.base_dir.clone()));
+    let ui = Ui::new(
+        watch_args.hostname.clone(),
+        listener,
+        env.database.base_dir.clone(),
+    );
+    let result_url_base = ui.result_url_base()?;
+    tokio::spawn(ui.serve());
 
     let Env {
         repo,
@@ -224,7 +227,6 @@ async fn watch(
     ));
 
     // Set up the status tracker, which shows the user what's going on in the terminal.
-    let result_url_base = format!("http://{}:{}", watch_args.hostname, http_port);
     let status_tracker = status::Tracker::new(repo.clone(), stdout(), result_url_base);
 
     // Kick off creation of the worktrees that the test manager will run jobs in.
