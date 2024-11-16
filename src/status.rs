@@ -1,6 +1,6 @@
 use std::{collections::HashMap, ffi::OsStr, io::Write, mem, sync::Arc};
 
-use ansi_control_codes::control_sequences::{CPL, ED};
+use ansi_control_codes::control_sequences::{CUP, ED};
 use anyhow::{self, bail, Context as _};
 use colored::Colorize;
 use lazy_static::lazy_static;
@@ -10,6 +10,7 @@ use crate::{
     database::Database,
     git::{CommitHash, Worktree},
     test::{Notification, TestCase, TestName, TestStatus},
+    util::ResultExt as _,
 };
 
 struct TrackedTestCase {
@@ -45,7 +46,6 @@ pub struct Tracker<W: Worktree, O: Write> {
     tracked_cases: TrackedCases,
     output_buf: OutputBuffer,
     output: O,
-    lines_to_clear: usize,
     result_url_base: String,
 }
 
@@ -64,7 +64,6 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
             tracked_cases: HashMap::new(),
             output_buf: OutputBuffer::empty(),
             output,
-            lines_to_clear: 0,
             result_url_base: result_url_base.into(),
         }
     }
@@ -87,22 +86,24 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
     // Update the UI by writing it to the output with fancy terminal escape
     // codes to overwrite what was previously written.
     pub fn repaint(&mut self) -> anyhow::Result<()> {
-        if self.lines_to_clear != 0 {
-            // CPL is "cursor previous line" i.e. move the cursor up N lines.
-            // ED is "erase display", which by default means clear everything after the cursor.
-            // The library we're using here doesn't seem to provide an obvious
-            // way to just get at the bytes, other than formatting it.
-            write!(
-                &mut self.output,
-                "{}{}",
-                CPL(Some(self.lines_to_clear as u32)),
-                ED(None)
-            )?;
-        }
-        self.lines_to_clear =
-            self.output_buf
-                .render(&mut self.output, &self.tracked_cases, &self.result_url_base)?;
+        // Enter alternate screen. Dunno why ansi-control-codes doesn't have
+        // this. This isn't really how I wanted this UI to work. But
+        // implementing what I really wanted turns out to be really fucking
+        // fiddly and unsatisfying and boring, I just don't care enough.
+        // This is idempotent so we just do it every time.
+        write!(self.output, "\x1B[?1049h")?;
+
+        // Move cursor to top left and erase the display.
+        write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
+        self.output_buf
+            .render(&mut self.output, &self.tracked_cases, &self.result_url_base)?;
         Ok(())
+    }
+}
+
+impl<W: Worktree, O: Write> Drop for Tracker<W, O> {
+    fn drop(&mut self) {
+        write!(self.output, "\x1B[?1049h").or_log_error("Couldn't exit alternate screen");
     }
 }
 
@@ -262,16 +263,15 @@ impl OutputBuffer {
     }
 
     // Returns number of lines that were written.
-    // TODO: Use AsyncWrite.
     fn render(
         &self,
         output: &mut impl Write,
         statuses: &HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>,
         result_url_base: &str,
-    ) -> anyhow::Result<usize> {
+    ) -> anyhow::Result<()> {
         if self.lines.is_empty() {
             output.write_all(b"[range empty]\n")?;
-            return Ok(1);
+            return Ok(());
         }
         for (i, line) in self.lines.iter().enumerate() {
             output.write_all(line.as_bytes())?;
@@ -282,7 +282,7 @@ impl OutputBuffer {
             }
             output.write_all(b"\n")?;
         }
-        Ok(self.lines.len())
+        Ok(())
     }
 
     fn render_cases(
