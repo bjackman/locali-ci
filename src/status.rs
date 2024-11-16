@@ -10,7 +10,7 @@ use crate::{
     database::Database,
     git::{CommitHash, Worktree},
     test::{Notification, TestCase, TestName, TestStatus},
-    text::{Line, Span, Style},
+    text::{Line, Span, Style, Text},
     util::ResultExt as _,
 };
 
@@ -103,8 +103,11 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
 
         // Move cursor to top left and erase the display.
         write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
+        let mut buf = String::new();
         self.output_buf
-            .render(&mut self.output, &self.tracked_cases, &self.result_url_base)?;
+            .render(&self.tracked_cases, &self.result_url_base)?
+            .render_ansi(&mut buf)?;
+        write!(&mut self.output, "{}", buf)?;
         writeln!(
             &mut self.output,
             "Sorry, this TUI is crap. Try the web UI: {}",
@@ -276,38 +279,39 @@ impl OutputBuffer {
     }
 
     // Returns number of lines that were written.
-    fn render(
-        &self,
-        output: &mut impl Write,
-        statuses: &HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>,
+    fn render<'a>(
+        &'a self,
+        statuses: &'a HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>,
         result_url_base: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Text<'a>> {
         if self.lines.is_empty() {
-            output.write_all(b"[range empty]\n")?;
-            return Ok(());
+            return Ok("[range empty]".into());
         }
-        for (i, line) in self.lines.iter().enumerate() {
-            output.write_all(line.as_bytes())?;
-            if let Some(hash) = self.status_commits.get(&i) {
-                if let Some(tracked_cases) = statuses.get(hash) {
-                    self.render_cases(output, tracked_cases, result_url_base)?;
+        self.lines
+            .iter()
+            .enumerate()
+            .map(|(i, log_line)| -> anyhow::Result<Line> {
+                let mut spans = vec![Span::from(log_line)];
+                if let Some(hash) = self.status_commits.get(&i) {
+                    if let Some(tracked_cases) = statuses.get(hash) {
+                        spans.extend(self.render_cases(tracked_cases, result_url_base)?);
+                    }
                 }
-            }
-            output.write_all(b"\n")?;
-        }
-        Ok(())
+                Ok(Line::from_iter(spans))
+            })
+            .collect::<anyhow::Result<Text>>()
     }
 
-    fn render_cases(
+    fn render_cases<'a>(
         &self,
-        output: &mut impl Write,
-        tracked_cases: &HashMap<TestName, TrackedTestCase>,
+        tracked_cases: &'a HashMap<TestName, TrackedTestCase>,
         result_url_base: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<Span<'a>>> {
         let mut tracked_cases: Vec<(&TestName, &TrackedTestCase)> = tracked_cases.iter().collect();
         // Sort by test case name. Would like sort_by_key here but
         // there's lifetime pain.
         tracked_cases.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+        let mut spans = Vec::new();
         for (name, tracked_case) in tracked_cases {
             let mut status_part = match &tracked_case.status {
                 TestStatus::Error(msg) => Span::styled(msg, Style::new().on_red()),
@@ -331,26 +335,21 @@ impl OutputBuffer {
                 )
                 .into(),
             );
-            // TODO: output is currently an io::Write, we want fmt::Write, so indirect via a String
-            let mut out_string = String::new();
-            Line::from_iter([
+            spans.extend([
                 Span::styled(name.to_string(), Style::new().bold()),
                 Span::raw(": "),
                 status_part,
                 Span::raw(" "),
             ])
-            .render_ansi(&mut out_string)
-            .context("rendering ANSI text")?;
-            write!(output, "{}", out_string)?;
         }
-        Ok(())
+        Ok(spans)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use core::str;
-    use std::{io::BufWriter, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use googletest::{expect_that, prelude::eq};
 
@@ -414,9 +413,11 @@ mod tests {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let mut buf = BufWriter::new(Vec::new());
-        ob.render(&mut buf, &tracked_cases, "myhost")
-            .expect("OutputBuffer::render failed");
+        let mut buf = String::new();
+        ob.render(&tracked_cases, "myhost")
+            .unwrap()
+            .render_ansi(&mut buf)
+            .unwrap();
 
         expect_that!(
             // The colored crate does not have any useful way to disable it from
@@ -425,7 +426,7 @@ mod tests {
             // then realied that if one test failed, the other would panic
             // holding the lock. Also parallelism is nice. So, we just ignore
             // the color.
-            *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
+            *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
             eq("* 08e80af 3\n\
                 | my_test1: Enqueued my_test2: success \n\
                 * b29043f 2\n\
@@ -471,15 +472,17 @@ mod tests {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let mut buf = BufWriter::new(Vec::new());
-        ob.render(&mut buf, &tracked_cases, "myhost")
-            .expect("OutputBuffer::render failed");
+        let mut buf = String::new();
+        ob.render(&tracked_cases, "myhost")
+            .unwrap()
+            .render_ansi(&mut buf)
+            .unwrap();
 
         // Note this is a kinda weird log. We excluded the common ancestor of all the commits.
         // Also note it's a kinda weird input because we haven't provided any
         // statuses all of the commits (this does momentarily happen IRL).
         expect_that!(
-            *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
+            *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
             eq("*-.   05d10f7 merge commit\n\
                 |\\ \\  \n\
                 | | | \n\
@@ -531,12 +534,14 @@ mod tests {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let mut buf = BufWriter::new(Vec::new());
-        ob.render(&mut buf, &tracked_cases, "myhost")
-            .expect("OutputBuffer::render failed");
+        let mut buf = String::new();
+        ob.render(&tracked_cases, "myhost")
+            .unwrap()
+            .render_ansi(&mut buf)
+            .unwrap();
 
         expect_that!(
-            *strip_ansi_escapes::strip_str(str::from_utf8(&buf.into_inner().unwrap()).unwrap()),
+            *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
             eq("[range empty]\n".to_owned())
         );
     }

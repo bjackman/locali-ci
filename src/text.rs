@@ -14,9 +14,42 @@ use std::{borrow::Cow, fmt};
 
 use colored::{ColoredString, Colorize as _};
 
-#[expect(dead_code)]
+// Represents a block of text, potentially with styling. Note this always
+// represents a block, you can't represent a string without a newline at the
+// end (I'm not sure if that's the same in Ratatui).
 pub struct Text<'a> {
     pub lines: Vec<Line<'a>>,
+}
+
+impl<'a, T> FromIterator<T> for Text<'a>
+where
+    T: Into<Line<'a>>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self {
+            lines: iter.into_iter().map(|i| i.into()).collect(),
+        }
+    }
+}
+
+// Shorthand for constructing a Text with a single Line.
+impl<'a, T: Into<Line<'a>>> From<T> for Text<'a> {
+    fn from(t: T) -> Self {
+        Self {
+            lines: vec![t.into()],
+        }
+    }
+}
+
+impl<'a> Text<'a> {
+    // Render the text with style applied using ANSI commands.
+    pub fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
+        for line in self.lines.iter() {
+            line.render_ansi(w)?;
+            w.write_str("\n")?;
+        }
+        Ok(())
+    }
 }
 
 pub struct Line<'a> {
@@ -35,11 +68,20 @@ where
 }
 
 impl<'a> Line<'a> {
-    pub fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
+    fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
         for span in self.spans.iter() {
             span.render_ansi(w)?
         }
         Ok(())
+    }
+}
+
+// Shorthand for constructing a Line with a single Span.
+impl<'a, T: Into<Span<'a>>> From<T> for Line<'a> {
+    fn from(t: T) -> Self {
+        Self {
+            spans: vec![t.into()],
+        }
     }
 }
 
@@ -48,6 +90,12 @@ pub struct Span<'a> {
     // The cow is copied from Ratatui. My understanding is that this is there to
     // be generic across ownership or reference.
     pub content: Cow<'a, str>,
+}
+
+impl<'a, T: Into<Cow<'a, str>>> From<T> for Span<'a> {
+    fn from(t: T) -> Span<'a> {
+        Span::raw(t)
+    }
 }
 
 impl<'a> Span<'a> {
@@ -65,7 +113,7 @@ impl<'a> Span<'a> {
         }
     }
 
-    pub fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
+    fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
         let output = self.content.as_ref();
         let mut output = match self.style.bg {
             // TODO: ColoredString is not very useful here any more.
