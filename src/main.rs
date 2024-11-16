@@ -41,6 +41,7 @@ mod process;
 mod resource;
 mod status;
 mod test;
+mod text;
 mod util;
 
 #[cfg(test)]

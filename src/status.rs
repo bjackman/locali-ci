@@ -10,6 +10,7 @@ use crate::{
     database::Database,
     git::{CommitHash, Worktree},
     test::{Notification, TestCase, TestName, TestStatus},
+    text::{Line, Span, Style},
     util::ResultExt as _,
 };
 
@@ -308,40 +309,42 @@ impl OutputBuffer {
         // there's lifetime pain.
         tracked_cases.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
         for (name, tracked_case) in tracked_cases {
-            let status_part = match &tracked_case.status {
-                TestStatus::Error(msg) => msg.on_bright_red(),
+            let mut status_part = match &tracked_case.status {
+                TestStatus::Error(msg) => Span::styled(msg, Style::new().on_red()),
                 TestStatus::Completed(result) => {
                     if result.exit_code == 0 {
-                        "success".on_green()
+                        Span::styled("success", Style::new().on_green())
                     } else {
-                        format!("failed (status {})", result.exit_code).on_red()
+                        Span::styled(
+                            format!("failed (status {})", result.exit_code),
+                            Style::new().on_red(),
+                        )
                     }
                 }
-                _ => tracked_case.status.to_string().into(),
-            }
-            // IIUC the to_string renders the ColoredString. If you just implicitly convert
-            // it to a str it skips the colour rendering.
-            .to_string();
-            let url = format!(
-                "{}/{}/stdout.txt",
-                result_url_base,
-                Database::result_relpath(&tracked_case.test_case).to_string_lossy()
+                _ => Span::raw(tracked_case.status.to_string()),
+            };
+            status_part.style.hyperlink = Some(
+                format!(
+                    "{}/{}/stdout.txt",
+                    result_url_base,
+                    Database::result_relpath(&tracked_case.test_case).to_string_lossy()
+                )
+                .into(),
             );
-            let status_part = hyperlink(&status_part, &url);
-            output
-                .write_all(format!("{}: {} ", name.to_string().bold(), status_part).as_bytes())?;
+            // TODO: output is currently an io::Write, we want fmt::Write, so indirect via a String
+            let mut out_string = String::new();
+            Line::from_iter([
+                Span::styled(name.to_string(), Style::new().bold()),
+                Span::raw(": "),
+                status_part,
+                Span::raw(" "),
+            ])
+            .render_ansi(&mut out_string)
+            .context("rendering ANSI text")?;
+            write!(output, "{}", out_string)?;
         }
         Ok(())
     }
-}
-
-// Renders a hyperlink like in
-// https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda.
-// Obviously it would be a bit nicer to use some library for this, and we
-// already do that for the colorization, but I just dunno if it's worth
-// pulling in a dependency for something so trivial.
-fn hyperlink(text: &str, url: &str) -> String {
-    format!("\u{1b}]8;;{}\u{1b}\\{}\u{1b}]8;;\u{1b}\\", url, text)
 }
 
 #[cfg(test)]
