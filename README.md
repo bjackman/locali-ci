@@ -26,6 +26,10 @@ Bugs (high to low priority):
    work around that. All I really need is to implement a pager. Then if I wanna
    get passtionate about this the right answer is probably to contribute to
    Ratatui.
+   
+   OK.. I spent a little bit of time hacking on that but got really fucking sick
+   of terminal hacking really fucking quickly. So now we have a web UI (more on
+   that below). I haven't decided yet exactly what to do about this.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
    was no longer updating the terminal UI. It still seems to actually be running
    the tests. I suspect some task somewhere is panicking, and I haven't done the
@@ -86,6 +90,11 @@ Needed features (high to low priority):
  - BLOCKER: Need to clean up the logging situation. User should at least get
    some feedback about the process starting up and shutting down.
  - BLOCKER: Rename it.
+ - BLOCKER: We have a web UI now. But it has some shortcomings:
+   - Needs DERK MODE (probably it should ONLY have DERK MODE).
+   - Now we should have a way to view the stderr and stuff as well as stout.
+   - It uses an HTMX CDN. I wanna figure out how to embed that into the binary
+     instead.
  - Need a way for test command to report "error" as distinguished from failure.
  - Make output results easier to reach. In particular at the moment if you have
    no hyperlinks support in your terminal you're basically out of luck.
