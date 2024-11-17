@@ -280,7 +280,6 @@ impl OutputBuffer {
         })
     }
 
-    // Returns number of lines that were written.
     fn render<'a>(
         &'a self,
         statuses: &'a HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>,
