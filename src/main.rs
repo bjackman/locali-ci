@@ -192,6 +192,8 @@ async fn watch(
     cancellation_token: CancellationToken,
     watch_args: WatchArgs,
 ) -> anyhow::Result<()> {
+    let mut eg = ErrGroup::new(cancellation_token.clone());
+
     // Create HTTP server, to serve the result artifacts to the user when they
     // click terminal hyperlinks.
     let listener = tokio::net::TcpListener::bind(watch_args.http_sockaddr.clone())
@@ -204,7 +206,7 @@ async fn watch(
     );
     let result_url_base = ui.result_url_base()?;
     let home_url = ui.home_url()?;
-    tokio::spawn(ui.serve());
+    eg.spawn(ui.serve(cancellation_token.child_token()));
 
     let Env {
         repo,
@@ -241,7 +243,6 @@ async fn watch(
     // this, but the solution would be to create the worktrees ondemand, when we have a revision we
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
-    let mut eg = ErrGroup::new(cancellation_token.clone());
     for _ in 0..num_worktrees {
         let repo = repo.clone();
         let ct = cancellation_token.child_token();

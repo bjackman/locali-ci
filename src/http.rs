@@ -8,7 +8,8 @@ use axum::{
     routing::get,
     Router,
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, select};
+use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
 
 async fn handle_404() -> impl IntoResponse {
@@ -47,12 +48,15 @@ impl Ui {
         Ok(self.home_url()? + "/results")
     }
 
-    pub async fn serve(self) {
+    pub async fn serve(self, ct: CancellationToken) -> anyhow::Result<()> {
         let app = Router::new().route("/", get(home)).nest_service(
             "/results",
             ServeDir::new(self.result_db).not_found_service(handle_404.into_service()),
         );
-        axum::serve(self.listener, app).await.unwrap();
+        select! {
+            result = axum::serve(self.listener, app) => result.context("serving web UI"),
+            _ = ct.cancelled() => Ok(()),
+        }
     }
 }
 
