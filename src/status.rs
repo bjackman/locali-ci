@@ -101,7 +101,6 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
         let render = self
             .output_buf
             .render(&self.tracked_cases, &self.result_url_base)?;
-        let log_buf = render.ansi();
 
         // Enter alternate screen. Dunno why ansi-control-codes doesn't have
         // this. This isn't really how I wanted this UI to work. But
@@ -111,7 +110,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
         write!(self.output, "\x1B[?1049h")?;
         // Move cursor to top left and erase the display.
         write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
-        write!(&mut self.output, "{}", log_buf)?;
+        write!(&mut self.output, "{}", render.ansi())?;
         writeln!(
             &mut self.output,
             "Sorry, this TUI is crap. Try the web UI: {}",
@@ -120,7 +119,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
 
         // As an experiment here we're just whamming in the ANSI text, this will
         // produce garbage but it's just to see if the plumbing works.
-        self.web_ui.set_log_buf(log_buf.to_string());
+        self.web_ui.set_log_buf(render.html_pre());
 
         Ok(())
     }

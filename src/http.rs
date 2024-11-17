@@ -17,6 +17,8 @@ use tokio::{net::TcpListener, select, sync::watch};
 use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
 
+use crate::text::RenderHtmlPre;
+
 async fn handle_404() -> impl IntoResponse {
     (StatusCode::NOT_FOUND, "File not found")
 }
@@ -77,18 +79,18 @@ impl Ui {
 
 pub struct UiState {
     // This holds the pre-rendered log & test result buffer with links etc.
-    log_buf: watch::Sender<String>,
+    log_html_pre: watch::Sender<String>,
 }
 
 impl UiState {
     fn new() -> Self {
         Self {
-            log_buf: watch::Sender::new("[starting up...]".into()),
+            log_html_pre: watch::Sender::new("[starting up...]".into()),
         }
     }
 
-    pub fn set_log_buf(&self, buf: String) {
-        self.log_buf.send_replace(buf);
+    pub fn set_log_buf(&self, render: RenderHtmlPre) {
+        self.log_html_pre.send_replace(render.to_string());
     }
 }
 
@@ -101,13 +103,13 @@ async fn updates(ws: WebSocketUpgrade, State(state): State<Arc<UiState>>) -> Res
 // as <pre> with the id "log_buf".
 async fn handle_socket(mut socket: WebSocket, state: Arc<UiState>) {
     // TODO: Example code - just send updates every second.
-    let mut rx = state.log_buf.subscribe();
+    let mut rx = state.log_html_pre.subscribe();
     loop {
         // Note the first update here will commonly be redundant, we just do it
         // because we don't know if log_buf changed since the client got the one
         // in the initial GET response.
         let buf = format!(
-            r#"<pre id="log_buf">HELLO{}</pre>"#,
+            r#"<pre id="log_buf">{}</pre>"#,
             rx.borrow_and_update().clone()
         );
         if socket.send(Message::Text(buf)).await.is_err() {
@@ -142,7 +144,7 @@ async fn home(State(state): State<Arc<UiState>>) -> Html<String> {
             </body>
         </html>
     "#},
-        *state.log_buf.borrow()
+        *state.log_html_pre.borrow()
     )
     .into()
 }

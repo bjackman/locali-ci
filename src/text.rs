@@ -49,6 +49,11 @@ impl<'a> Text<'a> {
     pub fn ansi(&self) -> RenderAnsi {
         RenderAnsi { text: self }
     }
+
+    // Render to an HTML <pre> element.
+    pub fn html_pre(&self) -> RenderHtmlPre {
+        RenderHtmlPre { text: self }
+    }
 }
 
 pub struct RenderAnsi<'a> {
@@ -61,6 +66,20 @@ impl<'a> Display for RenderAnsi<'a> {
             writeln!(f, "{}", RenderAnsiLine { line })?;
         }
         Ok(())
+    }
+}
+
+pub struct RenderHtmlPre<'a> {
+    text: &'a Text<'a>,
+}
+
+impl<'a> Display for RenderHtmlPre<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "<pre>")?;
+        for line in self.text.lines.iter() {
+            writeln!(f, "{}", RenderHtmlLine { line })?;
+        }
+        writeln!(f, "</pre>")
     }
 }
 
@@ -87,6 +106,20 @@ impl<'a> Display for RenderAnsiLine<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         for span in self.line.spans.iter() {
             write!(f, "{}", RenderAnsiSpan { span })?;
+        }
+        Ok(())
+    }
+}
+
+// TODO: Deduplicate with generics?
+struct RenderHtmlLine<'a> {
+    line: &'a Line<'a>,
+}
+
+impl<'a> Display for RenderHtmlLine<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for span in self.line.spans.iter() {
+            write!(f, "{}", RenderHtmlSpan { span })?;
         }
         Ok(())
     }
@@ -142,7 +175,6 @@ impl<'a> Display for RenderAnsiSpan<'a> {
             None => ColoredString::from(output),
             Some(Color::Red) => output.on_red(),
             Some(Color::Green) => output.on_green(),
-            Some(Color::Blue) => output.on_blue(),
             Some(Color::BrightRed) => output.on_bright_red(),
         };
         if self.span.style.bold {
@@ -158,11 +190,36 @@ impl<'a> Display for RenderAnsiSpan<'a> {
     }
 }
 
+struct RenderHtmlSpan<'a> {
+    span: &'a Span<'a>,
+}
+
+impl<'a> Display for RenderHtmlSpan<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let bg = match self.span.style.bg {
+            None => "inherit",
+            Some(Color::Red) => "maroon",
+            Some(Color::Green) => "green",
+            Some(Color::BrightRed) => "red",
+        };
+        let weight = if self.span.style.bold {
+            "bold"
+        } else {
+            "normal"
+        };
+        write!(
+            f,
+            r#"<span style="background-color: {}; font-weight: {}">{}</span>"#,
+            bg,
+            weight,
+            self.span.content.as_ref()
+        )
+    }
+}
+
 pub enum Color {
     Red,
     Green,
-    #[expect(dead_code)]
-    Blue,
     BrightRed,
 }
 
