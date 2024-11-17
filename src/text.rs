@@ -207,13 +207,20 @@ impl<'a> Display for RenderHtmlSpan<'a> {
         } else {
             "normal"
         };
+        if let Some(ref url) = &self.span.style.hyperlink {
+            write!(f, r#"<a href="{}">"#, url)?;
+        }
         write!(
             f,
             r#"<span style="background-color: {}; font-weight: {}">{}</span>"#,
             bg,
             weight,
             self.span.content.as_ref()
-        )
+        )?;
+        if self.span.style.hyperlink.is_some() {
+            write!(f, "</a>")?;
+        }
+        Ok(())
     }
 }
 
