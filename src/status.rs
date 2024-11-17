@@ -322,7 +322,7 @@ impl OutputBuffer {
         let mut spans = Vec::new();
         for (name, tracked_case) in tracked_cases {
             let mut status_part = match &tracked_case.status {
-                TestStatus::Error(msg) => Span::styled(msg, Style::new().on_red()),
+                TestStatus::Error(msg) => Span::styled(msg, Style::new().on_bright_red()),
                 TestStatus::Completed(result) => {
                     if result.exit_code == 0 {
                         Span::styled("success", Style::new().on_green())

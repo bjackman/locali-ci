@@ -163,7 +163,6 @@ pub enum Color {
     Green,
     #[expect(dead_code)]
     Blue,
-    #[expect(dead_code)]
     BrightRed,
 }
 
@@ -181,6 +180,11 @@ impl<'a> Style<'a> {
 
     pub fn on_red(mut self) -> Self {
         self.bg = Some(Color::Red);
+        self
+    }
+
+    pub fn on_bright_red(mut self) -> Self {
+        self.bg = Some(Color::BrightRed);
         self
     }
 
