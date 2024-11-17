@@ -50,7 +50,8 @@ impl<'a> Text<'a> {
         RenderAnsi { text: self }
     }
 
-    // Render to an HTML <pre> element.
+    // Render to an HTML <pre> element. Styles are inline. (Don't like it? Gonna
+    // take me to HTML court?? Gonna go and tell your mummy about it???)
     pub fn html_pre(&self) -> RenderHtmlPre {
         RenderHtmlPre { text: self }
     }
