@@ -10,7 +10,10 @@
 // not contributing to ratatui is that I wanna race to finish this project
 // instead of getting bogged down in side-quests!
 
-use std::{borrow::Cow, fmt};
+use std::{
+    borrow::Cow,
+    fmt::{self, Display, Formatter},
+};
 
 use colored::{ColoredString, Colorize as _};
 
@@ -40,13 +43,22 @@ impl<'a, T: Into<Line<'a>>> From<T> for Text<'a> {
         }
     }
 }
-
 impl<'a> Text<'a> {
-    // Render the text with style applied using ANSI commands.
-    pub fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
-        for line in self.lines.iter() {
-            line.render_ansi(w)?;
-            w.write_str("\n")?;
+    // Render the text with style applied using ANSI commands. Use Display on the returned value
+    // to write it out.
+    pub fn ansi(&self) -> RenderAnsi {
+        RenderAnsi { text: self }
+    }
+}
+
+pub struct RenderAnsi<'a> {
+    text: &'a Text<'a>,
+}
+
+impl<'a> Display for RenderAnsi<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for line in self.text.lines.iter() {
+            writeln!(f, "{}", RenderAnsiLine { line })?;
         }
         Ok(())
     }
@@ -67,10 +79,14 @@ where
     }
 }
 
-impl<'a> Line<'a> {
-    fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
-        for span in self.spans.iter() {
-            span.render_ansi(w)?
+struct RenderAnsiLine<'a> {
+    line: &'a Line<'a>,
+}
+
+impl<'a> Display for RenderAnsiLine<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for span in self.line.spans.iter() {
+            write!(f, "{}", RenderAnsiSpan { span })?;
         }
         Ok(())
     }
@@ -112,10 +128,16 @@ impl<'a> Span<'a> {
             style,
         }
     }
+}
 
-    fn render_ansi(&self, w: &mut impl fmt::Write) -> fmt::Result {
-        let output = self.content.as_ref();
-        let mut output = match self.style.bg {
+struct RenderAnsiSpan<'a> {
+    span: &'a Span<'a>,
+}
+
+impl<'a> Display for RenderAnsiSpan<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let output = self.span.content.as_ref();
+        let mut output = match self.span.style.bg {
             // TODO: ColoredString is not very useful here any more.
             None => ColoredString::from(output),
             Some(Color::Red) => output.on_red(),
@@ -123,18 +145,15 @@ impl<'a> Span<'a> {
             Some(Color::Blue) => output.on_blue(),
             Some(Color::BrightRed) => output.on_bright_red(),
         };
-        if self.style.bold {
+        if self.span.style.bold {
             output = output.bold();
         }
         // Renders a hyperlink like in
         // https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda.
-        if let Some(url) = &self.style.hyperlink {
-            w.write_fmt(format_args!(
-                "\u{1b}]8;;{}\u{1b}\\{}\u{1b}]8;;\u{1b}\\",
-                url, output
-            ))
+        if let Some(ref url) = &self.span.style.hyperlink {
+            write!(f, "\u{1b}]8;;{}\u{1b}\\{}\u{1b}]8;;\u{1b}\\", url, output)
         } else {
-            w.write_str(&output.to_string())
+            write!(f, "{}", &output.to_string())
         }
     }
 }

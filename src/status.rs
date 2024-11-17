@@ -103,11 +103,13 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
 
         // Move cursor to top left and erase the display.
         write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
-        let mut buf = String::new();
-        self.output_buf
-            .render(&self.tracked_cases, &self.result_url_base)?
-            .render_ansi(&mut buf)?;
-        write!(&mut self.output, "{}", buf)?;
+        write!(
+            &mut self.output,
+            "{}",
+            self.output_buf
+                .render(&self.tracked_cases, &self.result_url_base)?
+                .ansi()
+        )?;
         writeln!(
             &mut self.output,
             "Sorry, this TUI is crap. Try the web UI: {}",
@@ -413,12 +415,7 @@ mod tests {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let mut buf = String::new();
-        ob.render(&tracked_cases, "myhost")
-            .unwrap()
-            .render_ansi(&mut buf)
-            .unwrap();
-
+        let buf = format!("{}", ob.render(&tracked_cases, "myhost").unwrap().ansi());
         expect_that!(
             // The colored crate does not have any useful way to disable it from
             // this test code, only globally. This clashes with parallel testing.
@@ -472,11 +469,7 @@ mod tests {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let mut buf = String::new();
-        ob.render(&tracked_cases, "myhost")
-            .unwrap()
-            .render_ansi(&mut buf)
-            .unwrap();
+        let buf = format!("{}", ob.render(&tracked_cases, "myhost").unwrap().ansi());
 
         // Note this is a kinda weird log. We excluded the common ancestor of all the commits.
         // Also note it's a kinda weird input because we haven't provided any
@@ -534,12 +527,7 @@ mod tests {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let mut buf = String::new();
-        ob.render(&tracked_cases, "myhost")
-            .unwrap()
-            .render_ansi(&mut buf)
-            .unwrap();
-
+        let buf = format!("{}", ob.render(&tracked_cases, "myhost").unwrap().ansi());
         expect_that!(
             *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
             eq("[range empty]\n".to_owned())
