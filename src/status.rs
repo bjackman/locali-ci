@@ -9,6 +9,7 @@ use regex::Regex;
 use crate::{
     database::Database,
     git::{CommitHash, Worktree},
+    http::UiState,
     test::{Notification, TestCase, TestName, TestStatus},
     text::{Line, Span, Style, Text},
     util::ResultExt as _,
@@ -47,6 +48,7 @@ pub struct Tracker<W: Worktree, O: Write> {
     tracked_cases: TrackedCases,
     output_buf: OutputBuffer,
     output: O,
+    web_ui: Arc<UiState>,
     result_url_base: String,
     home_url: String,
 }
@@ -63,6 +65,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
     pub fn new(
         repo: Arc<W>,
         output: O,
+        web_ui: Arc<UiState>,
         result_url_base: impl Into<String>,
         home_url: impl Into<String>,
     ) -> Self {
@@ -71,6 +74,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
             tracked_cases: HashMap::new(),
             output_buf: OutputBuffer::empty(),
             output,
+            web_ui,
             result_url_base: result_url_base.into(),
             home_url: home_url.into(),
         }
@@ -94,27 +98,30 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
     // Update the UI by writing it to the output with fancy terminal escape
     // codes to overwrite what was previously written.
     pub fn repaint(&mut self) -> anyhow::Result<()> {
+        let render = self
+            .output_buf
+            .render(&self.tracked_cases, &self.result_url_base)?;
+        let log_buf = render.ansi();
+
         // Enter alternate screen. Dunno why ansi-control-codes doesn't have
         // this. This isn't really how I wanted this UI to work. But
         // implementing what I really wanted turns out to be really fucking
         // fiddly and unsatisfying and boring, I just don't care enough.
         // This is idempotent so we just do it every time.
         write!(self.output, "\x1B[?1049h")?;
-
         // Move cursor to top left and erase the display.
         write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
-        write!(
-            &mut self.output,
-            "{}",
-            self.output_buf
-                .render(&self.tracked_cases, &self.result_url_base)?
-                .ansi()
-        )?;
+        write!(&mut self.output, "{}", log_buf)?;
         writeln!(
             &mut self.output,
             "Sorry, this TUI is crap. Try the web UI: {}",
             self.home_url.bold().on_blue()
         )?;
+
+        // As an experiment here we're just whamming in the ANSI text, this will
+        // produce garbage but it's just to see if the plumbing works.
+        self.web_ui.set_log_buf(log_buf.to_string());
+
         Ok(())
     }
 }

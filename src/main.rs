@@ -206,6 +206,7 @@ async fn watch(
     );
     let result_url_base = ui.result_url_base()?;
     let home_url = ui.home_url()?;
+    let ui_state = ui.state();
     eg.spawn(ui.serve(cancellation_token.child_token()));
 
     let Env {
@@ -231,7 +232,8 @@ async fn watch(
     ));
 
     // Set up the status tracker, which shows the user what's going on in the terminal.
-    let status_tracker = status::Tracker::new(repo.clone(), stdout(), result_url_base, home_url);
+    let status_tracker =
+        status::Tracker::new(repo.clone(), stdout(), ui_state, result_url_base, home_url);
 
     // Kick off creation of the worktrees that the test manager will run jobs in.
     //
