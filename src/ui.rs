@@ -117,8 +117,6 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
             self.home_url.bold().on_blue()
         )?;
 
-        // As an experiment here we're just whamming in the ANSI text, this will
-        // produce garbage but it's just to see if the plumbing works.
         self.web_ui.set_log_buf(render.html_pre());
 
         Ok(())
