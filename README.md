@@ -30,6 +30,8 @@ Bugs (high to low priority):
    OK.. I spent a little bit of time hacking on that but got really fucking sick
    of terminal hacking really fucking quickly. So now we have a web UI (more on
    that below). I haven't decided yet exactly what to do about this.
+ - UI doesn't appear for a while on startup when the repo/range is big? And
+   during that time we don't respond to Ctrl-C.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
    was no longer updating the terminal UI. It still seems to actually be running
    the tests. I suspect some task somewhere is panicking, and I haven't done the
@@ -56,21 +58,8 @@ Bugs (high to low priority):
    OK update, I can't reproduce it like that now that I fixed a bunch of related
    bugs, but I still sometimes can with `cargo stress`. I don't fukken know this
    is driving me mad.
- - Sometimes I see issues where my `git clean -fdx` command at the beginning of
-   my test script fails like `fatal: Cannot lstat
-   'arch/x86/platform/intel/.iosf_mbi.o.d': No such file or directory`.
-
-   I've looked into one case where I see this happen, and I observed that the
-   prior user of the workspace had been a make command that got cancelled, and
-   the cancellation timed out.
-
-   Could the issue just be that when you `SIGKILL` make (which is what happens
-   when cancellation times out), it leaks child processes? What can we do about
-   that - try to block until all child processes of the job we ran have
-   terminated?
-
-   Hacky temporary fix: massively increase timeout before we SIGKILL.
- - Status output doesn't seem to get updated when tested range shrinks?
+ - No integration tests for `test` subcommand.
+ - No integration tests for the UI.
  - No tests for checking config cache...
  - No tests for actual contents of config cache. (E.g: Nothing to catch bug
    where we deleted stdouts and stderrs).
