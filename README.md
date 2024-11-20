@@ -26,7 +26,7 @@ Bugs (high to low priority):
    work around that. All I really need is to implement a pager. Then if I wanna
    get passtionate about this the right answer is probably to contribute to
    Ratatui.
-   
+
    OK.. I spent a little bit of time hacking on that but got really fucking sick
    of terminal hacking really fucking quickly. So now we have a web UI (more on
    that below). I haven't decided yet exactly what to do about this.
@@ -84,7 +84,7 @@ Bugs (high to low priority):
 Needed features (high to low priority):
 
  - BLOCKER: Document config format (and everything else).
- - BLOCKER: Store output artifacts. 
+ - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
  - BLOCKER: Need to clean up the logging situation. User should at least get
@@ -96,8 +96,7 @@ Needed features (high to low priority):
    - It uses an HTMX CDN. I wanna figure out how to embed that into the binary
      instead.
  - Need a way for test command to report "error" as distinguished from failure.
- - Make output results easier to reach. In particular at the moment if you have
-   no hyperlinks support in your terminal you're basically out of luck.
+ - Maybe a "skipped" status that doesn't show up in the UI would be useful.
  - Need a way to delete stored results.
 
    (Or do we? If we had an error reporting
@@ -109,6 +108,8 @@ Needed features (high to low priority):
    resources if tests get stuck forever, they'll get cancelled when te user needs
    to run a new test. But we should also notify the user if they don't seem to
    be getting any test results.)
+ - Would be nice to have a way to make the result cache invalidation logic aware
+   of config (or other) files that the test command refers to.
  - Probably want a (default?) option to merge stderr and stdout.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
@@ -129,12 +130,14 @@ Needed features (high to low priority):
  - Sometimes you have a test that needs access to the worktree but not
    exclusive. In that case we could run multiple jobs in parallel in the same
    worktree.
-   
+
    ACTUALLY - I bet we could do the same thing with overlayfs even if the jobs
    _did_ need exclusive access to the worktree.
  - Presumably via cgroups it's reasonably to ensure that jobs don't leak child
    processes. If you have a backdoor like the Docker daemon then that isn't
    possible but normally it should be fine I think?
+ - It might also be useful to have a way to limited the resources used by the
+   test jobs without having to also throttle the main local-ci process.
  - Make it easier to share configs. At present the distinction between config
    file content and arg content may be a mit messy (e.g. `num_worktrees` is as
    much a property of the system running the service as the project being
