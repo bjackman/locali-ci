@@ -82,8 +82,6 @@ Needed features (high to low priority):
  - BLOCKER: We have a web UI now. But it has some shortcomings:
    - Needs DERK MODE (probably it should ONLY have DERK MODE).
    - Now we should have a way to view the stderr and stuff as well as stout.
-   - It uses an HTMX CDN. I wanna figure out how to embed that into the binary
-     instead.
  - Need a way for test command to report "error" as distinguished from failure.
  - Maybe a "skipped" status that doesn't show up in the UI would be useful.
  - Need a way to delete stored results.

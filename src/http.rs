@@ -133,18 +133,19 @@ async fn home(State(state): State<Arc<UiState>>) -> Html<String> {
             <head>
                 <meta charset="utf-8">
                 <title>title</title>
-                <!-- TODO: no CDN plz -->
-                <script src="https://unpkg.com/htmx.org@2.0.3" integrity="sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq" crossorigin="anonymous"></script>
-                <script src="https://unpkg.com/htmx-ext-ws@2.0.1/ws.js"></script>
+                <script>{htmx_js}</script>
+                <script>{htmx_wx_js}</script>
             </head>
             <body>
                 <div hx-ext="ws" ws-connect="/updates">
-                    <pre id="log_buf">{}</pre>
+                    <pre id="log_buf">{log_buf}</pre>
                 </div>
             </body>
         </html>
     "#},
-        *state.log_html_pre.borrow()
+        htmx_js = include_str!("htmx-2.0.3.min.js"),
+        htmx_wx_js = include_str!("htmx-wx-ext-2.0.1.js"),
+        log_buf = *state.log_html_pre.borrow()
     )
     .into()
 }
