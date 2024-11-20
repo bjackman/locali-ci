@@ -98,3 +98,8 @@ impl ErrGroup {
         final_result
     }
 }
+
+pub struct Rect {
+    pub cols: usize,
+    pub rows: usize,
+}

@@ -12,7 +12,7 @@ use crate::{
     http::UiState,
     test::{Notification, TestCase, TestName, TestStatus},
     text::{Line, Span, Style, Text},
-    util::ResultExt as _,
+    util::{Rect, ResultExt as _},
 };
 
 struct TrackedTestCase {
@@ -97,10 +97,12 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
 
     // Update the UI by writing it to the output with fancy terminal escape
     // codes to overwrite what was previously written.
-    pub fn repaint(&mut self) -> anyhow::Result<()> {
+    pub fn repaint(&mut self, term_size: &Rect) -> anyhow::Result<()> {
         let render = self
             .output_buf
             .render(&self.tracked_cases, &self.result_url_base)?;
+
+        self.web_ui.set_log_buf(render.html_pre());
 
         // Enter alternate screen. Dunno why ansi-control-codes doesn't have
         // this. This isn't really how I wanted this UI to work. But
@@ -110,14 +112,18 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
         write!(self.output, "\x1B[?1049h")?;
         // Move cursor to top left and erase the display.
         write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
-        write!(&mut self.output, "{}", render.ansi())?;
+        let truncated = Text::from_iter(
+            render
+                .into_lines()
+                .take(term_size.rows - 1)
+                .map(|l| l.truncate_graphemes(term_size.cols - 1)),
+        );
+        write!(&mut self.output, "{}", truncated.ansi())?;
         writeln!(
             &mut self.output,
-            "Sorry, this TUI is crap. Try the web UI: {}",
+            "Web UI: {}",
             self.home_url.bold().on_blue()
         )?;
-
-        self.web_ui.set_log_buf(render.html_pre());
 
         Ok(())
     }

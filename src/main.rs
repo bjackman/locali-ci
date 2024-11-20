@@ -1,10 +1,13 @@
 use anyhow::{anyhow, Context};
+use async_stream::try_stream;
 use clap::{arg, Parser as _, Subcommand};
 use config::{Config, ParsedConfig};
+use crossterm::event::{Event, EventStream};
+use crossterm::terminal;
 use dag::{Dag, GraphNode as _};
 use database::{Database, DatabaseEntry};
 use futures::future::join_all;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use git::{PersistentWorktree, TempWorktree};
 use http::Ui;
 use log::info;
@@ -28,7 +31,7 @@ use test::{
 };
 use tokio::{select, signal};
 use tokio_util::sync::CancellationToken;
-use util::{DisplayablePathBuf, ErrGroup};
+use util::{DisplayablePathBuf, ErrGroup, Rect};
 
 use crate::git::Worktree;
 
@@ -142,6 +145,21 @@ impl WorktreeBuilder {
     }
 }
 
+fn resize_stream() -> impl Stream<Item = anyhow::Result<Rect>> {
+    let mut reader = EventStream::new();
+    try_stream! {
+        loop {
+            let event: Event = reader.next().await
+                .context("terminal event stream terminated")?
+                .context("error reading terminal events")?;
+            match event {
+                Event::Resize(cols, rows) => yield Rect {cols: cols.into(), rows: rows.into()},
+                _ => (),
+            }
+        }
+    }
+}
+
 // This is the main loop of the program. Take notifications from the Git tree,
 // feed them to the test manager, feed the test manager's results to the status
 // tracker (basically the UI).
@@ -154,6 +172,15 @@ async fn watch_loop(
 ) -> anyhow::Result<()> {
     let mut revs_stream = pin!(repo.watch_refs(&range_spec)?);
     let mut notifs = test_manager.results();
+
+    // TODO: We're importing crossterm just for this lol
+    let (cols, rows) = terminal::size().context("getting terminal size")?;
+    let mut term_size = Rect {
+        cols: cols.into(),
+        rows: rows.into(),
+    };
+    let mut resizes = pin!(resize_stream());
+
     loop {
         select! {
             // TODO: It's dumb that we have two different types of communication here (one exposes
@@ -166,14 +193,18 @@ async fn watch_loop(
                 // status tracker reset (does synchronhous work).
                 test_manager.set_revisions(revs.clone()).await.context("setting revisions to test")?;
                 status_tracker.set_range(&range_spec).await.context("resetting status tracker")?;
-                status_tracker.repaint().context("error painting status to stdout")?;
+                status_tracker.repaint(&term_size).context("error painting status to stdout")?;
             },
             notif = notifs.recv() => {
                 // https://github.com/rust-lang/futures-rs/issues/1857
                 // AFAICS there is no way to encode a stream that never terminates.
                 let notif = notif.expect("notification stream terminated");
                 status_tracker.update(notif);
-                status_tracker.repaint().context("error painting status to stdout")?;
+                status_tracker.repaint(&term_size).context("error painting status to stdout")?;
+            },
+            new_size = resizes.next() => {
+                term_size = new_size.expect("resize stream terminated")?;
+                status_tracker.repaint(&term_size).context("error painting status to stdout")?;
             },
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");

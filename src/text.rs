@@ -16,6 +16,7 @@ use std::{
 };
 
 use colored::{ColoredString, Colorize as _};
+use unicode_segmentation::UnicodeSegmentation as _;
 
 // Represents a block of text, potentially with styling. Note this always
 // represents a block, you can't represent a string without a newline at the
@@ -54,6 +55,10 @@ impl<'a> Text<'a> {
     // take me to HTML court?? Gonna go and tell your mummy about it???)
     pub fn html_pre(&self) -> RenderHtmlPre {
         RenderHtmlPre { text: self }
+    }
+
+    pub fn into_lines(self) -> impl Iterator<Item = Line<'a>> {
+        self.lines.into_iter()
     }
 }
 
@@ -96,6 +101,27 @@ where
         Self {
             spans: Vec::from_iter(iter.into_iter().map(|i| i.into())),
         }
+    }
+}
+
+impl<'a> Line<'a> {
+    // Truncate to the given number of unicode graphemej clusters, disregarding styling.
+    pub fn truncate_graphemes(mut self, length: usize) -> Self {
+        let mut remaining_length = length;
+        let mut last_span_idx = None;
+        for (i, span) in self.spans.iter_mut().enumerate() {
+            let n = span.num_graphemes();
+            if n >= remaining_length {
+                span.truncate_graphemes(remaining_length);
+                last_span_idx = Some(i);
+                break;
+            }
+            remaining_length -= n;
+        }
+        if let Some(i) = last_span_idx {
+            self.spans.truncate(i + 1);
+        }
+        self
     }
 }
 
@@ -160,6 +186,25 @@ impl<'a> Span<'a> {
         Self {
             content: content.into(),
             style,
+        }
+    }
+
+    fn num_graphemes(&self) -> usize {
+        self.content.graphemes(true).count()
+    }
+
+    // If this was to become public, the API should be made consistent with
+    // Lines::truncate_graphemes. But at the moment it just has whatever is most convenient.
+    fn truncate_graphemes(&mut self, len: usize) {
+        if let Some((byte_idx, _)) = self.content.grapheme_indices(true).nth(len + 1) {
+            match self.content {
+                Cow::Borrowed(s) => {
+                    self.content = Cow::Borrowed(&s[..byte_idx]);
+                }
+                Cow::Owned(ref mut s) => {
+                    s.truncate(byte_idx);
+                }
+            };
         }
     }
 }

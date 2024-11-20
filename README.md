@@ -15,21 +15,10 @@ try using `cargo-stress`.
 
 Bugs (high to low priority):
 
- - BLOCKER: Aside from generally being crappy and needing to be rewritten to do the
-   terminal commands properly (e.g. at present it fundamentally doesn't work if
-   the output buffer has more lines than your terminal) (this probably means
-   using Ratatui), there's some dumb bug in the terminal UI logic that means it
-   leaks lines.
-   I spent some time looking into adopting Ratatui, but that [doesn't support
-   hyperlinks](https://github.com/ratatui/ratatui/issues/1028). I think the next
-   best thing is probably to do this manually instead of looking for a way to
-   work around that. All I really need is to implement a pager. Then if I wanna
-   get passtionate about this the right answer is probably to contribute to
-   Ratatui.
-
-   OK.. I spent a little bit of time hacking on that but got really fucking sick
-   of terminal hacking really fucking quickly. So now we have a web UI (more on
-   that below). I haven't decided yet exactly what to do about this.
+ - BLOCKER: I had a really bad time trying to build a nice reliable TUI, turns
+   out terminal hacking is not fun or satisfying. Eventually I went yolo mode and
+   just made something that does seem to work but hasn't really been tested. Maybe
+   it's fine???
  - UI doesn't appear for a while on startup when the repo/range is big? And
    during that time we don't respond to Ctrl-C.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
