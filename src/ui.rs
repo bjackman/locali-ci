@@ -43,7 +43,7 @@ fn update_tracked_cases(tracked_cases: &mut TrackedCases, notif: Arc<Notificatio
 
 // Tracks the status of the tests being run by observing the notification
 // stream.
-pub struct Tracker<W: Worktree, O: Write> {
+pub struct StatusTracker<W: Worktree, O: Write> {
     repo: Arc<W>,
     tracked_cases: TrackedCases,
     output_buf: OutputBuffer,
@@ -59,7 +59,7 @@ lazy_static! {
     static ref GRAPH_COMPONENT_REGEX: Regex = Regex::new(r"[\\/\*]").unwrap();
 }
 
-impl<W: Worktree, O: Write> Tracker<W, O> {
+impl<W: Worktree, O: Write> StatusTracker<W, O> {
     // Construct a tracker that will write the UI to the given outut. The URL
     // base is used to generate hyperlinks to test results.
     pub fn new(
@@ -125,7 +125,7 @@ impl<W: Worktree, O: Write> Tracker<W, O> {
     }
 }
 
-impl<W: Worktree, O: Write> Drop for Tracker<W, O> {
+impl<W: Worktree, O: Write> Drop for StatusTracker<W, O> {
     fn drop(&mut self) {
         write!(self.output, "\x1B[?1049h").or_log_error("Couldn't exit alternate screen");
     }

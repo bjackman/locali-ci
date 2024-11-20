@@ -39,9 +39,9 @@ mod git;
 mod http;
 mod process;
 mod resource;
-mod status;
 mod test;
 mod text;
+mod ui;
 mod util;
 
 #[cfg(test)]
@@ -148,7 +148,7 @@ impl WorktreeBuilder {
 async fn watch_loop(
     cancellation_token: CancellationToken,
     test_manager: Arc<test::Manager<PersistentWorktree>>,
-    mut status_tracker: status::Tracker<PersistentWorktree, Stdout>,
+    mut status_tracker: ui::StatusTracker<PersistentWorktree, Stdout>,
     range_spec: OsString,
     repo: Arc<PersistentWorktree>,
 ) -> anyhow::Result<()> {
@@ -233,7 +233,7 @@ async fn watch(
 
     // Set up the status tracker, which shows the user what's going on in the terminal.
     let status_tracker =
-        status::Tracker::new(repo.clone(), stdout(), ui_state, result_url_base, home_url);
+        ui::StatusTracker::new(repo.clone(), stdout(), ui_state, result_url_base, home_url);
 
     // Kick off creation of the worktrees that the test manager will run jobs in.
     //
