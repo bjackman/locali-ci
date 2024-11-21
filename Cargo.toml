@@ -37,6 +37,7 @@ tower-http = { version = "0.6.1", features = ["fs"] }
 indoc = "2.0.5"
 unicode-segmentation = "1.12.0"
 crossterm = {version = "0.28.1", features = ["event-stream"] }
+schemars = "0.8.21"
 
 [dev-dependencies]
 test-case = "3.3"
@@ -44,3 +45,4 @@ test-log = "0.2"
 test_bin = "0.4"
 glob = "0.3"
 googletest = "0.12.0"
+pretty_assertions = "1.4.1"

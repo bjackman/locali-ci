@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Config",
+  "type": "object",
+  "required": [
+    "num_worktrees",
+    "tests"
+  ],
+  "properties": {
+    "num_worktrees": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "resources": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/definitions/Resource"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Test"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "CachePolicy": {
+      "type": "string",
+      "enum": [
+        "no_caching",
+        "by_commit",
+        "by_tree"
+      ]
+    },
+    "Command": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "Resource": {
+      "anyOf": [
+        {
+          "description": "Shorthand for describing a singular resource, equivalent to setting count=1.",
+          "type": "string"
+        },
+        {
+          "description": "Specify resources where you don't care about the value of the token.",
+          "type": "object",
+          "required": [
+            "count",
+            "name"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0.0
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Specify resources with explicitly set token values. These will be passed into the job environment via LCI_RESOURCE_<name>_<n> where n is 0-indexed.",
+          "type": "object",
+          "required": [
+            "name",
+            "tokens"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "tokens": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Test": {
+      "type": "object",
+      "required": [
+        "command",
+        "name"
+      ],
+      "properties": {
+        "cache": {
+          "default": "by_commit",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CachePolicy"
+            }
+          ]
+        },
+        "command": {
+          "$ref": "#/definitions/Command"
+        },
+        "depends_on": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "requires_worktree": {
+          "default": true,
+          "type": "boolean"
+        },
+        "resources": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Resource"
+          }
+        },
+        "shutdown_grace_period_s": {
+          "description": "When a job is no longer needed it's SIGTERMed. If it doesn't respond (by dying) after this duration it will then be SIGKILLed. This also affects the overall shutdown of local-ci so do not set this to longer than you are willing to wait when you terminate this program.",
+          "default": 60,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

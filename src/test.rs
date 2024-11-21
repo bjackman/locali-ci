@@ -19,6 +19,7 @@ use log::{debug, error, info, warn};
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use parking_lot::Mutex;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::{
     process::{Child, Command},
@@ -37,7 +38,7 @@ use crate::{
     util::ResultExt,
 };
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Deserialize, JsonSchema, Serialize, Debug, Clone, Copy, Hash, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CachePolicy {
     NoCaching,

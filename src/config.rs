@@ -10,6 +10,7 @@ use std::{
 use anyhow::{bail, Context as _};
 #[allow(unused_imports)]
 use log::debug;
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::{
@@ -18,7 +19,7 @@ use crate::{
     test::{self, CachePolicy, TestDag, TestName},
 };
 
-#[derive(Deserialize, Debug, Hash, Clone)]
+#[derive(Deserialize, JsonSchema, Debug, Hash, Clone)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum Resource {
@@ -50,7 +51,7 @@ impl Resource {
     }
 }
 
-#[derive(Deserialize, Debug, Hash, Clone)]
+#[derive(Deserialize, JsonSchema, Debug, Hash, Clone)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum Command {
@@ -74,7 +75,7 @@ impl Command {
     }
 }
 
-#[derive(Deserialize, Debug, Hash, Clone)]
+#[derive(Deserialize, JsonSchema, Debug, Hash, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Test {
     name: String,
@@ -178,7 +179,7 @@ fn default_shutdown_grace_period() -> u64 {
     60
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub num_worktrees: usize,
@@ -285,5 +286,25 @@ impl ParsedConfig {
             resource_pools: Pools::new(resources),
             tests,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use schemars::schema_for;
+
+    use super::*;
+
+    // Poor man's replacement for google3's "generated files" feature: just check
+    // the generated file in and have a test to check it's not out of date.
+    #[googletest::test]
+    fn test_json_schema_updated() {
+        let got = include_str!("../local-ci.schema.json");
+        let want = serde_json::to_string_pretty(&schema_for!(Config)).unwrap();
+        assert_eq!(
+            got, want,
+            "Config json-schema seems to have changed. Want 'right' got 'left'"
+        );
     }
 }
