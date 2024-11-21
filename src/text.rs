@@ -82,19 +82,23 @@ pub struct RenderHtmlPre<'a> {
 impl<'a> RenderHtmlPre<'a> {
     pub const CSS: &'static str = indoc! { "
         .error {
-            background-color: orange;
+            background: rgba(255, 0, 0, 0.3);
         }
 
         .failure {
-            background-color: red;
+            background: rgba(242, 121, 53, 0.3);
         }
 
         .success {
-            background-color: green;
+            background: rgba(0, 255, 0, 0.3);
         }
 
         .test-name {
             font-weight: bold;
+        }
+
+        :root {
+            color-scheme: light dark;
         }
     "};
 }

@@ -68,9 +68,7 @@ Needed features (high to low priority):
  - BLOCKER: Need to clean up the logging situation. User should at least get
    some feedback about the process starting up and shutting down.
  - BLOCKER: Rename it.
- - BLOCKER: We have a web UI now. But it has some shortcomings:
-   - Needs DERK MODE (probably it should ONLY have DERK MODE).
-   - Now we should have a way to view the stderr and stuff as well as stout.
+ - Need a way to view stderr from web UI.
  - Need a way for test command to report "error" as distinguished from failure.
  - Maybe a "skipped" status that doesn't show up in the UI would be useful.
  - Need a way to delete stored results.
