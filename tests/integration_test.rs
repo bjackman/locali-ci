@@ -233,7 +233,8 @@ async fn test_worktree_teardown(test_command: &str) {
         .await
         .unwrap();
 
-    wait_for(|| limmat.has_worktrees(), Duration::from_secs(5)).expect("worktree not found after 5s");
+    wait_for(|| limmat.has_worktrees(), Duration::from_secs(5))
+        .expect("worktree not found after 5s");
 
     limmat.terminate().expect("couldn't shut down child");
 
