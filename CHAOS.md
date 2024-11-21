@@ -60,15 +60,14 @@ Bugs (high to low priority):
    the hash changes, the test needs to be re-run i.e. the cached is invalidated.
    But, this hash is not strong, this will break if there are collisions. We
    should store the whole config.
+ - Has like a billion dependencies, they can't all be necessary.
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.
 
 Needed features (high to low priority):
 
  - BLOCKER: Document config format (and everything else).
-   - [json-schema
-      viewer](https://json-schema.app/view/%23?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbjackman%2Flimmat%2Frefs%2Fheads%2Fmaster%2Flimmat.schema.json)??
-       is this juseful?
+   - 
  - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
