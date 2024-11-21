@@ -2,6 +2,12 @@
 name = "limmat"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-only"
+description = "Tool to run continuous tests locally on Git revision ranges."
+repository = "https://github.com/bjackman/limmat"
+readme = "README.md"
+keywords = ["testing", "git"]
+categories = ["command-line-utilities", "development-tools::testing"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
