@@ -62,6 +62,9 @@ Bugs (high to low priority):
 Needed features (high to low priority):
 
  - BLOCKER: Document config format (and everything else).
+   - [json-schema
+      viewer](https://json-schema.app/view/%23?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbjackman%2Flocal-ci%2Frefs%2Fheads%2Fmaster%2Flocal-ci.schema.json)??
+       is this juseful?
  - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
