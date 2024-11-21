@@ -2,7 +2,8 @@ WELCOME TO THE LIMMAT WIKI GUESTS ARE ADVISED TO TAKE THEIR ADHD AND/OR ANXIETY
 MEDICATION PRIOR TO ENTRY PLEASE DO NOT FEED THE BULLET POINTS PLEASE AVOID
 EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
-Needs Rust >= 1.80.
+According to whoever wrote this file, this code needs Rust >= 1.80. crates.io
+seems to disagree, probably it's right and this file is wrong.
 
 To run this as a low priority on Linux, try prefixing the command with `chrt -i
 0` which will run it as `SCHED_IDLE`. `nice -n 19` isn't really enough because you probably have
@@ -71,9 +72,6 @@ Needed features (high to low priority):
  - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
- - BLOCKER: Need to clean up the logging situation. User should at least get
-   some feedback about the process starting up and shutting down.
- - BLOCKER: Rename it.
  - Need a way to view stderr from web UI.
  - Need a way for test command to report "error" as distinguished from failure.
  - Maybe a "skipped" status that doesn't show up in the UI would be useful.
