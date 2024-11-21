@@ -11,7 +11,7 @@ use crate::{
     git::{CommitHash, Worktree},
     http::UiState,
     test::{Notification, TestCase, TestName, TestStatus},
-    text::{Line, Span, Style, Text},
+    text::{Class, Line, Span, Text},
     util::{Rect, ResultExt as _},
 };
 
@@ -324,33 +324,28 @@ impl OutputBuffer {
         tracked_cases.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
         let mut spans = Vec::new();
         for (name, tracked_case) in tracked_cases {
-            let mut status_part = match &tracked_case.status {
-                TestStatus::Error(msg) => Span::styled(msg, Style::new().on_bright_red()),
+            let status_part = match &tracked_case.status {
+                TestStatus::Error(msg) => Span::new(msg).with_class(Class::Error),
                 TestStatus::Completed(result) => {
                     if result.exit_code == 0 {
-                        Span::styled("success", Style::new().on_green())
+                        Span::new("success").with_class(Class::Success)
                     } else {
-                        Span::styled(
-                            format!("failed (status {})", result.exit_code),
-                            Style::new().on_red(),
-                        )
+                        Span::new(format!("failed (status {})", result.exit_code))
+                            .with_class(Class::Failure)
                     }
                 }
-                _ => Span::raw(tracked_case.status.to_string()),
-            };
-            status_part.style.hyperlink = Some(
-                format!(
-                    "{}/{}/stdout.txt",
-                    result_url_base,
-                    Database::result_relpath(&tracked_case.test_case).to_string_lossy()
-                )
-                .into(),
-            );
+                _ => Span::new(tracked_case.status.to_string()),
+            }
+            .with_url(format!(
+                "{}/{}/stdout.txt",
+                result_url_base,
+                Database::result_relpath(&tracked_case.test_case).to_string_lossy()
+            ));
             spans.extend([
-                Span::styled(name.to_string(), Style::new().bold()),
-                Span::raw(": "),
+                Span::new(name.to_string()).with_class(Class::TestName),
+                Span::new(": "),
                 status_part,
-                Span::raw(" "),
+                Span::new(" "),
             ])
         }
         Ok(spans)

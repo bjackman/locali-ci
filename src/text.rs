@@ -1,9 +1,9 @@
 // This module provides a way to render styled text, either as HTML or using terminal
-// escape codes. It deliberately resembles ratatui's text rendering system
+// escape codes. It originally resembled ratatui's text rendering system
 // (https://docs.rs/ratatui/latest/ratatui/text/struct.Text.html) so
 // that if ratatui gains support for hyperlinks
 // (https://github.com/ratatui/ratatui/issues/1028) maybe I can easily port this
-// code to use that?
+// code to use that. But, it dieberged.
 //
 // I discovered that I absolutely hate terminal hacking, I don't really know
 // if that's a reason not to contribute to ratatui. Anyway, the real reason I'm
@@ -16,6 +16,7 @@ use std::{
 };
 
 use colored::{ColoredString, Colorize as _};
+use indoc::indoc;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 // Represents a block of text, potentially with styling. Note this always
@@ -51,8 +52,7 @@ impl<'a> Text<'a> {
         RenderAnsi { text: self }
     }
 
-    // Render to an HTML <pre> element. Styles are inline. (Don't like it? Gonna
-    // take me to HTML court?? Gonna go and tell your mummy about it???)
+    // Render to an HTML <pre> element.
     pub fn html_pre(&self) -> RenderHtmlPre {
         RenderHtmlPre { text: self }
     }
@@ -77,6 +77,26 @@ impl<'a> Display for RenderAnsi<'a> {
 
 pub struct RenderHtmlPre<'a> {
     text: &'a Text<'a>,
+}
+
+impl<'a> RenderHtmlPre<'a> {
+    pub const CSS: &'static str = indoc! { "
+        .error {
+            background-color: orange;
+        }
+
+        .failure {
+            background-color: red;
+        }
+
+        .success {
+            background-color: green;
+        }
+
+        .test-name {
+            font-weight: bold;
+        }
+    "};
 }
 
 impl<'a> Display for RenderHtmlPre<'a> {
@@ -162,31 +182,36 @@ impl<'a, T: Into<Span<'a>>> From<T> for Line<'a> {
 }
 
 pub struct Span<'a> {
-    pub style: Style<'a>,
+    pub class: Option<Class>,
     // The cow is copied from Ratatui. My understanding is that this is there to
     // be generic across ownership or reference.
     pub content: Cow<'a, str>,
+    pub url: Option<Cow<'a, str>>,
 }
 
 impl<'a, T: Into<Cow<'a, str>>> From<T> for Span<'a> {
     fn from(t: T) -> Span<'a> {
-        Span::raw(t)
+        Span::new(t)
     }
 }
 
 impl<'a> Span<'a> {
-    pub fn raw(content: impl Into<Cow<'a, str>>) -> Self {
+    pub fn new(content: impl Into<Cow<'a, str>>) -> Self {
         Self {
             content: content.into(),
-            style: Style::default(),
+            class: None,
+            url: None,
         }
     }
 
-    pub fn styled(content: impl Into<Cow<'a, str>>, style: Style<'a>) -> Self {
-        Self {
-            content: content.into(),
-            style,
-        }
+    pub fn with_class(mut self, class: Class) -> Self {
+        self.class = Some(class);
+        self
+    }
+
+    pub fn with_url(mut self, url: impl Into<Cow<'a, str>>) -> Self {
+        self.url = Some(url.into());
+        self
     }
 
     fn num_graphemes(&self) -> usize {
@@ -216,19 +241,17 @@ struct RenderAnsiSpan<'a> {
 impl<'a> Display for RenderAnsiSpan<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let output = self.span.content.as_ref();
-        let mut output = match self.span.style.bg {
+        let output = match self.span.class {
             // TODO: ColoredString is not very useful here any more.
             None => ColoredString::from(output),
-            Some(Color::Red) => output.on_red(),
-            Some(Color::Green) => output.on_green(),
-            Some(Color::BrightRed) => output.on_bright_red(),
+            Some(Class::Failure) => output.on_red(),
+            Some(Class::Success) => output.on_green(),
+            Some(Class::Error) => output.on_bright_red(),
+            Some(Class::TestName) => output.bold(),
         };
-        if self.span.style.bold {
-            output = output.bold();
-        }
         // Renders a hyperlink like in
         // https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda.
-        if let Some(ref url) = &self.span.style.hyperlink {
+        if let Some(ref url) = &self.span.url {
             write!(f, "\u{1b}]8;;{}\u{1b}\\{}\u{1b}]8;;\u{1b}\\", url, output)
         } else {
             write!(f, "{}", &output.to_string())
@@ -242,69 +265,34 @@ struct RenderHtmlSpan<'a> {
 
 impl<'a> Display for RenderHtmlSpan<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let bg = match self.span.style.bg {
-            None => "inherit",
-            Some(Color::Red) => "maroon",
-            Some(Color::Green) => "green",
-            Some(Color::BrightRed) => "red",
-        };
-        let weight = if self.span.style.bold {
-            "bold"
-        } else {
-            "normal"
-        };
-        if let Some(ref url) = &self.span.style.hyperlink {
+        if let Some(ref url) = &self.span.url {
             write!(f, r#"<a href="{}">"#, url)?;
         }
         write!(
             f,
-            r#"<span style="background-color: {}; font-weight: {}">{}</span>"#,
-            bg,
-            weight,
+            r#"<span class="{}">{}</span>"#,
+            match self.span.class {
+                None => "",
+                Some(Class::Error) => "error",
+                Some(Class::Success) => "success",
+                Some(Class::Failure) => "failure",
+                Some(Class::TestName) => "test-name",
+            },
             self.span.content.as_ref()
         )?;
-        if self.span.style.hyperlink.is_some() {
+        if self.span.url.is_some() {
             write!(f, "</a>")?;
         }
         Ok(())
     }
 }
 
-pub enum Color {
-    Red,
-    Green,
-    BrightRed,
-}
-
-#[derive(Default)]
-pub struct Style<'a> {
-    pub bg: Option<Color>,
-    pub bold: bool,
-    pub hyperlink: Option<Cow<'a, str>>,
-}
-
-impl<'a> Style<'a> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn on_red(mut self) -> Self {
-        self.bg = Some(Color::Red);
-        self
-    }
-
-    pub fn on_bright_red(mut self) -> Self {
-        self.bg = Some(Color::BrightRed);
-        self
-    }
-
-    pub fn on_green(mut self) -> Self {
-        self.bg = Some(Color::Green);
-        self
-    }
-
-    pub fn bold(mut self) -> Self {
-        self.bold = true;
-        self
-    }
+// This is like a CSS class. For ANSI output this will produce a hard-coded
+// style. For HTML it outputs a CSS class name, some CSS is provided  to
+// make use of these classes.
+pub enum Class {
+    Error,
+    Success,
+    Failure,
+    TestName,
 }

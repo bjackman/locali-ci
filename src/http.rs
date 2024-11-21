@@ -135,6 +135,7 @@ async fn home(State(state): State<Arc<UiState>>) -> Html<String> {
                 <title>title</title>
                 <script>{htmx_js}</script>
                 <script>{htmx_wx_js}</script>
+                <style>{css}</style>
             </head>
             <body>
                 <div hx-ext="ws" ws-connect="/updates">
@@ -145,7 +146,8 @@ async fn home(State(state): State<Arc<UiState>>) -> Html<String> {
     "#},
         htmx_js = include_str!("htmx-2.0.3.min.js"),
         htmx_wx_js = include_str!("htmx-wx-ext-2.0.1.js"),
-        log_buf = *state.log_html_pre.borrow()
+        log_buf = *state.log_html_pre.borrow(),
+        css = RenderHtmlPre::CSS,
     )
     .into()
 }
