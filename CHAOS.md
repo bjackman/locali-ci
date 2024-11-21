@@ -1,8 +1,11 @@
+WELCOME TO THE LIMMAT WIKI GUESTS ARE ADVISED TO TAKE THEIR ADHD AND/OR ANXIETY
+MEDICATION PRIOR TO ENTRY PLEASE DO NOT FEED THE BULLET POINTS PLEASE AVOID
+EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
+
 Needs Rust >= 1.80.
 
 To run this as a low priority on Linux, try prefixing the command with `chrt -i
-0` which will run it as `SCHED_IDLE`. `nice -n 19` isn't really enough because
-you probably have
+0` which will run it as `SCHED_IDLE`. `nice -n 19` isn't really enough because you probably have
 [autogroups](https://man7.org/linux/man-pages/man7/sched.7.html) enabled. To run
 at background priorities other than `SCHED_IDLE` you'll need to work around that
 - the man page gives an example of running `echo 10 > /proc/self/autogroup` to
