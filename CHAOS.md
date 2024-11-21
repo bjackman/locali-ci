@@ -67,7 +67,6 @@ Bugs (high to low priority):
 Needed features (high to low priority):
 
  - BLOCKER: Document config format (and everything else).
-   - 
  - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
