@@ -37,7 +37,7 @@ Bugs (high to low priority):
    I added some hacks to try and debug this. With
 
    ```
-   RUST_LOG=info TMPDIR=/tmp/mytmp/ LCI_TESTS_LEAK_RESULT_DB=1 while cargo test -- --nocapture; continue ; end`
+   RUST_LOG=info TMPDIR=/tmp/mytmp/ LIMMAT_TESTS_LEAK_RESULT_DB=1 while cargo test -- --nocapture; continue ; end`
    ```
 
    I'm able to reproduce it and see the `-x` output of the test scripts but they
@@ -63,7 +63,7 @@ Needed features (high to low priority):
 
  - BLOCKER: Document config format (and everything else).
    - [json-schema
-      viewer](https://json-schema.app/view/%23?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbjackman%2Flocal-ci%2Frefs%2Fheads%2Fmaster%2Flocal-ci.schema.json)??
+      viewer](https://json-schema.app/view/%23?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbjackman%2Flimmat%2Frefs%2Fheads%2Fmaster%2Flimmat.schema.json)??
        is this juseful?
  - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
@@ -114,7 +114,7 @@ Needed features (high to low priority):
    processes. If you have a backdoor like the Docker daemon then that isn't
    possible but normally it should be fine I think?
  - It might also be useful to have a way to limited the resources used by the
-   test jobs without having to also throttle the main local-ci process.
+   test jobs without having to also throttle the main limmat process.
  - Make it easier to share configs. At present the distinction between config
    file content and arg content may be a mit messy (e.g. `num_worktrees` is as
    much a property of the system running the service as the project being

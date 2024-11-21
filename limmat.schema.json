@@ -77,7 +77,7 @@
           "additionalProperties": false
         },
         {
-          "description": "Specify resources with explicitly set token values. These will be passed into the job environment via LCI_RESOURCE_<name>_<n> where n is 0-indexed.",
+          "description": "Specify resources with explicitly set token values. These will be passed into the job environment via LIMMAT_RESOURCE_<name>_<n> where n is 0-indexed.",
           "type": "object",
           "required": [
             "name",
@@ -140,7 +140,7 @@
           }
         },
         "shutdown_grace_period_s": {
-          "description": "When a job is no longer needed it's SIGTERMed. If it doesn't respond (by dying) after this duration it will then be SIGKILLed. This also affects the overall shutdown of local-ci so do not set this to longer than you are willing to wait when you terminate this program.",
+          "description": "When a job is no longer needed it's SIGTERMed. If it doesn't respond (by dying) after this duration it will then be SIGKILLed. This also affects the overall shutdown of limmat so do not set this to longer than you are willing to wait when you terminate this program.",
           "default": 60,
           "type": "integer",
           "format": "uint64",

@@ -1,4 +1,4 @@
-# local-ci config for local-ci itself
+# limmat config for limmat itself
 
 num_worktrees = 4
 
@@ -10,12 +10,12 @@ command = "cargo fmt --check"
 name = "build"
 # Agh dunno if this is enough coverage.
 # Ideally just want 'cargo check' with https://github.com/rust-lang/cargo/issues/8424
-command = "cargo rustc --target-dir $LCI_ORIGIN/target -- -D warnings"
+command = "cargo rustc --target-dir $LIMMAT_ORIGIN/target -- -D warnings"
 cache = "by_tree"
 
 [[tests]]
 name = "test"
-command = "cargo test --target-dir $LCI_ORIGIN/target"
+command = "cargo test --target-dir $LIMMAT_ORIGIN/target"
 cache = "by_tree"
 
 [[tests]]

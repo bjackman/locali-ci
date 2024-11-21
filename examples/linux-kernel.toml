@@ -4,7 +4,7 @@ num_worktrees = 4
 
 [[tests]]
 name = "checkpatch"
-command = "./scripts/checkpatch.pl --git $LCI_COMMIT"
+command = "./scripts/checkpatch.pl --git $LIMMAT_COMMIT"
 requires_worktree = false
 
 [[tests]]

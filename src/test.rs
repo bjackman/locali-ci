@@ -108,7 +108,7 @@ impl Test {
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
         // We want the test process to be its process group leader for two reasons:
-        // - We don't want it to get SIGINTed when the user shuts down local-ci,
+        // - We don't want it to get SIGINTed when the user shuts down limmat,
         //   in that case we want our graceful and bugless shutdown procedure to
         //   SIGTERM it, so it can use its own graceful and bugless shutdown
         //   procedure just like it does when jobs get cancelled as normal.
@@ -168,7 +168,7 @@ type JobEnv = Vec<(String, String)>;
 // Common elements that should be in a job environment with the given conditions.
 pub fn base_job_env(repo_origin: &Path) -> JobEnv {
     vec![(
-        "LCI_ORIGIN".into(),
+        "LIMMAT_ORIGIN".into(),
         repo_origin.to_string_lossy().into_owned(),
     )]
 }
@@ -718,7 +718,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
             .current_dir(current_dir)
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
-            .env("LCI_COMMIT", self.test_case.commit_hash.to_string());
+            .env("LIMMAT_COMMIT", self.test_case.commit_hash.to_string());
         for (k, v) in self.env.iter() {
             cmd = cmd.env(k, v);
         }
@@ -727,10 +727,10 @@ impl<'a, O: TestJobOutput> TestJob<O> {
             for (i, token) in tokens.iter().enumerate() {
                 debug!(
                     "{} = {}",
-                    format!("LCI_RESOURCE_{}_{}", resource_name, i),
+                    format!("LIMMAT_RESOURCE_{}_{}", resource_name, i),
                     token
                 );
-                cmd = cmd.env(format!("LCI_RESOURCE_{}_{}", resource_name, i), token);
+                cmd = cmd.env(format!("LIMMAT_RESOURCE_{}_{}", resource_name, i), token);
             }
         }
         // It would be really confusing and annoying if we exited this function
@@ -962,7 +962,7 @@ mod tests {
         // SIGTERM the value depends on whether you include the results of
         // exit_code_tag(). If yes, it exits with that code, otherwise it is
         // terminated directly by the signal (the latter is considered an
-        // "error" by local-ci).
+        // "error" by limmat).
         // We would like this to be an OsStr but you can't do that according to
         // https://stackoverflow.com/questions/49226783/is-there-any-way-to-represent-an-osstr-or-osstring-literal
         pub const BLOCK_COMMIT_MSG_TAG: &'static str = "block_this_test";
@@ -1006,10 +1006,10 @@ mod tests {
                 }}
                 trap debug DEBUG
 
-                commit_msg=\"$(git log -n1 --format=%B $LCI_COMMIT)\"
+                commit_msg=\"$(git log -n1 --format=%B $LIMMAT_COMMIT)\"
                 exit_code=$(echo \"$commit_msg\" | perl -n -e'/exit_code\\((\\d+)\\)/ && print $1')
                 on_sigterm() {{
-                    touch {sigtermed_path_prefix:?}$(git rev-parse $LCI_COMMIT)
+                    touch {sigtermed_path_prefix:?}$(git rev-parse $LIMMAT_COMMIT)
                     exit ${{exit_code:-0}}
                 }}
                 trap on_sigterm SIGTERM
@@ -1020,9 +1020,9 @@ mod tests {
                 # StartedTestScript::siginted.
                 pid_file=$(mktemp)
                 echo $$ >> $pid_file
-                mv $pid_file {pid_path_prefix:?}$(git rev-parse $LCI_COMMIT)
+                mv $pid_file {pid_path_prefix:?}$(git rev-parse $LIMMAT_COMMIT)
 
-                echo >> {run_count_path_prefix:?}$(git rev-parse $LCI_COMMIT)
+                echo >> {run_count_path_prefix:?}$(git rev-parse $LIMMAT_COMMIT)
 
                 if [ -n \"{lock_filename}\" ]; then
                     if [ -e ./{lock_filename:?} ]; then
@@ -1335,7 +1335,7 @@ mod tests {
         fn drop(&mut self) {
             // SAFETY: The field is never accessed again.
             let db_dir = unsafe { ManuallyDrop::take(&mut self.db_dir) };
-            if env::var("LCI_TESTS_LEAK_RESULT_DB").unwrap_or("0".to_owned()) != "0" {
+            if env::var("LIMMAT_TESTS_LEAK_RESULT_DB").unwrap_or("0".to_owned()) != "0" {
                 let db_dir_path = db_dir.into_path(); // Stops it from being deleted.
                 info!("Leaking database directory {:?}", db_dir_path);
             }
@@ -1825,31 +1825,31 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            env.get("LCI_ORIGIN"),
+            env.get("LIMMAT_ORIGIN"),
             // Ugh I don't fucking know, as_ref as_ref as_ref as_ref just deal
             // with it this is how we write Rust this is good Rust as_ref as_ref.
             Some(repo.path().to_string_lossy().as_ref()).as_ref()
         );
         assert_eq!(
-            env.get("LCI_COMMIT").map(|t| CommitHash::new(*t)),
+            env.get("LIMMAT_COMMIT").map(|t| CommitHash::new(*t)),
             Some(commit.hash)
         );
         let resource0 = env
-            .get("LCI_RESOURCE_my_resource_0")
+            .get("LIMMAT_RESOURCE_my_resource_0")
             .expect("didn't get resource0");
         assert!(
             resource0.starts_with("thing"),
             "bad resource 0: {resource0:?}'"
         );
         let resource1 = env
-            .get("LCI_RESOURCE_my_resource_1")
+            .get("LIMMAT_RESOURCE_my_resource_1")
             .expect("didn't get resource1");
         assert!(
             resource1.starts_with("thing"),
             "bad resource 2: {resource1:?}'"
         );
-        assert_eq!(env.get("LCI_RESOURCE_my_resource_2"), None);
-        assert_eq!(env.get("LCI_RESOURCE_other_resource_0"), None);
+        assert_eq!(env.get("LIMMAT_RESOURCE_my_resource_2"), None);
+        assert_eq!(env.get("LIMMAT_RESOURCE_other_resource_0"), None);
     }
 
     #[test_log::test(tokio::test)]

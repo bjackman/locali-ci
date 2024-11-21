@@ -56,14 +56,14 @@ impl ChildExt for Child {
     }
 }
 
-struct LocalCiChildBuilder {
+struct LimmatChildBuilder {
     temp_dir: TempDir,
     db_dir: PathBuf,
 }
 
-impl LocalCiChildBuilder {
+impl LimmatChildBuilder {
     async fn new() -> anyhow::Result<Self> {
-        let temp_dir = TempDir::with_prefix("lci-child")?;
+        let temp_dir = TempDir::with_prefix("limmat-child")?;
         Command::new("git")
             .stderr(Stdio::null())
             .stdout(Stdio::null())
@@ -95,13 +95,13 @@ impl LocalCiChildBuilder {
         self
     }
 
-    async fn start(self, config: String) -> anyhow::Result<LocalCiChild> {
+    async fn start(self, config: String) -> anyhow::Result<LimmatChild> {
         let worktree_dir = self.temp_dir.path().join("worktrees");
         create_dir(&worktree_dir).unwrap();
 
         let stderr = File::create(self.temp_dir.path().join("stderr.txt"))?;
 
-        let mut cmd: Command = get_test_bin("local-ci").into();
+        let mut cmd: Command = get_test_bin("limmat").into();
         let cmd = cmd
             .args([
                 "--config",
@@ -125,7 +125,7 @@ impl LocalCiChildBuilder {
         let mut stdin = child.stdin.take().unwrap();
 
         stdin.write_all(config.as_bytes()).await.unwrap();
-        Ok(LocalCiChild {
+        Ok(LimmatChild {
             temp_dir: self.temp_dir,
             child,
         })
@@ -133,12 +133,12 @@ impl LocalCiChildBuilder {
 }
 
 // An instance of the binary, running as a child process.
-struct LocalCiChild {
+struct LimmatChild {
     temp_dir: TempDir,
     child: Child,
 }
 
-impl Drop for LocalCiChild {
+impl Drop for LimmatChild {
     fn drop(&mut self) {
         if panicking() {
             // Hack: when running tests via cargo-stress, there's no convenient
@@ -180,7 +180,7 @@ impl ExitStatusExt for ExitStatus {
     }
 }
 
-impl LocalCiChild {
+impl LimmatChild {
     // Returns true if any worktree of this child currently exists.
     fn has_worktrees(&mut self) -> anyhow::Result<bool> {
         let mut pattern = self.temp_dir.path().join("worktrees").to_owned();
@@ -219,7 +219,7 @@ impl LocalCiChild {
 #[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
 #[tokio::test]
 async fn test_worktree_teardown(test_command: &str) {
-    let mut lci = LocalCiChildBuilder::new()
+    let mut limmat = LimmatChildBuilder::new()
         .await
         .unwrap()
         .start(format!(
@@ -233,12 +233,12 @@ async fn test_worktree_teardown(test_command: &str) {
         .await
         .unwrap();
 
-    wait_for(|| lci.has_worktrees(), Duration::from_secs(5)).expect("worktree not found after 5s");
+    wait_for(|| limmat.has_worktrees(), Duration::from_secs(5)).expect("worktree not found after 5s");
 
-    lci.terminate().expect("couldn't shut down child");
+    limmat.terminate().expect("couldn't shut down child");
 
     assert!(
-        !lci.has_worktrees().unwrap(),
+        !limmat.has_worktrees().unwrap(),
         "worktrees not cleaned up on SIGINT"
     );
 }
@@ -253,7 +253,7 @@ async fn shouldnt_leak_jobs() {
 
     // This config has a test that does not respect SIGTERM. We should not leak
     // that job.
-    let mut lci = LocalCiChildBuilder::new()
+    let mut limmat = LimmatChildBuilder::new()
         .await
         .unwrap()
         .start(format!(
@@ -275,7 +275,7 @@ async fn shouldnt_leak_jobs() {
         .expect("worktree not found after 5s");
     let pid: pid_t = pid_t::from_str(fs::read_to_string(test_pid_path).unwrap().trim()).unwrap();
 
-    lci.terminate().unwrap();
+    limmat.terminate().unwrap();
     assert!(!pid_running(pid));
 }
 
@@ -287,7 +287,7 @@ async fn should_invalidate_cache_when_dep_changes() {
 
     let test_ran_path = temp_dir.path().join("test_ran");
     {
-        let _lci = LocalCiChildBuilder::new()
+        let _limmat = LimmatChildBuilder::new()
             .await
             .unwrap()
             .db_dir(db_dir.clone())
@@ -317,7 +317,7 @@ async fn should_invalidate_cache_when_dep_changes() {
     // Now we'll run it again but with a different config for the dependency.
     // The dependee should get run again even though its config hasn't changed.
     remove_file(&test_ran_path).unwrap();
-    let _lci = LocalCiChildBuilder::new()
+    let _limmat = LimmatChildBuilder::new()
         .await
         .unwrap()
         .db_dir(db_dir)

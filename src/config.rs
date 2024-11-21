@@ -28,7 +28,7 @@ pub enum Resource {
     /// Specify resources where you don't care about the value of the token.
     Counted { name: String, count: usize },
     /// Specify resources with explicitly set token values. These will be passed
-    /// into the job environment via LCI_RESOURCE_<name>_<n> where n is 0-indexed.
+    /// into the job environment via LIMMAT_RESOURCE_<name>_<n> where n is 0-indexed.
     // TODO: If there's only one, we should also export it without the _<n>
     Explicit { name: String, tokens: Vec<String> },
 }
@@ -86,7 +86,7 @@ pub struct Test {
     #[serde(default = "default_shutdown_grace_period")]
     /// When a job is no longer needed it's SIGTERMed. If it doesn't respond (by
     /// dying) after this duration it will then be SIGKILLed. This also affects
-    /// the overall shutdown of local-ci so do not set this to longer than you are
+    /// the overall shutdown of limmat so do not set this to longer than you are
     /// willing to wait when you terminate this program.
     shutdown_grace_period_s: u64,
     #[serde(default = "default_cache_policy")]
@@ -300,7 +300,7 @@ mod tests {
     // the generated file in and have a test to check it's not out of date.
     #[googletest::test]
     fn test_json_schema_updated() {
-        let got = include_str!("../local-ci.schema.json");
+        let got = include_str!("../limmat.schema.json");
         let want = serde_json::to_string_pretty(&schema_for!(Config)).unwrap();
         assert_eq!(
             got, want,

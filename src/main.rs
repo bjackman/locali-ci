@@ -64,7 +64,7 @@ struct Args {
     #[arg(long, default_value_t = default_result_db())]
     result_db: DisplayablePathBuf,
     /// Filename prefix for temporary worktrees.
-    #[arg(long, default_value_t = {"local-ci-worktree".to_string()})]
+    #[arg(long, default_value_t = {"limmat-worktree".to_string()})]
     worktree_prefix: String,
     /// Directory (must exist) to create temporary worktrees in.
     #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()})]
@@ -91,7 +91,7 @@ struct WatchArgs {
 
 fn default_result_db() -> DisplayablePathBuf {
     DisplayablePathBuf(
-        directories::ProjectDirs::from("", "", "local-ci")
+        directories::ProjectDirs::from("", "", "limmat")
             .expect("couldn't find user data dir")
             .data_local_dir()
             .to_owned(),
