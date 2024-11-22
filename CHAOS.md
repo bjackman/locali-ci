@@ -68,6 +68,7 @@ Needed features (high to low priority):
  - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
+ - Need a way to install it without `cargo`.
  - Need a way to view stderr from web UI.
  - Need a way for test command to report "error" as distinguished from failure.
  - Maybe a "skipped" status that doesn't show up in the UI would be useful.
