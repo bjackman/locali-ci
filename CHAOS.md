@@ -145,3 +145,20 @@ My janky test command:
 ```
 RUST_LOG_STYLE=always RUST_LOG=debug cargo watch -- bash -c "cargo test --color=always -- |& less -R -F -c"
 ```
+
+## Documenting the config schema
+
+I thought I was terribly clever because I was able to generate a JSON schema for
+the configuration, I thought it would make it very easy to generate docs for
+that schema.
+
+Unfortunately, it isn't. The internet is strewn with tools that generate static
+HTML from your JSON schema, all of them seem to be useless. Everything requires
+you to use `npm` or `yarn` or `pip` (I know this tool currently requires you to
+use `cargo`, but I don't think that's OK). Many don't work at all. Most seem to
+generate stupid HTML with animations and silly nonsense like that.
+[`json-schema-static-docs`](https://tomcollins.github.io/json-schema-static-docs/)
+seems to generate nice HTML, but its UI seems to be "write some JavaScript"
+so... fuck that.
+
+I will not be generating nice HTML for the config schema.
