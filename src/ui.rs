@@ -360,7 +360,10 @@ mod tests {
     use googletest::{expect_that, prelude::eq};
 
     use crate::{
-        git::test_utils::{TempRepo, WorktreeExt},
+        git::{
+            test_utils::{TempRepo, WorktreeExt},
+            Commit,
+        },
         test::{CachePolicy, Test, TestName, TestResult},
         test_utils::some_time,
     };
@@ -390,6 +393,13 @@ mod tests {
             },
             status,
         }
+    }
+
+    // Abbreviate a commit message.
+    fn abbrev(commit: &Commit) -> &str {
+        // TODO: The degree of abbreviation here probably depends on git
+        // configuration. This will probably fail on someone's machine.
+        &<CommitHash as AsRef<str>>::as_ref(&commit.hash)[..7]
     }
 
     #[googletest::test]
@@ -428,10 +438,14 @@ mod tests {
             // holding the lock. Also parallelism is nice. So, we just ignore
             // the color.
             *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
-            eq("* 08e80af 3\n\
+            eq(format!(
+                "* {commit3} 3\n\
                 | my_test1: Enqueued my_test2: success \n\
-                * b29043f 2\n\
-                | my_test1: oh no my_test2: Started \n")
+                * {commit2} 2\n\
+                | my_test1: oh no my_test2: Started \n",
+                commit3 = abbrev(&commit3),
+                commit2 = abbrev(&commit2)
+            ))
         );
     }
 
@@ -440,18 +454,23 @@ mod tests {
     async fn output_buffer_octopus() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         let base_commit = repo.commit("base", some_time()).await.unwrap();
-        repo.commit("join", some_time()).await.unwrap();
+        let join_commit = repo.commit("join", some_time()).await.unwrap();
         let commit1 = repo.commit("1", some_time()).await.unwrap();
         repo.checkout(&base_commit.hash).await.unwrap();
         let commit2 = repo.commit("2", some_time()).await.unwrap();
         repo.checkout(&base_commit.hash).await.unwrap();
         let commit3 = repo.commit("3", some_time()).await.unwrap();
-        repo.merge(
-            &[commit1.hash, commit2.hash.clone(), commit3.hash.clone()],
-            some_time(),
-        )
-        .await
-        .unwrap();
+        let merge = repo
+            .merge(
+                &[
+                    commit1.hash.clone(),
+                    commit2.hash.clone(),
+                    commit3.hash.clone(),
+                ],
+                some_time(),
+            )
+            .await
+            .unwrap();
         let test1 = fake_test("my_test1", CachePolicy::ByCommit);
         let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
@@ -480,17 +499,24 @@ mod tests {
         // statuses all of the commits (this does momentarily happen IRL).
         expect_that!(
             *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
-            eq("*-.   05d10f7 merge commit\n\
+            eq(format!(
+                "*-.   {merge} merge commit\n\
                 |\\ \\  \n\
                 | | | \n\
-                | | * eea5ddf 2\n\
+                | | * {commit2} 2\n\
                 | |   my_test1: oh no my_test2: Started \n\
-                | * 839dc2e 1\n\
+                | * {commit1} 1\n\
                 | | \n\
-                | * 7de308a join\n\
+                | * {join} join\n\
                 |   \n\
-                * 02ad53b 3\n\
-                | my_test1: Enqueued my_test2: success \n")
+                * {commit3} 3\n\
+                | my_test1: Enqueued my_test2: success \n",
+                merge = abbrev(&merge),
+                commit3 = abbrev(&commit3),
+                commit2 = abbrev(&commit2),
+                commit1 = abbrev(&commit1),
+                join = abbrev(&join_commit)
+            ))
         );
     }
 

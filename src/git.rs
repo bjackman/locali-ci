@@ -59,6 +59,12 @@ impl AsRef<OsStr> for Hash {
     }
 }
 
+impl AsRef<str> for Hash {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
 impl Display for Hash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -90,6 +96,12 @@ impl Deref for CommitHash {
 
 impl AsRef<OsStr> for CommitHash {
     fn as_ref(&self) -> &OsStr {
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<str> for CommitHash {
+    fn as_ref(&self) -> &str {
         self.0.as_ref()
     }
 }
@@ -583,7 +595,7 @@ pub mod test_utils {
             &self,
             parents: &[CommitHash],
             timestamp: DateTime<Utc>,
-        ) -> anyhow::Result<()> {
+        ) -> anyhow::Result<Commit> {
             let ts_is08601 = format!("{}", timestamp.format("%+"));
             self.git(["merge", "-m", "merge commit"])
                 .args(parents)
@@ -592,7 +604,11 @@ pub mod test_utils {
                 .execute()
                 .await
                 .context("'git commit' failed")?;
-            Ok(())
+            Ok(self
+                .rev_parse("HEAD")
+                .await
+                .context("getting commit after merge")?
+                .context("no HEAD after merge")?)
         }
     }
 

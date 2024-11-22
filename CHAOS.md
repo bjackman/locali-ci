@@ -32,8 +32,6 @@ Bugs (high to low priority):
    thread. I didn't think of this possibility before overwriting the logs that
    would have had the panic details in there, so I'll just have to wait and see
    until it happens again.
- - Tests don't work on my work computer. I think this is because I made false
-   assumptions abuot the conditions for Git commit hashes to be deterministic.
  - `should_not_cache` test is flaky; occasionally the detector triggers that
    suggests two tests were sharing the same worktree. _Probably_ a bug in the
    test.

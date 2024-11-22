@@ -41,7 +41,7 @@ impl Database {
     }
 
     fn result_path(&self, hash: &Hash, test_name: &TestName) -> PathBuf {
-        self.base_dir.join(hash.as_ref()).join(test_name)
+        self.base_dir.join::<&str>(hash.as_ref()).join(test_name)
     }
 
     pub fn cached_result(
