@@ -54,12 +54,14 @@ command = "cargo fmt --check"
 name = "test"
 command = "cargo test"
 ```
- 
-Each test is just a shell command. If you want to skip the shell, use `args`
-instead of `command`:
+
+If the comand is a string, it's executed via the shell. If you want direct
+control of the command then pass it as a list:
 
 ```toml
-args = ["cargo", "test"]
+[[tests]]
+name = "test"
+command = ["cargo", "test"]
 ```
 
 ### Writing the test command
@@ -148,7 +150,7 @@ allocate a Pokemon for it:
 [[tests]]
 name = "test_with_pokemon"
 resources = ["pokemon"]
-command = "./test_with_pokemon.sh --pokemon=$LIMMAT_RESOURCE_pokemon
+command = "./test_with_pokemon.sh --pokemon=$LIMMAT_RESOURCE_pokemon"
 ```
 
 As you can see, resource values are passed in the
@@ -181,8 +183,7 @@ for static HTML documentation.
 
 #### Job environment
 
-These environment variables are passed to your job (remember - if you configure
-your job with `args` instead of `command` it isn't interpreted by the shell):
+These environment variables are passed to your job.
 
 | Name                              | Value                                                 |
 | --------------------------------- | ----------------------------------------------------- |
