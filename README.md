@@ -15,6 +15,12 @@ will take you to the logs.
 
 ## Installation
 
+> [!NOTE]
+> Limmat works on Linux on x86. It _probably_ works on other architectures too. It _probably_
+> doesn't work on MacOS, but if you want to use it there just try installing it from crates.io
+> and let me know what goes wrong (raise a GitHub issue if you don't have my contact details),
+> it will _probably_ be easy to get it working.
+
 ### From crates.io
 
 [Install
@@ -26,7 +32,7 @@ cargo install limmat
 
 ### From GitHub Releases
 
-There are pre-built binaries in the [GitHub
+There are pre-built Linux x86 binaries in the [GitHub
 Releases](https://github.com/bjackman/limmat/releases/tag/v0.2.1).
 
 If you prefer to have the tool tracked by your package manager, you can download
