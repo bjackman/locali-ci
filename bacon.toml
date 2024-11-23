@@ -54,6 +54,8 @@ command = [
     "--", "--color", "always", # see https://github.com/Canop/bacon/issues/124
 ]
 need_stdout = true
+watch = ["README.md", "limmat.schema.json"]
+
 
 [jobs.doc]
 command = ["cargo", "doc", "--color", "always", "--no-deps"]
