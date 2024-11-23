@@ -194,8 +194,7 @@ RUN sh rustup.sh -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 COPY . /limmat
 WORKDIR /limmat
-RUN cargo build
-CMD cargo test test_worktree_teardown
+CMD script -e -c "cargo test"
 ```
 
 ```
