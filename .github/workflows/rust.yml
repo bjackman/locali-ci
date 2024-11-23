@@ -16,6 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Configure git
+      run: git config --global user.email "grundbert@example.com"; git config --global user.name "Grundbert Schnlörber"
     - name: Build
       run: cargo build --verbose
     - name: Run tests
