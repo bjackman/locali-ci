@@ -37,6 +37,8 @@ Meanwhile, it watches your repository for commits being added to or removed from
 that range and spawns new tests or cancels them as needed to get you your
 feedback as soon as possible.
 
+By default tests are run in separate [Git worktrees](https://git-scm.com/docs/git-worktree).
+
 ## Configuration
 
 Configuration is in [TOML](https://toml.io/en/). Let's start with an example,
@@ -68,13 +70,18 @@ command = ["cargo", "test"]
 
 The test command's job is to produce a zero (sucess) or nonzero (failure) status
 code. By defualt, it's run from the root directory of a copy of the repository,
-with the commit to be tested already checked out. 
+with the commit to be tested already checked out.
+
+If your test command is nontrivial, use `limmat --config $config test
+$test_name` to run it immediately in the main worktree and print its output
+directly to your terminal.
 
 > [!WARNING]
 > Limmat doesn't clean the source tree for you, it just does `git checkout`. If
 > your test command can't be trusted to work in a dirty worktree (for example,
-> if you have janky Makefiles) it should start with something like `git clean
-> -fdx`.
+> if you have janky Makefiles) you might want it to start with something like
+> `git clean -fdx`. **But**, watch out, because when you run that via `limmat test`,
+> it will wipe out any untracked files from your main worktree.
 
 If your test command doesn't actually need to access the codebase, for example
 if it only cares about the commit message, you can set `needs_worktree = false`.
