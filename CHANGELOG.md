@@ -7,6 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0](https://github.com/bjackman/local-ci/compare/v0.1.0...v0.1.1) - 2024-11-23
+## [0.2.1](https://github.com/bjackman/local-ci/compare/v0.1.0...v0.1.1) - 2024-11-23
 
 This is the first "proper" relase. I've added documentation and the initial featureset.
