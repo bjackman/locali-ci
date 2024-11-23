@@ -166,6 +166,30 @@ resources = [
 ]
 ```
 
+### Test dependencies
+
+Tests can depend on other tests, in which case Limmat won't run them until the
+dependency tests have been run for the corresponding commit:
+
+```toml
+[[tests]]
+name = "build-prod"
+command = "make"
+
+[[tests]]
+name = "run-tests"
+# No point in trying to run the tests if the prod binary doesn't compile
+depends_on = ["build-prod"]
+command = "run_tests.sh"
+```
+
+Tests aren't given a practical way to access the _output_ of their dependency
+jobs yet, so this has limited use-cases, primarily:
+
+1. You can prioritise the test jobs that give you faster feedback.
+2. If you have some totally out-of-band way to pass output between test jobs, as
+   is the case in the [advanced example](#advanced-example)
+
 ### Reference
 
 #### Config file
@@ -190,3 +214,72 @@ These environment variables are passed to your job.
 | `LIMMAT_ORIGIN`                   | Path of the main repository worktree (i.e. `--repo`). |
 | `LIMMAT_COMMIT`                   | Hash of the commit to be tested.                      |
 | `LIMMAT_RESOURCE_<resource_name>` | Values for [resources](#resources) used by the test.  |
+
+### Advanced example
+
+Here's a fictionalised example showing all the features in use at once, based on
+the configuration I use for my Linux kernel development at Google.
+
+```toml
+# Don't DoS the remote build service
+[[resources]]
+name = "build_service"
+count = 8
+
+# Physical hosts to run tests on, with two different CPU microarchtectures.
+[[resources]]
+name = "milan_host"
+tokens = ["milan-a8", "milan-x3"]
+[[resources]]
+name = "skylake_host"
+tokens = ["skylake-a8", "skylake-x3"]
+
+# Build a kernel package using the remote build service.
+[[tests]]
+name = "build_remote"
+resources = ["build_service"]
+command = "build_remote_kernel.sh --commit=$LIMMAT_COMMIT"
+# build_remote_kernel.sh doesn't actually need to access the code locally, it
+# just pushes the commit to a Git remote.
+requires_worktree = false
+
+# Also check that the build works with the normal kernel build system.
+[[tests]]
+name = "kbuild"
+command = """
+set -e
+
+# The kernel's Makefiles are normally pretty good, but just in case...
+git clean -fdx
+
+make -j defconfig
+make -j16 vmlinux
+"""
+
+# Check the kernel boots on an AMD CPU.
+[[tests]]
+name = "boot_milan"
+resources = ["milan_host"]
+command = "boot_remote_kernel.sh --commit=$LIMMAT_COMMIT --host=$LIMMAT_RESOURCE_milan_host"
+# boot_remote_kernel.sh will just use the kernel built be build_remote_kernel.sh
+# so it doesn't need to access anything locally.
+requires_worktree = false
+# But we must only run this test once that remote build is finished.
+depends_on = ["build_remote"]
+
+# Same as above, but on an Intel CPU.  This simplified example isn't bad, but
+# this can get pretty verbose in more complex cases.  Perhaps a later version
+# will optionally support a more flexible config language like Cue, to allow
+# DRY configuration.
+[[tests]]
+name = "boot_skylake"
+resources = ["skylake_host"]
+command = "boot_remote_kernel.sh --commit=$LIMMAT_COMMIT --host=$LIMMAT_RESOURCE_skylake_host"
+requires_worktree = false
+depends_on = ["build_remote"]
+
+# Run KUnit tests
+[[tests]]
+name = "kunit"
+command = "./tools/testing/kunit/kunit.py run --kunitconfig=lib/kunit/.kunitconfig"
+```
