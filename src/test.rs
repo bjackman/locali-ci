@@ -718,7 +718,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
             .current_dir(current_dir)
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?)
-            .env("LIMMAT_COMMIT", self.test_case.commit_hash.to_string());
+            .env("LIMMAT_COMMIT", &self.test_case.commit_hash);
         for (k, v) in self.env.iter() {
             cmd = cmd.env(k, v);
         }

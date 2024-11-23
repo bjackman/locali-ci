@@ -3,11 +3,11 @@
   "title": "Config",
   "type": "object",
   "required": [
-    "num_worktrees",
     "tests"
   ],
   "properties": {
     "num_worktrees": {
+      "default": 8,
       "type": "integer",
       "format": "uint",
       "minimum": 0.0

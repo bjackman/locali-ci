@@ -183,9 +183,14 @@ fn default_shutdown_grace_period() -> u64 {
 #[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default = "default_num_worktrees")]
     pub num_worktrees: usize,
     resources: Option<Vec<Resource>>,
     tests: Vec<Test>,
+}
+
+fn default_num_worktrees() -> usize {
+    8
 }
 
 type ResourceTokens = HashMap<ResourceKey, Vec<String>>;

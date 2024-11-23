@@ -44,9 +44,6 @@ here's how you might configure a Rust project (it's a reduced version of [this
 repository's own config](limmat.toml)):
 
 ```toml
-# Check out 8 copies of the repository to run tests in.
-num_worktrees = 8
-
 # Check that the formatting is correct
 [[tests]]
 name = "fmt"
@@ -58,7 +55,8 @@ name = "test"
 command = "cargo test"
 ```
  
-Each test is just a shell command. If you want to skip the shell, use `args` instead of `command`:
+Each test is just a shell command. If you want to skip the shell, use `args`
+instead of `command`:
 
 ```toml
 args = ["cargo", "test"]
@@ -129,10 +127,10 @@ hash changes then the database entry is invalidated.
 
 You probably have a lot of tests to run, otherwise you wouldn't find Limmat
 useful. So the system needs a way to throttle the parallelism to avoid gobbling
-resources. The most obious source of throttling is the worktrees - if your tests
-need one (i.e. if you haven't set `needs_worktee = false`) then those tests can
-only be parallelised up to `num_worktrees`. But there's also more flexible
-throttling available.
+resources. The most obious source of throttling is the worktrees. If your tests
+need one - i.e. if you haven't set `needs_worktee = false` - then those tests
+can only be parallelised up to the `num_worktrees` value set in your config
+(default: 8). But there's also more flexible throttling available.
 
 To use this, define `resources` globally (separately from `tests`) in your
 config file, for example:

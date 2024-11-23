@@ -604,11 +604,10 @@ pub mod test_utils {
                 .execute()
                 .await
                 .context("'git commit' failed")?;
-            Ok(self
-                .rev_parse("HEAD")
+            self.rev_parse("HEAD")
                 .await
                 .context("getting commit after merge")?
-                .context("no HEAD after merge")?)
+                .context("no HEAD after merge")
         }
     }
 
