@@ -271,6 +271,7 @@ impl Config {
 // The reason for this is that for some reason I decided that the num_worktrees
 // option should be ignored when running one-shot tests. This was dumb and made
 // things unnecessarily complicated.
+#[derive(Debug)]
 pub struct ParsedConfig {
     pub num_worktrees: usize,
     pub resource_pools: Pools,
@@ -303,7 +304,9 @@ impl ParsedConfig {
 
 #[cfg(test)]
 mod tests {
+    use googletest::{assert_that, expect_that, prelude::*};
     use pretty_assertions::assert_eq;
+    use regex::Regex;
     use schemars::schema_for;
 
     use super::*;
@@ -318,5 +321,36 @@ mod tests {
             got, want,
             "Config json-schema seems to have changed. Want 'right' got 'left'"
         );
+    }
+
+    // Check all the config snippts in the README can at least be parsed.
+    #[googletest::test]
+    fn test_readme_snippets() {
+        let code_block_regex = Regex::new(r"(?m)```(\w+?)\n((.|\n)+?)```").unwrap();
+        let toml_blocks = code_block_regex
+            .captures_iter(&include_str!("../README.md"))
+            .filter_map(|captures| {
+                let lang = captures.get(1).expect("nothing in capture group 0");
+                if lang.as_str() != "toml" {
+                    debug!("{}", lang.as_str());
+                    None
+                } else {
+                    Some(
+                        captures
+                            .get(2)
+                            .expect("nothing in capture group 1")
+                            .as_str(),
+                    )
+                }
+            })
+            .collect::<Vec<&str>>();
+        assert_that!(
+            toml_blocks,
+            not(empty()),
+            "No TOML found in README - test bug?"
+        );
+        for toml in toml_blocks {
+            expect_that!(toml::from_str(toml).map(ParsedConfig::from), ok(anything()));
+        }
     }
 }

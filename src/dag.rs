@@ -23,6 +23,7 @@ pub trait GraphNode<I: Hash + Eq + Clone> {
 // Ajacency-list for a directed acyclic "graph" (dunno maybe incorrect
 // terminology, it doesn't make any promises about connectedness so it might be
 // zero or several actual "graphs"), where nodes are identified with a usize.
+#[derive(Debug)]
 pub struct Dag<I: Hash + Eq + Clone + Debug, G: GraphNode<I>> {
     nodes: Vec<G>,
     // maps ids that nodes know about themselves to their index in `nodes`.
