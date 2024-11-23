@@ -115,8 +115,8 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
         let truncated = Text::from_iter(
             render
                 .into_lines()
-                .take(term_size.rows - 1)
-                .map(|l| l.truncate_graphemes(term_size.cols - 1)),
+                .take(term_size.rows)
+                .map(|l| l.truncate_graphemes(term_size.cols)),
         );
         write!(&mut self.output, "{}", truncated.ansi())?;
         writeln!(

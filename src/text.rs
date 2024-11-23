@@ -225,7 +225,7 @@ impl<'a> Span<'a> {
     // If this was to become public, the API should be made consistent with
     // Lines::truncate_graphemes. But at the moment it just has whatever is most convenient.
     fn truncate_graphemes(&mut self, len: usize) {
-        if let Some((byte_idx, _)) = self.content.grapheme_indices(true).nth(len + 1) {
+        if let Some((byte_idx, _)) = self.content.grapheme_indices(true).nth(len) {
             match self.content {
                 Cow::Borrowed(s) => {
                     self.content = Cow::Borrowed(&s[..byte_idx]);
