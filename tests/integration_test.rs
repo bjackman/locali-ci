@@ -120,6 +120,7 @@ impl LimmatChildBuilder {
             .stdin(Stdio::piped())
             .stderr(stderr)
             .stdout(Stdio::null())
+            .env("RUST_LOG", "debug")
             .kill_on_drop(true);
         let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
