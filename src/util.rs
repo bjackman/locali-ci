@@ -99,6 +99,7 @@ impl ErrGroup {
     }
 }
 
+#[derive(Clone)]
 pub struct Rect {
     pub cols: usize,
     pub rows: usize,
