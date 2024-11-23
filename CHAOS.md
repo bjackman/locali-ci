@@ -2,19 +2,7 @@ WELCOME TO THE LIMMAT WIKI GUESTS ARE ADVISED TO TAKE THEIR ADHD AND/OR ANXIETY
 MEDICATION PRIOR TO ENTRY PLEASE DO NOT FEED THE BULLET POINTS PLEASE AVOID
 EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
-To run this as a low priority on Linux, try prefixing the command with `chrt -i
-0` which will run it as `SCHED_IDLE`. `nice -n 19` isn't really enough because you probably have
-[autogroups](https://man7.org/linux/man-pages/man7/sched.7.html) enabled. To run
-at background priorities other than `SCHED_IDLE` you'll need to work around that
-- the man page gives an example of running `echo 10 > /proc/self/autogroup` to
-set `nice 10` for the current shell.
-
-To run the tests very hard, follow
-[this](https://askubuntu.com/questions/162229/how-do-i-increase-the-open-files-limit-for-a-non-root-user)
-then run `ulimit -Sn 524288` to embiggen the file descriptor limit. Now you can
-try using `cargo-stress`.
-
-Bugs (high to low priority):
+## Bugs (high to low priority):
 
  - BLOCKER: I had a really bad time trying to build a nice reliable TUI, turns
    out terminal hacking is not fun or satisfying. Eventually I went yolo mode and
@@ -59,9 +47,8 @@ Bugs (high to low priority):
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.
 
-Needed features (high to low priority):
+## Needed features (high to low priority):
 
- - BLOCKER: Document config format (and everything else).
  - BLOCKER: Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
@@ -200,3 +187,31 @@ CMD script -e -c "cargo test"
 ```
 podman build . -t limmat-tests && podman run limmat-tests
 ```
+
+## Running tests
+
+To run this as a low priority on Linux, try prefixing the command with `chrt -i
+0` which will run it as `SCHED_IDLE`. `nice -n 19` isn't really enough because you probably have
+[autogroups](https://man7.org/linux/man-pages/man7/sched.7.html) enabled. To run
+at background priorities other than `SCHED_IDLE` you'll need to work around that
+- the man page gives an example of running `echo 10 > /proc/self/autogroup` to
+set `nice 10` for the current shell.
+
+To run the tests very hard, follow
+[this](https://askubuntu.com/questions/162229/how-do-i-increase-the-open-files-limit-for-a-non-root-user)
+then run `ulimit -Sn 524288` to embiggen the file descriptor limit. Now you can
+try using `cargo-stress`.
+
+## Releases
+
+In theory, releases are set up with
+[release-plz](https://release-plz.ieni.dev/docs). My understanding of this
+system is honestly pretty shaky, but I was interested to try it out. IIUC the
+necessary tokens are stored as GitHub secrets and it should just automatically:
+
+- Send a PR to do the in-repo changes that are needed for a release
+- Keep the PR up to date as `master` develops
+- After you merge the PR, automatically push the release to crates.io.
+
+For this to work you are supposed to write ["conventional commit
+messages"](https://www.conventionalcommits.org/en/v1.0.0/#summary). Let's see.
