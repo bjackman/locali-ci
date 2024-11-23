@@ -1,10 +1,11 @@
-use std::sync::RwLock;
+use std::{future::pending, io::stdout, sync::RwLock};
 
 use anyhow::Context as _;
 use async_stream::try_stream;
 use crossterm::{
     event::{Event, EventStream},
     terminal,
+    tty::IsTty as _,
 };
 use futures::{Stream, StreamExt as _};
 
@@ -16,12 +17,16 @@ pub struct TerminalSizeWatcher {
 
 impl<'a> TerminalSizeWatcher {
     pub fn new() -> anyhow::Result<Self> {
-        // TODO: We're importing crossterm just for this lol
-        let (cols, rows) = terminal::size().context("getting terminal size")?;
         Ok(Self {
-            size: RwLock::new(Rect {
-                cols: cols.into(),
-                rows: rows.into(),
+            size: RwLock::new(if !stdout().is_tty() {
+                Rect { cols: 0, rows: 0 }
+            } else {
+                // TODO: We're importing crossterm just for this lol
+                let (cols, rows) = terminal::size().context("getting terminal size")?;
+                Rect {
+                    cols: cols.into(),
+                    rows: rows.into(),
+                }
             }),
         })
     }
@@ -29,8 +34,13 @@ impl<'a> TerminalSizeWatcher {
     // Returns an item whenever the terminal gets resized. When that happens you
     // should call size again
     pub fn resizes(&'a self) -> impl Stream<Item = anyhow::Result<()>> + use<'a> {
-        let mut reader = EventStream::new();
         try_stream! {
+            // crossterm async code seems to be buggy when not a tty.
+            if !stdout().is_tty() {
+                pending::<()>().await; // Block forever.
+                yield ();
+            };
+            let mut reader = EventStream::new();
             loop {
                 let event: Event = reader.next().await
                     .context("terminal event stream terminated")?
