@@ -220,3 +220,17 @@ It seems like if you want some manual control over this you can just edit
 Cargo.* and CHANGELOG.md manually (or using `release-plz update`/`release-plz
 set-version`) and push that, as an alternative to the release PR. Then the GH
 Action will just push to crates.io.
+
+I looked into packaging this for Debian but realised it's a whole big deal. So I
+guess we could have .deb files hostedon GitHub, seems fine, although .deb
+doesn't do very much when the tool is just a single binary. It looks like the
+best way to build `.deb` files by far is
+[cargo-deb](https://crates.io/crates/cargo-deb). But it seems like setting
+this up to run automatically in GHA is pretty annoying. I found
+[this](https://github.com/marketplace/actions/rust-cargo-deb-package-build-amd64-ubuntu)
+action which apparently runs cargo-deb and
+[this](https://github.com/marketplace/actions/github-action-publish-binaries)
+which apparently publishes build artifacts to GH releases, but it's not clear to
+me how you're supposed to plumb these things together. I'm not too sure if I
+care either. So, for now(TM) I'm just manually building the .deb and a binary,
+and uploading them to the Releases page in the Github UI.
