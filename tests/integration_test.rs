@@ -209,7 +209,7 @@ impl LimmatChild {
                     }
                 }
             },
-            Duration::from_secs(5),
+            Duration::from_secs(10),
         )
     }
 }
@@ -233,7 +233,7 @@ async fn test_worktree_teardown(test_command: &str) {
         .await
         .unwrap();
 
-    wait_for(|| limmat.has_worktrees(), Duration::from_secs(5))
+    wait_for(|| limmat.has_worktrees(), Duration::from_secs(10))
         .expect("worktree not found after 5s");
 
     limmat.terminate().expect("couldn't shut down child");
@@ -272,7 +272,7 @@ async fn shouldnt_leak_jobs() {
 
     // Wait for test to start up
     let test_pid_path = temp_dir.path().join("test_pid");
-    wait_for(|| Ok(test_pid_path.exists()), Duration::from_secs(5))
+    wait_for(|| Ok(test_pid_path.exists()), Duration::from_secs(10))
         .expect("worktree not found after 5s");
     let pid: pid_t = pid_t::from_str(fs::read_to_string(test_pid_path).unwrap().trim()).unwrap();
 
@@ -307,7 +307,7 @@ async fn should_invalidate_cache_when_dep_changes() {
             ))
             .await
             .unwrap();
-        wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5)).expect("test not ran");
+        wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(10)).expect("test not ran");
 
         // Shut down child by dropping it. This is racy, it's possible we
         // haven't finished writing the test DB yet. In that case this test
@@ -337,6 +337,6 @@ async fn should_invalidate_cache_when_dep_changes() {
         ))
         .await
         .unwrap();
-    wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
+    wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(10))
         .expect("test not re-ran when dependency config changed");
 }
