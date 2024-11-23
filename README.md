@@ -15,12 +15,23 @@ will take you to the logs.
 
 ## Installation
 
+### From crates.io
+
 [Install
 Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html) then:
 
 ```sh
 cargo install limmat
 ```
+
+### From GitHub Releases
+
+There are pre-built binaries in the [GitHub
+Releases](https://github.com/bjackman/limmat/releases/tag/v0.2.1).
+
+If you prefer to have the tool tracked by your package manager, you can download
+a `.deb` from there and install it with `dpkg -i $pkg.deb`. Or you can just
+download the raw binary, it has no dependencies.
 
 ## Usage
 
