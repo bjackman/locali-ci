@@ -85,7 +85,7 @@ command = ["cargo", "test"]
 
 ### Writing the test command
 
-The test command's job is to produce a zero (sucess) or nonzero (failure) status
+The test command's job is to produce a zero (success) or nonzero (failure) status
 code. By defualt, it's run from the root directory of a copy of the repository,
 with the commit to be tested already checked out.
 
@@ -131,7 +131,7 @@ change - for example changes to the commit message won't invalidate cache
 results.
 
 If the test is terminated by a signal, it isn't considered to have produced a
-result: instead of "sucess" or "failure" it's an "error". Errors aren't cached.
+result: instead of "success" or "failure" it's an "error". Errors aren't cached.
 
 > [!TIP]
 > You can use this as a hack to prevent environmental failures from
@@ -147,16 +147,17 @@ hash changes then the database entry is invalidated.
 > If your test script uses config files that aren't checked into your repository,
 > Limmat doesn't know about that and can't hash those files. It's up to you
 > to determine if your scripts are "hermetic" - if they aren't you probably just want 
-> to set `cache = "no_caching`.
+> to set `cache = "no_caching"`.
 
 ### Resources
 
-You probably have a lot of tests to run, otherwise you wouldn't find Limmat
-useful. So the system needs a way to throttle the parallelism to avoid gobbling
-resources. The most obious source of throttling is the worktrees. If your tests
-need one - i.e. if you haven't set `needs_worktee = false` - then those tests
-can only be parallelised up to the `num_worktrees` value set in your config
-(default: 8). But there's also more flexible throttling available.
+If you're still reading, you probably have a lot of tests to run, otherwise you
+wouldn't find Limmat useful. So the system needs a way to throttle the
+parallelism to avoid gobbling resources. The most obvious source of throttling is
+the worktrees. If your tests need one - i.e. if you haven't set `needs_worktee =
+false` - then those tests can only be parallelised up to the `num_worktrees`
+value set in your config (default: 8). But there's also more flexible throttling
+available.
 
 To use this, define `resources` globally (separately from `tests`) in your
 config file, for example:
@@ -193,7 +194,7 @@ resources = [
 ### Test dependencies
 
 Tests can depend on other tests, in which case Limmat won't run them until the
-dependency tests have been run for the corresponding commit:
+dependency tests have succeeded for the corresponding commit:
 
 ```toml
 [[tests]]
@@ -207,12 +208,12 @@ depends_on = ["build-prod"]
 command = "run_tests.sh"
 ```
 
-Tests aren't given a practical way to access the _output_ of their dependency
-jobs yet, so this has limited use-cases, primarily:
+Tests aren't currently given a practical way to access the _output_ of their
+dependency jobs, so this has limited use-cases right now, primarily:
 
 1. You can prioritise the test jobs that give you faster feedback.
 2. If you have some totally out-of-band way to pass output between test jobs, as
-   is the case in the [advanced example](#advanced-example)
+   is the case in the [advanced example](#advanced-example).
 
 ### Reference
 
@@ -266,6 +267,14 @@ command = "build_remote_kernel.sh --commit=$LIMMAT_COMMIT"
 # build_remote_kernel.sh doesn't actually need to access the code locally, it
 # just pushes the commit to a Git remote.
 requires_worktree = false
+
+# Let me know when I break the build for Arm.
+[[tests]]
+name = "build_remote"
+resources = ["build_service"]
+command = "build_remote_kernel.sh --commit=$LIMMAT_COMMIT --arch=arm64"
+requires_worktree = false
+
 
 # Also check that the build works with the normal kernel build system.
 [[tests]]
