@@ -357,7 +357,7 @@ pub trait Worktree: Debug {
         Ok(try_stream! {
             let git_common_dir = &self.git_common_dir().await.context("getting git common dir")?;
             let git_dir = &self.git_dir().await.context("getting git common dir")?;
-            debug!("watching {git_dir:?} [and {git_common_dir:?}");
+            debug!("watching {git_dir:?} and {git_common_dir:?}");
             watcher
                 .watch(git_dir, RecursiveMode::Recursive)
                 .context("setting up watcher")?;
