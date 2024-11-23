@@ -158,3 +158,24 @@ seems to generate nice HTML, but its UI seems to be "write some JavaScript"
 so... fuck that.
 
 I will not be generating nice HTML for the config schema.
+
+## Running Github Actions
+
+Do we need Github Actions? Ugh I guess. But now it's super annoying because you
+can't run it locally. Try this:
+
+```sh
+git clone https://github.com/nektos/act.git
+cd act/
+make build
+
+systemctl --user start podman.socket
+export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
+
+cd $LIMMAT_REPO
+$ACT_REPO/dist/local/act
+```
+
+But... https://github.com/nektos/act/issues/107
+
+I dunno whatever. Maybe I just have to live with the Github bullshit?
