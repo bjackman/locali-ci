@@ -8,6 +8,8 @@ repository = "https://github.com/bjackman/limmat"
 readme = "README.md"
 keywords = ["testing", "git"]
 categories = ["command-line-utilities", "development-tools::testing"]
+# We rely on #[expect(...)]
+rust-version = "1.80"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

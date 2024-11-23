@@ -2,9 +2,6 @@ WELCOME TO THE LIMMAT WIKI GUESTS ARE ADVISED TO TAKE THEIR ADHD AND/OR ANXIETY
 MEDICATION PRIOR TO ENTRY PLEASE DO NOT FEED THE BULLET POINTS PLEASE AVOID
 EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
-According to whoever wrote this file, this code needs Rust >= 1.80. crates.io
-seems to disagree, probably it's right and this file is wrong.
-
 To run this as a low priority on Linux, try prefixing the command with `chrt -i
 0` which will run it as `SCHED_IDLE`. `nice -n 19` isn't really enough because you probably have
 [autogroups](https://man7.org/linux/man-pages/man7/sched.7.html) enabled. To run
