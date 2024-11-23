@@ -24,7 +24,7 @@ cargo install limmat
 
 ## Usage
 
-Write a config file (details [below](#config)). Assuming you called it `limmat.toml`, and
+Write a config file (details [below](#configuration)). Assuming you called it `limmat.toml`, and
 the branch you're working on is based on `origin/master`, run this from the root
 of your repository:
 
@@ -37,7 +37,7 @@ Meanwhile, it watches your repository for commits being added to or removed from
 that range and spawns new tests or cancels them as needed to get you your
 feedback as soon as possible.
 
-## Configuration {#config}
+## Configuration
 
 Configuration is in [TOML](https://toml.io/en/). Let's start with an example,
 here's how you might configure a Rust project (it's a reduced version of [this
@@ -64,7 +64,7 @@ Each test is just a shell command. If you want to skip the shell, use `args` ins
 args = ["cargo", "test"]
 ```
 
-### Writing the test command {#test-commands}
+### Writing the test command
 
 The test command's job is to produce a zero (sucess) or nonzero (failure) status
 code. By defualt, it's run from the root directory of a copy of the repository,
@@ -79,7 +79,7 @@ with the commit to be tested already checked out.
 If your test command doesn't actually need to access the codebase (for example,
 if it only cares about the commit message), you can set `needs_worktree =
 false`. In that case it will run in your main worktree, and the commit it needs
-to test will be passed in the [environment](#env) as `$LIMMAT_COMMIT`.
+to test will be passed in the [environment](#job-environment) as `$LIMMAT_COMMIT`.
 
 > [!NOTE]
 > Tests configured with `command` are currently hard-coded to use Bash as the
@@ -153,8 +153,8 @@ resources = ["pokemon"]
 command = "./test_with_pokemon.sh --pokemon=$LIMMAT_RESOURCE_pokemon
 ```
 
-As you can see, resource values are passed in the [environment](#env) to the
-test command.
+As you can see, resource values are passed in the
+[environment](#job-environment) to the test command.
 
 Resources don't need to have values, they can also just be anonymous tokens for
 limiting parallelism:
@@ -181,7 +181,7 @@ here](https://json-schema.app/view/%23?url=https%3A%2F%2Fraw.githubusercontent.c
 welcome](https://github.com/bjackman/limmat/commit/3181929c0f9031dbe9b13ad07a52b66f2f3439a4)
 for static HTML documentation.
 
-#### Job environment (#env)
+#### Job environment
 
 These environment variables are passed to your job (remember - if you configure
 your job with `args` instead of `command` it isn't interpreted by the shell):
