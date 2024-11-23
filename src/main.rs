@@ -29,7 +29,8 @@ use test::TestResult;
 use test::{
     base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder, TestJobOutput, TestName,
 };
-use tokio::{select, signal};
+use tokio::select;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 use util::{DisplayablePathBuf, ErrGroup, Rect};
 
@@ -483,20 +484,16 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     // Set up shutdown first, to ensure we correctly handle early signals.
-    // As well as doing it early, it seems to be important that we do this with
-    // a single global signal::ctrl_c call, if I call this in the select loop I
-    // would occasionally observe that SIGINT kills the program instead of
-    // triggering Tokio's signal handler, this is because we require the ctrl_c
-    // future to get polled before we do any work, since that's where it
-    // installs the signal handler.
-    // TOOD: this still seems racy though, because in theory we could get all
-    // the way into the setup below before the task here ever gets to polling
-    // the future. It seems like this just means the ctrl_c design is bad and we
-    // should probably just not use it.
+    // It seems extremely difficult to use Tokio's ctrl_c API for this correctly
+    // (It only installs the handler the first time the signal gets polled)
+    // so we just go directly for the "interrupt" thing, which might not work on
+    // Windows, not sure. (I don't think this code is likely to work on Windows
+    // anyway).
     let cancellation_token = CancellationToken::new();
+    let mut sigint = signal(SignalKind::interrupt()).context("registering SIGINT handler")?;
     let token = cancellation_token.clone();
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("error listening for ctrl-C");
+        sigint.recv().await;
         token.cancel()
     });
 
