@@ -158,7 +158,7 @@ impl Drop for LimmatChild {
             let reader = BufReader::new(file);
             // Read the file line-by-line and print each line
             for line in reader.lines() {
-                println!(
+                eprintln!(
                     "{}",
                     line.unwrap_or_else(|e| format!("<read error: {}>", e))
                 );
