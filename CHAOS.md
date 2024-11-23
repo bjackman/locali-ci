@@ -215,3 +215,8 @@ necessary tokens are stored as GitHub secrets and it should just automatically:
 
 For this to work you are supposed to write ["conventional commit
 messages"](https://www.conventionalcommits.org/en/v1.0.0/#summary). Let's see.
+
+It seems like if you want some manual control over this you can just edit
+Cargo.* and CHANGELOG.md manually (or using `release-plz update`/`release-plz
+set-version`) and push that, as an alternative to the release PR. Then the GH
+Action will just push to crates.io.
