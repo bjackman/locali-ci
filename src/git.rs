@@ -484,7 +484,9 @@ impl TempWorktree {
         // just want us to fuck off and give them their terminal back at
         // whatever cost.
         let mut cmd = SyncCommand::new("git");
-        cmd.args(["worktree", "remove", "--force"])
+        // Double --force means remove it even if we were in the middle of
+        // creating it.
+        cmd.args(["worktree", "remove", "--force", "--force"])
             .arg(self.temp_dir.path())
             .current_dir(&self.origin);
         Some(cmd)
