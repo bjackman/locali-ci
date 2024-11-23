@@ -76,10 +76,10 @@ with the commit to be tested already checked out.
 > if you have janky Makefiles) it should start with something like `git clean
 > -fdx`.
 
-If your test command doesn't actually need to access the codebase (for example,
-if it only cares about the commit message), you can set `needs_worktree =
-false`. In that case it will run in your main worktree, and the commit it needs
-to test will be passed in the [environment](#job-environment) as `$LIMMAT_COMMIT`.
+If your test command doesn't actually need to access the codebase, for example
+if it only cares about the commit message, you can set `needs_worktree = false`.
+In that case it will run in your main worktree, and the commit it needs to test
+will be passed in the [environment](#job-environment) as `$LIMMAT_COMMIT`.
 
 > [!NOTE]
 > Tests configured with `command` are currently hard-coded to use Bash as the
