@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/bjackman/limmat/compare/v0.2.0...v0.2.1) - 2024-11-23
+
+### Other
+
+- Add author to Cargo.toml
+- *(dev)* Notes
+
 ## [0.2.0](https://github.com/bjackman/local-ci/compare/v0.1.0...v0.1.1) - 2024-11-23
 
 This is the first "proper" relase. I've added documentation and the initial featureset.
