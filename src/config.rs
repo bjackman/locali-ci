@@ -82,6 +82,7 @@ pub struct Test {
     command: Command,
     #[serde(default = "default_requires_worktree")]
     requires_worktree: bool,
+    // TODO: This should only refer to resource names.
     resources: Option<Vec<Resource>>,
     #[serde(default = "default_shutdown_grace_period")]
     /// When a job is no longer needed it's SIGTERMed. If it doesn't respond (by
