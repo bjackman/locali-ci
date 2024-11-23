@@ -179,3 +179,25 @@ $ACT_REPO/dist/local/act
 But... https://github.com/nektos/act/issues/107
 
 I dunno whatever. Maybe I just have to live with the Github bullshit?
+
+## Running tests in a container
+
+But.. I was able to repro the GHA failures with this:
+
+```
+FROM ubuntu:latest
+RUN apt update
+RUN apt install -y curl build-essential git
+RUN git config --global user.email "grundbert@example.com"; git config --global user.name "Grundbert Schnlörber"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup.sh
+RUN sh rustup.sh -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+COPY . /limmat
+WORKDIR /limmat
+RUN cargo build
+CMD cargo test test_worktree_teardown
+```
+
+```
+podman build . -t limmat-tests && podman run limmat-tests
+```
