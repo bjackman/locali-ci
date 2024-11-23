@@ -328,7 +328,7 @@ mod tests {
     fn test_readme_snippets() {
         let code_block_regex = Regex::new(r"(?m)```(\w+?)\n((.|\n)+?)```").unwrap();
         let toml_blocks = code_block_regex
-            .captures_iter(&include_str!("../README.md"))
+            .captures_iter(include_str!("../README.md"))
             .filter_map(|captures| {
                 let lang = captures.get(1).expect("nothing in capture group 0");
                 if lang.as_str() != "toml" {
