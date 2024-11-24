@@ -150,6 +150,25 @@ struct GetArgs {
     output: GetOutput,
 }
 
+#[derive(Clone, ValueEnum)]
+enum GetOutput {
+    Stdout,
+    Stderr,
+}
+
+impl Display for GetOutput {
+    fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            w,
+            "{}",
+            match self {
+                Self::Stdout => "stdout",
+                Self::Stderr => "stderr",
+            }
+        )
+    }
+}
+
 #[derive(Clone, ValueEnum, Debug)]
 enum GetOutput {
     Stdout,
