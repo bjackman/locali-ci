@@ -448,3 +448,80 @@ async fn should_run_test(config: &str) {
         .unwrap();
     expect_that!(child.stdout().unwrap(), eq("burgle schmurgle\n"));
 }
+
+#[googletest::test]
+#[tokio::test]
+async fn should_run_test_with_stored_results() {
+    let temp_dir = TempDir::new().unwrap();
+    let signalling_path = temp_dir.path().join("trans-output.txt");
+    let config = format!(
+        r##"
+        num_worktrees = 1
+        [[tests]]
+        name = "nobody_cares"
+        command = "echo so lonely"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_dep"
+        command = "echo when youre not strong"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_transitive_dep"
+        command = "echo ill help you carry on >> {}"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_other_dep"
+        depends_on = ["my_transitive_dep"]
+        command = "echo ill be your friend"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_test"
+        depends_on = ["my_dep", "my_other_dep"]
+        command = "echo burgle schmurgle"
+        shutdown_grace_period_s = 1
+    "##,
+        signalling_path.display()
+    );
+
+    // Awkward hack to get a result into the database: we we run my_dep (whose
+    // result won't get cached) to get my_transitive_dep into the cache.
+    let db_dir = TempDir::with_prefix("result-db").unwrap();
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .db_dir(db_dir.path().to_owned())
+        .start(&config, ["test", "my_other_dep"])
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(child.stdout().unwrap(), eq("ill be your friend\n"));
+
+    assert_that!(
+        fs::read_to_string(&signalling_path),
+        ok(eq("ill help you carry on\n"))
+    );
+
+    // Now run the actual test, reusing the result DB.
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .db_dir(db_dir.path().to_owned())
+        .start(config, ["test", "my_test"])
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(child.stdout().unwrap(), eq("burgle schmurgle\n"));
+
+    // If this fails then probably it means the result of the dependency job was not cached.
+    // But it could also be something weirder.
+    assert_that!(
+        fs::read_to_string(&signalling_path),
+        ok(eq("ill help you carry on\n")),
+    );
+}
