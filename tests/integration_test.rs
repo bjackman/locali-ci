@@ -99,7 +99,11 @@ impl LimmatChildBuilder {
         self
     }
 
-    async fn start(self, config: String) -> anyhow::Result<LimmatChild> {
+    async fn start(
+        self,
+        config: String,
+        args: impl IntoIterator<Item = &str>,
+    ) -> anyhow::Result<LimmatChild> {
         let worktree_dir = self.temp_dir.path().join("worktrees");
         create_dir(&worktree_dir).unwrap();
 
@@ -118,9 +122,8 @@ impl LimmatChildBuilder {
                 worktree_dir.to_str().unwrap(),
                 "--worktree-prefix",
                 "test-worktree-",
-                "watch",
-                "HEAD^",
             ])
+            .args(args)
             .stdin(Stdio::piped())
             .stderr(stderr)
             .stdout(Stdio::null())
@@ -228,14 +231,17 @@ async fn test_worktree_teardown(test_command: &str) {
     let mut limmat = LimmatChildBuilder::new()
         .await
         .unwrap()
-        .start(format!(
-            r##"
-        num_worktrees = 1
-        [[tests]]
-        name = "my_test"
-        command = {test_command:?}
-    "##
-        ))
+        .start(
+            format!(
+                r##"
+                num_worktrees = 1
+                [[tests]]
+                name = "my_test"
+                command = {test_command:?}
+            "##
+            ),
+            ["watch", "HEAD^"],
+        )
         .await
         .unwrap();
 
@@ -264,16 +270,18 @@ async fn shouldnt_leak_jobs() {
     let mut limmat = LimmatChildBuilder::new()
         .await
         .unwrap()
-        .start(format!(
-            r##"
-        num_worktrees = 1
-        [[tests]]
-        name = "my_test"
-        command = "echo $$ > {}/test_pid; while true; do sleep infinity; done"
-        shutdown_grace_period_s = 1
-    "##,
-            temp_dir.path().to_string_lossy()
-        ))
+        .start(
+            format!(
+                r##"
+                num_worktrees = 1
+                [[tests]]
+                name = "my_test"
+                command = "echo $$ > {}/test_pid; while true; do sleep infinity; done"
+                shutdown_grace_period_s = 1"##,
+                temp_dir.path().to_string_lossy()
+            ),
+            ["watch", "HEAD^"],
+        )
         .await
         .unwrap();
 
@@ -300,19 +308,22 @@ async fn should_invalidate_cache_when_dep_changes() {
             .await
             .unwrap()
             .db_dir(db_dir.clone())
-            .start(format!(
-                r##"
-            num_worktrees = 1
-            [[tests]]
-            name = "my_dependency"
-            command = "echo jello verld"
-            [[tests]]
-            name = "my_test"
-            command = "echo bello burld > {}"
-            depends_on = ["my_dependency"]
-        "##,
-                test_ran_path.as_os_str().to_string_lossy(),
-            ))
+            .start(
+                format!(
+                    r##"
+                        num_worktrees = 1
+                        [[tests]]
+                        name = "my_dependency"
+                        command = "echo jello verld"
+                        [[tests]]
+                        name = "my_test"
+                        command = "echo bello burld > {}"
+                        depends_on = ["my_dependency"]
+                    "##,
+                    test_ran_path.as_os_str().to_string_lossy(),
+                ),
+                ["watch", "HEAD^"],
+            )
             .await
             .unwrap();
         wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
@@ -332,19 +343,22 @@ async fn should_invalidate_cache_when_dep_changes() {
         .await
         .unwrap()
         .db_dir(db_dir)
-        .start(format!(
-            r##"
-            num_worktrees = 1
-            [[tests]]
-            name = "my_dependency"
-            command = "echo its all ogre now"
-            [[tests]]
-            name = "my_test"
-            command = "echo bello burld > {}"
-            depends_on = ["my_dependency"]
-        "##,
-            test_ran_path.as_os_str().to_string_lossy(),
-        ))
+        .start(
+            format!(
+                r##"
+                    num_worktrees = 1
+                    [[tests]]
+                    name = "my_dependency"
+                    command = "echo its all ogre now"
+                    [[tests]]
+                    name = "my_test"
+                    command = "echo bello burld > {}"
+                    depends_on = ["my_dependency"]
+                "##,
+                test_ran_path.as_os_str().to_string_lossy(),
+            ),
+            ["watch", "HEAD^"],
+        )
         .await
         .unwrap();
     wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
