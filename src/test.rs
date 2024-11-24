@@ -61,7 +61,7 @@ impl CachePolicy {
 // Some unspecified hash, don't care too much about stability across builds.
 pub type ConfigHash = u64;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct TestName(String);
 
 impl TestName {
@@ -79,6 +79,12 @@ impl AsRef<Path> for TestName {
 impl Display for TestName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl Debug for TestName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }
 
@@ -659,7 +665,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
             // (including the "impossible" case that the sender has been dropped
             // and the rx.wait_for call failed) here, we trust that the other
             // side of the notifier has reported any issues appropriately.
-            if let TestStatus::Completed(result) = test_status.map_err(|_| test_name.clone())? {
+            if let Ok(TestStatus::Completed(result)) = &test_status {
                 if result.exit_code == 0 {
                     debug!(
                         "{:?}: Dependency {:?} succeeded",
@@ -668,6 +674,10 @@ impl<'a, O: TestJobOutput> TestJob<O> {
                     continue;
                 }
             }
+            info!(
+                "Dependency {:?} of {:?} failed: {:?}",
+                test_name, self.test_case.test.name, test_status
+            );
             return Err(test_name.clone());
         }
         debug!("{:?}: Dependencies succeeded", self.test_case);
