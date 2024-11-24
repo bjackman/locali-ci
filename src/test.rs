@@ -1263,13 +1263,6 @@ mod tests {
         }
     }
 
-    struct TestScriptFixture {
-        db_dir: ManuallyDrop<TempDir>,
-        repo: Arc<TempRepo>,
-        scripts: Vec<TestScript>,
-        manager: Manager<TempRepo>,
-    }
-
     struct TestScriptFixtureBuilder {
         num_worktrees: usize,
         num_tests: usize,
@@ -1331,17 +1324,6 @@ mod tests {
         }
     }
 
-    impl Drop for TestScriptFixture {
-        fn drop(&mut self) {
-            // SAFETY: The field is never accessed again.
-            let db_dir = unsafe { ManuallyDrop::take(&mut self.db_dir) };
-            if env::var("LIMMAT_TESTS_LEAK_RESULT_DB").unwrap_or("0".to_owned()) != "0" {
-                let db_dir_path = db_dir.into_path(); // Stops it from being deleted.
-                info!("Leaking database directory {:?}", db_dir_path);
-            }
-        }
-    }
-
     async fn nonempty_temp_repo() -> Arc<TempRepo> {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         // TODO: We need to have a commit in the repo otherwise manager
@@ -1363,6 +1345,13 @@ mod tests {
         }))
         .await
         .unwrap()
+    }
+
+    struct TestScriptFixture {
+        db_dir: ManuallyDrop<TempDir>,
+        repo: Arc<TempRepo>,
+        scripts: Vec<TestScript>,
+        manager: Manager<TempRepo>,
     }
 
     impl TestScriptFixtureBuilder {
@@ -1434,6 +1423,17 @@ mod tests {
                     .expect("bad test idx")
                     .clone(),
             )
+        }
+    }
+
+    impl Drop for TestScriptFixture {
+        fn drop(&mut self) {
+            // SAFETY: The field is never accessed again.
+            let db_dir = unsafe { ManuallyDrop::take(&mut self.db_dir) };
+            if env::var("LIMMAT_TESTS_LEAK_RESULT_DB").unwrap_or("0".to_owned()) != "0" {
+                let db_dir_path = db_dir.into_path(); // Stops it from being deleted.
+                info!("Leaking database directory {:?}", db_dir_path);
+            }
         }
     }
 
