@@ -274,7 +274,7 @@ impl Config {
 #[derive(Debug)]
 pub struct ParsedConfig {
     pub num_worktrees: usize,
-    pub resource_pools: Pools,
+    pub resource_pools: Arc<Pools>,
     pub tests: TestDag,
 }
 
@@ -296,7 +296,7 @@ impl ParsedConfig {
             .collect();
         Ok(Self {
             num_worktrees: config.num_worktrees,
-            resource_pools: Pools::new(resources),
+            resource_pools: Arc::new(Pools::new(resources)),
             tests,
         })
     }

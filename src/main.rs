@@ -5,7 +5,7 @@ use dag::{Dag, GraphNode as _};
 use database::{Database, DatabaseEntry};
 use futures::future::join_all;
 use futures::StreamExt;
-use git::{PersistentWorktree, TempWorktree};
+use git::{Commit, PersistentWorktree, TempWorktree};
 use http::Ui;
 use log::info;
 use nix::sys::utsname::uname;
@@ -22,10 +22,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::{env, fs, str};
 use tempfile::TempDir;
-use test::TestResult;
 use test::{
     base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder, TestJobOutput, TestName,
 };
+use test::{Test, TestResult};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
@@ -241,31 +241,23 @@ async fn watch(
     let ui_state = ui.state();
     eg.spawn(ui.serve(cancellation_token.child_token()));
 
-    let Env {
-        repo,
-        database,
-        config:
-            ParsedConfig {
-                num_worktrees,
-                resource_pools,
-                tests,
-            },
-        worktree_builder,
-    } = env;
-    let resource_pools = Arc::new(resource_pools);
-
     // Set up the test manager, which is the weirdly-scoped god-object that
     // orchestrates test jobs.
     let test_manager = Arc::new(Manager::new(
-        repo.clone(),
-        database,
-        resource_pools.clone(),
-        tests,
+        env.repo.clone(),
+        env.database,
+        env.config.resource_pools.clone(),
+        env.config.tests,
     ));
 
     // Set up the status tracker, which shows the user what's going on in the terminal.
-    let status_tracker =
-        ui::StatusTracker::new(repo.clone(), stdout(), ui_state, result_url_base, home_url);
+    let status_tracker = ui::StatusTracker::new(
+        env.repo.clone(),
+        stdout(),
+        ui_state,
+        result_url_base,
+        home_url,
+    );
 
     // Kick off creation of the worktrees that the test manager will run jobs in.
     //
@@ -277,11 +269,11 @@ async fn watch(
     // this, but the solution would be to create the worktrees ondemand, when we have a revision we
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
-    for _ in 0..num_worktrees {
-        let repo = repo.clone();
+    for _ in 0..env.config.num_worktrees {
+        let repo = env.repo.clone();
         let ct = cancellation_token.child_token();
-        let resource_pools = resource_pools.clone();
-        let dir = worktree_builder.build()?;
+        let resource_pools = env.config.resource_pools.clone();
+        let dir = env.worktree_builder.build()?;
         eg.spawn(async move {
             let worktree = TempWorktree::new::<PersistentWorktree>(&ct, repo.as_ref(), dir).await?;
             resource_pools.add([(ResourceKey::Worktree, Resource::Worktree(worktree))]);
@@ -295,7 +287,7 @@ async fn watch(
         test_manager.clone(),
         status_tracker,
         format!("{}..HEAD", watch_args.base).into(),
-        repo,
+        env.repo,
     ));
 
     let end_result = eg.wait().await;
@@ -341,43 +333,25 @@ impl TestJobOutput for OneshotOutput {
     }
 }
 
-async fn test(
-    env: Env,
+// Run a set of tests at a given version, in worktrees, in parallel, unless
+// there's already a result in the database. Error if any fail.
+async fn ensure_tests_run<'a, I, J>(
+    env: &Env,
     cancellation_token: CancellationToken,
-    test_args: &TestArgs,
-) -> anyhow::Result<()> {
-    let test_name = TestName::new(test_args.test.clone());
-    // So we can cache the results in the database, the dependency jobs will be run at HEAD.
-    let head = env
-        .repo
-        .rev_parse("HEAD")
-        .await
-        .context("failed to look up HEAD commit")?
-        .ok_or(anyhow!("no HEAD commit - repo empty?"))?;
-    let job_env = Arc::new(base_job_env(env.repo.path()));
-
-    let Env {
-        repo,
-        database,
-        config:
-            ParsedConfig {
-                num_worktrees,
-                resource_pools,
-                tests,
-            },
-        worktree_builder,
-    } = env;
-
-    // Only need worktrees for the tests that needs worktrees.
-    let dep_tests = tests
-        .top_down_from(&test_name)
-        .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?
-        // Exclude the main test, we'll run that separately.
-        .skip(1);
+    tests: I,
+    rev: &Commit,
+) -> anyhow::Result<()>
+where
+    I: IntoIterator<IntoIter = J>,
+    J: Iterator<Item = &'a Arc<Test>> + Clone,
+{
+    let tests = tests.into_iter();
     let num_worktrees = min(
-        num_worktrees,
-        dep_tests.clone().filter(|t| t.needs_worktree()).count(),
+        env.config.num_worktrees,
+        tests.clone().filter(|t| t.needs_worktree()).count(),
     );
+
+    let job_env = Arc::new(base_job_env(env.repo.path()));
 
     // Get the graph of tests we need to run as dependencies.
     // This is kinda inefficient: we're building a new Dag based on a subset of
@@ -388,9 +362,9 @@ async fn test(
     //    validation
     // 2. We could build the subset graph in place, i.e. totally skip making a
     //    new graph and instead just logicall remove the nodes we don't need.
-    let dep_jobs = Dag::new(
+    let jobs = Dag::new(
         // TODO: Would be nice to have an _into thing so we can avoid this clone.
-        dep_tests.map(|t| TestCase::new(head.clone(), t.clone())),
+        tests.map(|t| TestCase::new(rev.clone(), t.clone())),
     )
     .context("setting up dependency test graph")?
     .bottom_up()
@@ -412,7 +386,7 @@ async fn test(
                 // TODO: it would be nice if we had an into_ variant of
                 // the bottom_up so we didn't need this clone.
                 test_case.clone(),
-                database.create_output(test_case)?,
+                env.database.create_output(test_case)?,
                 job_env.clone(),
                 wait_for,
             )
@@ -422,18 +396,15 @@ async fn test(
         },
     )?;
 
-    println!("Running {} dependency jobs", dep_jobs.len());
-
     // Kick off creation of the worktrees that the dep jobs will run in.
     // This is horribly copy-pasted from watch. I dunno, I can't figure out how
     // to fix that without insanely complex async stuff.
-    let resource_pools = Arc::new(resource_pools);
     let mut eg = ErrGroup::new(cancellation_token.clone());
     for _ in 0..num_worktrees {
-        let repo = repo.clone();
+        let repo = env.repo.clone();
         let ct = cancellation_token.child_token();
-        let resource_pools = resource_pools.clone();
-        let dir = worktree_builder.build()?;
+        let resource_pools = env.config.resource_pools.clone();
+        let dir = env.worktree_builder.build()?;
         eg.spawn(async move {
             let worktree = TempWorktree::new::<PersistentWorktree>(&ct, repo.as_ref(), dir).await?;
             resource_pools.add([(ResourceKey::Worktree, Resource::Worktree(worktree))]);
@@ -441,37 +412,70 @@ async fn test(
         });
     }
 
-    for (_, job) in dep_jobs {
+    for (_, job) in jobs {
         eg.spawn(ensure_job_success(
-            resource_pools.clone(),
+            env.config.resource_pools.clone(),
             job,
-            repo.path.clone(),
+            env.repo.path.clone(),
         ))
     }
 
     let end_result = eg.wait().await;
 
     // Now we have to remember to clean up before returning the result :/
-    join_all(resource_pools.try_remove_worktrees().map(|w| w.cleanup())).await;
+    join_all(
+        env.config
+            .resource_pools
+            .try_remove_worktrees()
+            .map(|w| w.cleanup()),
+    )
+    .await;
 
-    end_result?;
-    println!("Dependency jobs complete");
+    end_result
+}
 
-    let test = tests.node(&test_name).unwrap();
+async fn test(
+    env: Env,
+    cancellation_token: CancellationToken,
+    test_args: &TestArgs,
+) -> anyhow::Result<()> {
+    let test_name = TestName::new(test_args.test.clone());
+    // So we can cache the results in the database, the dependency jobs will be run at HEAD.
+    let head = env
+        .repo
+        .rev_parse("HEAD")
+        .await
+        .context("failed to look up HEAD commit")?
+        .ok_or(anyhow!("no HEAD commit - repo empty?"))?;
+
+    // Only need worktrees for the tests that needs worktrees.
+    let dep_tests = env
+        .config
+        .tests
+        .top_down_from(&test_name)
+        .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?
+        // Exclude the main test, we'll run that separately.
+        .skip(1);
+
+    println!("Running {} dependency jobs...", dep_tests.clone().count());
+    ensure_tests_run(&env, cancellation_token.child_token(), dep_tests, &head).await?;
+    println!("Dependency jobs complete.");
+
+    let test = env.config.tests.node(&test_name).unwrap();
     let test_case = TestCase::new(head.clone(), test.clone());
     let mut needs_resources = test_case.test.needs_resources.clone();
     let mut job = TestJobBuilder::new(
         cancellation_token.clone(),
         test_case,
         OneshotOutput {},
-        job_env.clone(),
+        Arc::new(base_job_env(env.repo.path())),
         Vec::new(), // wait_for
     )
     .build();
     // Doesn't need a worktree, it's gonna do it live and direct in the main tree.
     needs_resources.remove(&ResourceKey::Worktree);
-    let resources = resource_pools.get(needs_resources).await;
-    match job.run(repo.path(), &resources).await? {
+    let resources = env.config.resource_pools.get(needs_resources).await;
+    match job.run(env.repo.path(), &resources).await? {
         None => println!("Canceled"),
         Some(exit_code) => println!("Job completed with exit code {exit_code}"),
     }
