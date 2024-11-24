@@ -5,10 +5,10 @@ use std::{
     process::{ExitStatus, Stdio},
     str::FromStr,
     thread::panicking,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use anyhow::{bail, Context as _};
+use anyhow::{anyhow, bail, Context as _};
 use glob::glob;
 #[allow(unused_imports)]
 use log::{debug, info};
@@ -23,20 +23,24 @@ use test_case::test_case;
 use tokio::{
     io::AsyncWriteExt as _,
     process::{Child, Command},
+    time::{sleep, timeout},
 };
 
-fn wait_for<F>(mut predicate: F, timeout: Duration) -> anyhow::Result<()>
+async fn wait_for<F>(mut predicate: F, timeout_dur: Duration) -> anyhow::Result<()>
 where
     F: FnMut() -> anyhow::Result<bool>,
 {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if predicate().context("timeout predicate failed")? {
-            return Ok(());
+    timeout(timeout_dur, async {
+        loop {
+            match predicate() {
+                Ok(true) => break Ok(()),
+                Ok(false) => sleep(Duration::from_millis(100)).await,
+                Err(err) => break Err(anyhow!("timeout predicate failed: {}", err)),
+            }
         }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    bail!("timeout after {:?}", timeout)
+    })
+    .await
+    .context(format!("timeout after {:?}", timeout_dur))?
 }
 
 // Add a reasonable method for sending general signals, Rust only provides a method to SIGKILL.
@@ -191,7 +195,7 @@ impl LimmatChild {
             .is_empty())
     }
 
-    fn terminate(&mut self) -> anyhow::Result<()> {
+    async fn terminate(&mut self) -> anyhow::Result<()> {
         self.child.signal(Signal::SIGINT).unwrap();
         wait_for(
             || {
@@ -212,6 +216,7 @@ impl LimmatChild {
             },
             Duration::from_secs(5),
         )
+        .await
     }
 }
 
@@ -235,9 +240,10 @@ async fn test_worktree_teardown(test_command: &str) {
         .unwrap();
 
     wait_for(|| limmat.has_worktrees(), Duration::from_secs(5))
+        .await
         .expect("worktree not found after 5s");
 
-    limmat.terminate().expect("couldn't shut down child");
+    limmat.terminate().await.expect("couldn't shut down child");
 
     assert!(
         !limmat.has_worktrees().unwrap(),
@@ -274,10 +280,11 @@ async fn shouldnt_leak_jobs() {
     // Wait for test to start up
     let test_pid_path = temp_dir.path().join("test_pid");
     wait_for(|| Ok(test_pid_path.exists()), Duration::from_secs(5))
+        .await
         .expect("worktree not found after 5s");
     let pid: pid_t = pid_t::from_str(fs::read_to_string(test_pid_path).unwrap().trim()).unwrap();
 
-    limmat.terminate().unwrap();
+    limmat.terminate().await.unwrap();
     assert!(!pid_running(pid));
 }
 
@@ -308,7 +315,9 @@ async fn should_invalidate_cache_when_dep_changes() {
             ))
             .await
             .unwrap();
-        wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5)).expect("test not ran");
+        wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
+            .await
+            .expect("test not ran");
 
         // Shut down child by dropping it. This is racy, it's possible we
         // haven't finished writing the test DB yet. In that case this test
@@ -339,5 +348,6 @@ async fn should_invalidate_cache_when_dep_changes() {
         .await
         .unwrap();
     wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
+        .await
         .expect("test not re-ran when dependency config changed");
 }
