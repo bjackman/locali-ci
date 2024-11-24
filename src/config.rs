@@ -92,12 +92,8 @@ pub struct Test {
     shutdown_grace_period_s: u64,
     #[serde(default = "default_cache_policy")]
     cache: CachePolicy,
-    #[serde(default = "default_depends_on")]
+    #[serde(default)]
     depends_on: Vec<String>,
-}
-
-fn default_depends_on() -> Vec<String> {
-    vec![]
 }
 
 fn default_requires_worktree() -> bool {
@@ -187,16 +183,12 @@ pub struct Config {
     pub num_worktrees: usize,
     resources: Option<Vec<Resource>>,
     // Default is just here to make testing snippets from the documentation easier.
-    #[serde(default = "default_tests")]
+    #[serde(default)]
     tests: Vec<Test>,
 }
 
 fn default_num_worktrees() -> usize {
     8
-}
-
-fn default_tests() -> Vec<Test> {
-    vec![]
 }
 
 type ResourceTokens = HashMap<ResourceKey, Vec<String>>;
