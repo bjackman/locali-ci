@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    database::{Database, DatabaseEntry},
+    database::{Database, DatabaseOutput},
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
@@ -226,7 +226,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     fn cache_lookup(&self, test_case: &TestCase) -> Option<TestResult> {
         match self
             .result_db
-            .cached_result(test_case)
+            .lookup_result(test_case)
             .context("reading cached test result")
         {
             Err(err) => {
@@ -237,7 +237,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }
     }
 
-    fn spawn_job(&self, mut job: TestJob<DatabaseEntry>) {
+    fn spawn_job(&self, mut job: TestJob<DatabaseOutput>) {
         if let Some(test_result) = self.cache_lookup(&job.test_case) {
             let result = TestStatus::Completed(test_result);
             job.notifier.notify_completion(result.clone());
@@ -349,7 +349,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // them into a HashMap instead.
         let jobs = test_cases.bottom_up().try_fold(
             HashMap::new(),
-            |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob<DatabaseEntry>>> {
+            |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob<DatabaseOutput>>> {
                 let wait_for = test_case
                     .child_ids() // This gives the TestCaseIds of dependency jobs.
                     .iter()

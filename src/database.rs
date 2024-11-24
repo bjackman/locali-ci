@@ -44,7 +44,7 @@ impl Database {
         self.base_dir.join::<&str>(hash.as_ref()).join(test_name)
     }
 
-    pub fn cached_result(&self, test_case: &TestCase) -> Result<Option<TestResult>> {
+    pub fn lookup_result(&self, test_case: &TestCase) -> Result<Option<TestResult>> {
         let hash = match test_case.cache_hash {
             None => return Ok(None),
             Some(ref hash) => hash,
@@ -69,8 +69,8 @@ impl Database {
 
     // Prepare to create the output directory for a job output, but don't actually create it yet.
     // It's created once you use one of the methods of CommitOutput for writing data.
-    pub fn create_output(&self, test_case: &TestCase) -> anyhow::Result<DatabaseEntry> {
-        DatabaseEntry::new(
+    pub fn create_output(&self, test_case: &TestCase) -> anyhow::Result<DatabaseOutput> {
+        DatabaseOutput::new(
             self.result_path(test_case.storage_hash(), &test_case.test.name),
             test_case.test.config_hash,
         )
@@ -78,7 +78,7 @@ impl Database {
 }
 
 // Output for an individual test job, stored into the database
-pub struct DatabaseEntry {
+pub struct DatabaseOutput {
     base_dir: PathBuf,
     base_dir_created: bool,
     stdout_opened: bool,
@@ -87,7 +87,7 @@ pub struct DatabaseEntry {
     config_hash: ConfigHash,
 }
 
-impl DatabaseEntry {
+impl DatabaseOutput {
     pub fn new(base_dir: PathBuf, config_hash: ConfigHash) -> anyhow::Result<Self> {
         Ok(Self {
             base_dir,
@@ -117,7 +117,7 @@ impl DatabaseEntry {
     }
 }
 
-impl TestJobOutput for DatabaseEntry {
+impl TestJobOutput for DatabaseOutput {
     fn stdout(&mut self) -> Result<Stdio> {
         assert!(!self.stdout_opened);
         self.stdout_opened = true;

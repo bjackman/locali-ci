@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::{arg, Parser as _, Subcommand};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
-use database::{Database, DatabaseEntry};
+use database::{Database, DatabaseOutput};
 use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
@@ -307,7 +307,7 @@ async fn watch(
 
 async fn ensure_job_success(
     resource_pools: Arc<Pools>,
-    mut job: TestJob<DatabaseEntry>,
+    mut job: TestJob<DatabaseOutput>,
     origin_worktree: PathBuf,
 ) -> anyhow::Result<()> {
     job.await_dep_success()
@@ -366,7 +366,7 @@ async fn ensure_tests_run(
     .bottom_up()
     .try_fold(
         HashMap::new(),
-        |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob<DatabaseEntry>>> {
+        |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob<DatabaseOutput>>> {
             let wait_for = test_case
                 .child_ids() // This gives the TestCaseIds of dependency jobs.
                 .iter()
