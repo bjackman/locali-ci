@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    database::{Database, DatabaseEntry, DatabaseOutput},
+    database::{Database, DatabaseOutput},
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
@@ -229,22 +229,13 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }
     }
 
-    fn cache_lookup(&self, test_case: &TestCase) -> Option<DatabaseEntry> {
-        match self
-            .result_db
-            .lookup_result(test_case)
-            .context("reading cached test result")
-        {
-            Err(err) => {
-                error!("Failed to read cached test result, will overwrite: {err:?}");
-                None
-            }
-            Ok(maybe_entry) => maybe_entry,
-        }
-    }
-
     fn spawn_job(&self, mut job: TestJob<DatabaseOutput>) {
-        if let Some(db_entry) = self.cache_lookup(&job.test_case) {
+        if let Some(db_entry) = self
+            .result_db
+            .lookup_result(&job.test_case)
+            .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
+            .unwrap_or(None)
+        {
             let result = TestStatus::Completed(db_entry.result().clone());
             job.notifier.notify_completion(result.clone());
             return;
