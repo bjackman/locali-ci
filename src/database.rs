@@ -44,27 +44,24 @@ impl Database {
         self.base_dir.join::<&str>(hash.as_ref()).join(test_name)
     }
 
-    pub fn lookup_result(&self, test_case: &TestCase) -> Result<Option<TestResult>> {
+    pub fn lookup_result(&self, test_case: &TestCase) -> Result<Option<DatabaseEntry>> {
         let hash = match test_case.cache_hash {
             None => return Ok(None),
             Some(ref hash) => hash,
         };
-        let result_path = self
-            .result_path(hash, &test_case.test.name)
-            .join("result.json");
-        if !result_path.exists() {
+
+        let base_dir = self.result_path(hash, &test_case.test.name);
+        if !base_dir.exists() {
             return Ok(None);
         }
+        let entry = DatabaseEntry::open(&base_dir)?;
 
-        let entry: TestResultEntry =
-            serde_json::from_str(&fs::read_to_string(result_path).context("reading result JSON")?)
-                .context("parsing result JSON")?;
-        if entry.config_hash != test_case.test.config_hash {
+        if entry.result.config_hash != test_case.test.config_hash {
             // Configuration changed, need to re-run.
             return Ok(None);
         }
 
-        Ok(Some(entry.result))
+        Ok(Some(entry))
     }
 
     // Prepare to create the output directory for a job output, but don't actually create it yet.
@@ -74,6 +71,26 @@ impl Database {
             self.result_path(test_case.storage_hash(), &test_case.test.name),
             test_case.test.config_hash,
         )
+    }
+}
+
+// Existing entry in the database.
+pub struct DatabaseEntry {
+    result: TestResultEntry,
+}
+
+impl DatabaseEntry {
+    fn open(base_dir: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            result: serde_json::from_str(
+                &fs::read_to_string(base_dir.join("result.json")).context("reading result JSON")?,
+            )
+            .context("parsing result JSON")?,
+        })
+    }
+
+    pub fn result(&self) -> &TestResult {
+        &self.result.result
     }
 }
 
