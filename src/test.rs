@@ -224,21 +224,16 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     }
 
     fn cache_lookup(&self, test_case: &TestCase) -> Option<TestResult> {
-        match test_case.cache_hash {
-            Some(ref hash) => {
-                match self
-                    .result_db
-                    .cached_result(hash, &test_case.test.name, test_case.test.config_hash)
-                    .context("reading cached test result")
-                {
-                    Err(err) => {
-                        error!("Failed to read cached test result, will overwrite: {err:?}");
-                        None
-                    }
-                    Ok(maybe_result) => maybe_result,
-                }
+        match self
+            .result_db
+            .cached_result(test_case)
+            .context("reading cached test result")
+        {
+            Err(err) => {
+                error!("Failed to read cached test result, will overwrite: {err:?}");
+                None
             }
-            None => None,
+            Ok(maybe_result) => maybe_result,
         }
     }
 

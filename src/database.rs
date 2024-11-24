@@ -44,14 +44,14 @@ impl Database {
         self.base_dir.join::<&str>(hash.as_ref()).join(test_name)
     }
 
-    pub fn cached_result(
-        &self,
-        hash: &Hash,
-        test_name: &TestName,
-        // Hash of the config that created the test.
-        config_hash: ConfigHash,
-    ) -> Result<Option<TestResult>> {
-        let result_path = self.result_path(hash, test_name).join("result.json");
+    pub fn cached_result(&self, test_case: &TestCase) -> Result<Option<TestResult>> {
+        let hash = match test_case.cache_hash {
+            None => return Ok(None),
+            Some(ref hash) => hash,
+        };
+        let result_path = self
+            .result_path(hash, &test_case.test.name)
+            .join("result.json");
         if !result_path.exists() {
             return Ok(None);
         }
@@ -59,7 +59,7 @@ impl Database {
         let entry: TestResultEntry =
             serde_json::from_str(&fs::read_to_string(result_path).context("reading result JSON")?)
                 .context("parsing result JSON")?;
-        if entry.config_hash != config_hash {
+        if entry.config_hash != test_case.test.config_hash {
             // Configuration changed, need to re-run.
             return Ok(None);
         }
