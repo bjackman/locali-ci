@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context};
-use clap::{arg, Parser as _, Subcommand};
+use clap::{arg, Parser as _, Subcommand, ValueEnum};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
 use database::{Database, DatabaseOutput};
@@ -15,12 +15,13 @@ use std::borrow::Borrow as _;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fmt::Display;
 use std::io::{stdout, Stdout};
 use std::path::PathBuf;
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::{env, fs, str};
+use std::{env, fmt, fs, str};
 use tempfile::TempDir;
 use test::{
     base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder, TestJobOutput, TestName,
@@ -144,6 +145,28 @@ struct GetArgs {
     run: bool,
     /// Revision to test. Any git revspec is fine.
     rev: String,
+    /// Which output from the job do we want?
+    #[arg(default_value_t = GetOutput::Stdout)]
+    output: GetOutput,
+}
+
+#[derive(Clone, ValueEnum)]
+enum GetOutput {
+    Stdout,
+    Stderr,
+}
+
+impl Display for GetOutput {
+    fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            w,
+            "{}",
+            match self {
+                Self::Stdout => "stdout",
+                Self::Stderr => "stderr",
+            }
+        )
+    }
 }
 
 #[derive(Subcommand)]
@@ -536,8 +559,10 @@ async fn get(
                 rev.hash
             )
         })?;
-    println!("{}", db_entry.stdout_path().display());
-
+    match get_args.output {
+        GetOutput::Stdout => println!("{}", db_entry.stdout_path().display()),
+        GetOutput::Stderr => println!("{}", db_entry.stderr_path().display()),
+    }
     Ok(())
 }
 

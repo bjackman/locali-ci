@@ -526,21 +526,27 @@ async fn should_run_test_with_stored_results() {
     );
 }
 
+#[test_case("burgle schmurgle\n", "bungle bingle\n" ; "no merge")]
 #[googletest::test]
 #[tokio::test]
-async fn should_find_stdout() {
-    let mut child = LimmatChildBuilder::new()
-        .await
-        .unwrap()
-        .start(
-            r##"
+async fn should_find_output(want_stdout: &str, want_stderr: &str) {
+    let config = r##"
             num_worktrees = 1
             [[tests]]
             name = "my_test"
-            command = "echo burgle schmurgle"
-            shutdown_grace_period_s = 1"##,
-            ["get", "--run", "my_test", "HEAD^"],
-        )
+            command = """
+            echo burgle schmurgle
+            echo bungle bingle >&2
+            """
+
+            shutdown_grace_period_s = 1
+        "##;
+    let db_dir = TempDir::with_prefix("result-db").unwrap();
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .db_dir(db_dir.path().to_owned())
+        .start(&config, ["get", "--run", "my_test", "HEAD^"])
         .await
         .unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
@@ -549,6 +555,22 @@ async fn should_find_stdout() {
         .unwrap();
     expect_that!(
         fs::read_to_string(child.stdout().unwrap().trim()),
-        ok(eq("burgle schmurgle\n"))
+        ok(eq(want_stdout))
+    );
+
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .db_dir(db_dir.path().to_owned())
+        .start(config, ["get", "my_test", "HEAD^", "stderr"])
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(
+        fs::read_to_string(child.stdout().unwrap().trim()),
+        ok(eq(want_stderr))
     );
 }

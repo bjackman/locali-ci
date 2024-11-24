@@ -102,6 +102,10 @@ impl DatabaseEntry {
     pub fn stdout_path(&self) -> PathBuf {
         self.base_path.join("stdout.txt")
     }
+
+    pub fn stderr_path(&self) -> PathBuf {
+        self.base_path.join("stderr.txt")
+    }
 }
 
 // Output for an individual test job, stored into the database
