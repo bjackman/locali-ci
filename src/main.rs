@@ -328,7 +328,7 @@ impl TestJobOutput for OneshotOutput {
         Ok(Stdio::inherit())
     }
     fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
-        println!("Job result: {result:?}");
+        eprintln!("Job result: {result:?}");
         Ok(())
     }
 }
@@ -454,9 +454,9 @@ async fn test(
         .skip(1)
         .collect();
 
-    println!("Running {} dependency jobs...", dep_tests.len());
+    eprintln!("Running {} dependency jobs...", dep_tests.len());
     ensure_tests_run(&env, cancellation_token.child_token(), dep_tests, &head).await?;
-    println!("Dependency jobs complete.");
+    eprintln!("Dependency jobs complete.");
 
     let test = env.config.tests.node(&test_name).unwrap();
     let test_case = TestCase::new(head.clone(), test.clone());
@@ -473,7 +473,7 @@ async fn test(
     needs_resources.remove(&ResourceKey::Worktree);
     let resources = env.config.resource_pools.get(needs_resources).await;
     let status = job.run_with_resources(env.repo.path(), &resources).await;
-    println!("Finished: {}", status);
+    eprintln!("Finished: {}", status);
     status.into()
 }
 

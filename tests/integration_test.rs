@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _};
 use glob::glob;
+use googletest::{expect_that, prelude::*};
 #[allow(unused_imports)]
 use log::{debug, info};
 use nix::{
@@ -101,13 +102,14 @@ impl LimmatChildBuilder {
 
     async fn start(
         self,
-        config: String,
+        config: impl AsRef<str>,
         args: impl IntoIterator<Item = &str>,
     ) -> anyhow::Result<LimmatChild> {
         let worktree_dir = self.temp_dir.path().join("worktrees");
         create_dir(&worktree_dir).unwrap();
 
         let stderr = File::create(self.temp_dir.path().join("stderr.txt"))?;
+        let stdout = File::create(self.temp_dir.path().join("stdout.txt"))?;
 
         let mut cmd: Command = get_test_bin("limmat").into();
         let cmd = cmd
@@ -126,13 +128,13 @@ impl LimmatChildBuilder {
             .args(args)
             .stdin(Stdio::piped())
             .stderr(stderr)
-            .stdout(Stdio::null())
+            .stdout(stdout)
             .env("RUST_LOG", "debug")
             .kill_on_drop(true);
         let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
 
-        stdin.write_all(config.as_bytes()).await.unwrap();
+        stdin.write_all(config.as_ref().as_bytes()).await.unwrap();
         Ok(LimmatChild {
             temp_dir: self.temp_dir,
             child,
@@ -144,6 +146,21 @@ impl LimmatChildBuilder {
 struct LimmatChild {
     temp_dir: TempDir,
     child: Child,
+}
+
+impl LimmatChild {
+    // Block until the process has terminated and return an error if isn't successful.
+    async fn expect_success(&mut self) -> anyhow::Result<()> {
+        let status = self.child.wait().await.expect("error waiting for child");
+        if !status.success() {
+            bail!("Child process didn't succed: {:?}", status);
+        }
+        Ok(())
+    }
+
+    fn stdout(&self) -> anyhow::Result<String> {
+        fs::read_to_string(self.temp_dir.path().join("stdout.txt")).context("reading child stdout")
+    }
 }
 
 impl Drop for LimmatChild {
@@ -364,4 +381,70 @@ async fn should_invalidate_cache_when_dep_changes() {
     wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
         .await
         .expect("test not re-ran when dependency config changed");
+}
+
+#[test_case(
+    r##"
+        num_worktrees = 1
+        [[tests]]
+        name = "my_test"
+        command = "echo burgle schmurgle"
+        shutdown_grace_period_s = 1
+    "##;
+    "smoke")]
+#[test_case(
+    r##"
+        num_worktrees = 1
+        [[tests]]
+        name = "my_dep"
+        command = "echo lean on me"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_test"
+        depends_on = ["my_dep"]
+        command = "echo burgle schmurgle"
+        shutdown_grace_period_s = 1
+    "##;
+    "one_dep")]
+#[test_case(
+    r##"
+        num_worktrees = 1
+        [[tests]]
+        name = "nobody_cares"
+        command = "echo so lonely"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_dep"
+        command = "echo when youre not strong"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_transitive_dep"
+        command = "echo ill help you carry one"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_other_dep"
+        depends_on = ["my_transitive_dep"]
+        command = "echo ill be your friend"
+        shutdown_grace_period_s = 1
+        [[tests]]
+        name = "my_test"
+        depends_on = ["my_dep", "my_other_dep"]
+        command = "echo burgle schmurgle"
+        shutdown_grace_period_s = 1
+    "##;
+    "loads")]
+#[googletest::test]
+#[tokio::test]
+async fn should_run_test(config: &str) {
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .start(config, ["test", "my_test"])
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(child.stdout().unwrap(), eq("burgle schmurgle\n"));
 }
