@@ -238,11 +238,12 @@ for static HTML documentation.
 
 These environment variables are passed to your job.
 
-| Name                              | Value                                                 |
-| --------------------------------- | ----------------------------------------------------- |
-| `LIMMAT_ORIGIN`                   | Path of the main repository worktree (i.e. `--repo`). |
-| `LIMMAT_COMMIT`                   | Hash of the commit to be tested.                      |
-| `LIMMAT_RESOURCE_<resource_name>` | Values for [resources](#resources) used by the test.  |
+| Name                                  | Value                                                                                     |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `LIMMAT_ORIGIN`                       | Path of the main repository worktree (i.e. `--repo`).                                     |
+| `LIMMAT_COMMIT`                       | Hash of the commit to be tested.                                                          |
+| `LIMMAT_RESOURCE_<resource_name>_<n>` | Values for [resources](#resources) used by the test.                                      |
+| `LIMMAT_RESOURCE_<resource_name>`     | If the test only uses one of a resource, shortand for `LIMMAT_RESOURCE_<resource_name>_0` |
 
 ### Advanced example
 

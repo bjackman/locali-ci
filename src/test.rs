@@ -706,6 +706,9 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         }
         // Set up env vars to communicate token values.
         for (resource_name, tokens) in resources.tokens() {
+            if tokens.len() == 1 {
+                cmd = cmd.env(format!("LIMMAT_RESOURCE_{}", resource_name), &tokens[0]);
+            }
             for (i, token) in tokens.iter().enumerate() {
                 debug!(
                     "{} = {}",
