@@ -335,16 +335,12 @@ impl TestJobOutput for OneshotOutput {
 
 // Run a set of tests at a given version, in worktrees, in parallel, unless
 // there's already a result in the database. Error if any fail.
-async fn ensure_tests_run<'a, I, J>(
+async fn ensure_tests_run(
     env: &Env,
     cancellation_token: CancellationToken,
-    tests: I,
+    tests: Vec<&Arc<Test>>,
     rev: &Commit,
-) -> anyhow::Result<()>
-where
-    I: IntoIterator<IntoIter = J>,
-    J: Iterator<Item = &'a Arc<Test>> + Clone,
-{
+) -> anyhow::Result<()> {
     let tests = tests.into_iter();
     let num_worktrees = min(
         env.config.num_worktrees,
@@ -449,15 +445,16 @@ async fn test(
         .ok_or(anyhow!("no HEAD commit - repo empty?"))?;
 
     // Only need worktrees for the tests that needs worktrees.
-    let dep_tests = env
+    let dep_tests: Vec<&Arc<Test>> = env
         .config
         .tests
         .top_down_from(&test_name)
         .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?
         // Exclude the main test, we'll run that separately.
-        .skip(1);
+        .skip(1)
+        .collect();
 
-    println!("Running {} dependency jobs...", dep_tests.clone().count());
+    println!("Running {} dependency jobs...", dep_tests.len());
     ensure_tests_run(&env, cancellation_token.child_token(), dep_tests, &head).await?;
     println!("Dependency jobs complete.");
 
