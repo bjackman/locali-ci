@@ -5,6 +5,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+#[allow(unused_imports)]
+use log::debug;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -81,9 +83,11 @@ pub struct DatabaseEntry {
 
 impl DatabaseEntry {
     fn open(base_dir: &Path) -> anyhow::Result<Self> {
+        let json_path = base_dir.join("result.json");
         Ok(Self {
             result: serde_json::from_str(
-                &fs::read_to_string(base_dir.join("result.json")).context("reading result JSON")?,
+                &fs::read_to_string(base_dir.join("result.json"))
+                    .with_context(|| format!("reading result JSON from {:?}", json_path))?,
             )
             .context("parsing result JSON")?,
         })
@@ -106,6 +110,7 @@ pub struct DatabaseOutput {
 
 impl DatabaseOutput {
     pub fn new(base_dir: PathBuf, config_hash: ConfigHash) -> anyhow::Result<Self> {
+        debug!("Creating database entry at {base_dir:?}");
         Ok(Self {
             base_dir,
             base_dir_created: false,
