@@ -49,7 +49,7 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
 ## Needed features (high to low priority):
 
- - BLOCKER: Store output artifacts.
+ - Store output artifacts.
    - Provide a way to limit the size of the result cache.
    - Location of this should be configurable.
  - Need a way to install it without `cargo`.
@@ -110,8 +110,16 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
    are created? I dunno though maybe that's pointless with the `test` comamnd.
    Starting the tool up shouldn't need to be something you do very often after
    we have that.
+ - Provide option to run some tests inclusively of the base commit? Maybe
+   overkill, user can just add `^`
  - Support multiple repos?
  - Respect git's color configuration.
+ - Do we want a command like `limmat test` but that runs _all_ tests, and which
+   interacts with the result DB? Usecases:
+    - Integration testing limmat
+    - Using limmat.toml as your CI config
+   Are these good usecases? I think probably not so I'm hesitant to add this API
+   surface.
 
 Probably sketchy design choices:
 
