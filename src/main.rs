@@ -148,7 +148,7 @@ enum Command {
 struct Env {
     config: ParsedConfig,
     repo: Arc<git::PersistentWorktree>,
-    database: Database,
+    database: Arc<Database>,
     worktree_builder: WorktreeBuilder,
 }
 
@@ -306,6 +306,7 @@ async fn watch(
 }
 
 async fn ensure_job_success(
+    database: Arc<Database>,
     resource_pools: Arc<Pools>,
     mut job: TestJob<DatabaseOutput>,
     origin_worktree: PathBuf,
@@ -313,7 +314,7 @@ async fn ensure_job_success(
     job.await_dep_success()
         .await
         .map_err(|name| anyhow!("dependency job {name:?} failed"))?;
-    job.run(resource_pools.as_ref(), &origin_worktree)
+    job.run(database, resource_pools.as_ref(), &origin_worktree)
         .await
         .into()
 }
@@ -410,10 +411,11 @@ async fn ensure_tests_run(
 
     for (_, job) in jobs {
         eg.spawn(ensure_job_success(
+            env.database.clone(),
             env.config.resource_pools.clone(),
             job,
-            env.repo.path.clone(),
-        ))
+            env.repo.path().to_owned(),
+        ));
     }
 
     let end_result = eg.wait().await;
@@ -512,7 +514,7 @@ async fn main() -> anyhow::Result<()> {
     let env = Env {
         config,
         repo: Arc::new(repo),
-        database: Database::create_or_open(&args.result_db)?,
+        database: Arc::new(Database::create_or_open(&args.result_db)?),
         worktree_builder: WorktreeBuilder {
             prefix: args.worktree_prefix.into(),
             parent_dir: args.worktree_dir.into(),

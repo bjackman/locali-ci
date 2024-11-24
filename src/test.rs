@@ -193,7 +193,7 @@ pub struct Manager<W: Worktree> {
     // jobs, and also tracks access to reused worktrees. The indices of the token-type resources
     // will be referenced by Test::needs_resource_idx values.
     resource_pools: Arc<Pools>,
-    result_db: Database,
+    result_db: Arc<Database>,
     job_env: Arc<Vec<(String, String)>>,
 }
 
@@ -210,7 +210,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // This is mandatory instead of defaulting to the user's main database,
         // because we want it to be hard to accidentally refer to global
         // resources like that.
-        result_db: Database,
+        result_db: Arc<Database>,
         resource_pools: Arc<Pools>,
         tests: TestDag,
     ) -> Self {
@@ -230,21 +230,11 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
     }
 
     fn spawn_job(&self, mut job: TestJob<DatabaseOutput>) {
-        if let Some(db_entry) = self
-            .result_db
-            .lookup_result(&job.test_case)
-            .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
-            .unwrap_or(None)
-        {
-            let result = TestStatus::Completed(db_entry.result().clone());
-            job.notifier.notify_completion(result.clone());
-            return;
-        }
-
         job.notifier.notify(&TestStatus::Enqueued);
 
         let pools = self.resource_pools.clone();
         let origin_worktree = self.repo.clone();
+        let db = self.result_db.clone();
         tokio::spawn(async move {
             // Wait for dependencies do be done, bail early if they do anything
             // but terminate successfully.
@@ -258,7 +248,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 job.notifier.notify_completion(status);
                 return;
             }
-            job.run(&pools, origin_worktree.path()).await;
+            job.run(db, &pools, origin_worktree.path()).await;
         });
     }
 
@@ -608,8 +598,25 @@ impl<'a, O: TestJobOutput> TestJob<O> {
     }
 
     // This is the normal entry point to run a job. It gets the necessary
-    // resources from the pools and runs the job.
-    pub async fn run(self, pools: &Pools, origin_worktree_path: &Path) -> TestStatus {
+    // resources from the pools and runs the job. It takes care of notifying
+    // anyone who needs to know about the result, and also of checking for
+    // pre-existing results in the database.
+    pub async fn run(
+        self,
+        database: Arc<Database>,
+        pools: &Pools,
+        origin_worktree_path: &Path,
+    ) -> TestStatus {
+        if let Some(db_entry) = database
+            .lookup_result(&self.test_case)
+            .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
+            .unwrap_or(None)
+        {
+            let result = TestStatus::Completed(db_entry.result().clone());
+            self.notifier.notify_completion(result.clone());
+            return result;
+        }
+
         select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
             // and some of those jobs are blocking on resources held by others,
@@ -1394,7 +1401,9 @@ mod tests {
             });
             let manager = Manager::new(
                 repo.clone(),
-                Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
+                Arc::new(
+                    Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
+                ),
                 Arc::new(Pools::new([(
                     ResourceKey::Worktree,
                     worktree_resources(&repo, self.num_worktrees).await,
@@ -1729,7 +1738,7 @@ mod tests {
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let m = Manager::new(
             repo.clone(),
-            Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
+            Arc::new(Database::create_or_open(db_dir.path()).expect("couldn't setup result DB")),
             Arc::new(Pools::new(
                 [(ResourceKey::Worktree, worktree_resources(&repo, 4).await)]
                     .into_iter()
@@ -1811,7 +1820,7 @@ mod tests {
         );
         let m = Manager::new(
             repo.clone(),
-            Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
+            Arc::new(Database::create_or_open(db_dir.path()).expect("couldn't setup result DB")),
             Arc::new(resource_pools),
             tests,
         );
