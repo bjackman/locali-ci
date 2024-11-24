@@ -78,6 +78,7 @@ impl Database {
 
 // Existing entry in the database.
 pub struct DatabaseEntry {
+    base_path: PathBuf,
     result: TestResultEntry,
 }
 
@@ -85,6 +86,7 @@ impl DatabaseEntry {
     fn open(base_dir: &Path) -> anyhow::Result<Self> {
         let json_path = base_dir.join("result.json");
         Ok(Self {
+            base_path: base_dir.to_owned(),
             result: serde_json::from_str(
                 &fs::read_to_string(base_dir.join("result.json"))
                     .with_context(|| format!("reading result JSON from {:?}", json_path))?,
@@ -95,6 +97,10 @@ impl DatabaseEntry {
 
     pub fn result(&self) -> &TestResult {
         &self.result.result
+    }
+
+    pub fn stdout_path(&self) -> PathBuf {
+        self.base_path.join("stdout.txt")
     }
 }
 

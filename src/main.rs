@@ -135,6 +135,17 @@ struct TestArgs {
     test: String,
 }
 
+#[derive(clap::Args)]
+struct GetArgs {
+    /// Name of the test to run, per the "name" field in the config file.
+    test: String,
+    /// Whether to run the test if the result is not in the database.
+    #[arg(long, default_value_t = false)]
+    run: bool,
+    /// Revision to test. Any git revspec is fine.
+    rev: String,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// The main command. Watch a repository and run tests whenever the revision
@@ -142,6 +153,8 @@ enum Command {
     Watch(WatchArgs),
     /// Run a one-shot test in the specified repo. Do not cache the results.
     Test(TestArgs),
+    /// Get the path of a test's output in the result database.
+    Get(GetArgs),
 }
 
 // Kitchen-sink object for global shit.
@@ -479,6 +492,55 @@ async fn test(
     status.into()
 }
 
+async fn get(
+    env: Env,
+    cancellation_token: CancellationToken,
+    get_args: GetArgs,
+) -> anyhow::Result<()> {
+    let test_name = TestName::new(get_args.test.clone());
+    let rev = env
+        .repo
+        .rev_parse(&get_args.rev)
+        .await
+        .context("error looking up commit")?
+        .ok_or_else(|| anyhow!("revision {:?} not found", get_args.test))?;
+
+    if get_args.run {
+        let tests: Vec<&Arc<Test>> = env
+            .config
+            .tests
+            .top_down_from(&test_name)
+            .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?
+            .collect();
+
+        // Write to stderr so the output can just be the path, for scripting.
+        eprintln!("Running {} tests...", tests.len());
+        ensure_tests_run(&env, cancellation_token.child_token(), tests, &rev).await?;
+        eprintln!("Tests complete");
+    }
+
+    let test = env
+        .config
+        .tests
+        .node(&test_name)
+        .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?;
+    let db_entry = env
+        .database
+        .lookup_result(&TestCase::new(rev.clone(), test.clone()))
+        .context("looking up result in database")?
+        .ok_or_else(|| {
+            anyhow!(
+                "no database entry for test {:?} at revision {:?} ({})",
+                test_name.to_string(),
+                get_args.rev,
+                rev.hash
+            )
+        })?;
+    println!("{}", db_entry.stdout_path().display());
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -524,5 +586,6 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Watch(watch_args) => watch(env, cancellation_token, watch_args).await,
         Command::Test(ref test_args) => test(env, cancellation_token, test_args).await,
+        Command::Get(get_args) => get(env, cancellation_token, get_args).await,
     }
 }

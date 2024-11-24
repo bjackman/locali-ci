@@ -525,3 +525,30 @@ async fn should_run_test_with_stored_results() {
         ok(eq("ill help you carry on\n")),
     );
 }
+
+#[googletest::test]
+#[tokio::test]
+async fn should_find_stdout() {
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .start(
+            r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "my_test"
+            command = "echo burgle schmurgle"
+            shutdown_grace_period_s = 1"##,
+            ["get", "--run", "my_test", "HEAD^"],
+        )
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(
+        fs::read_to_string(child.stdout().unwrap().trim()),
+        ok(eq("burgle schmurgle\n"))
+    );
+}
