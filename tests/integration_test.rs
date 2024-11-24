@@ -332,7 +332,7 @@ async fn should_invalidate_cache_when_dep_changes() {
 
         // Shut down child by dropping it. This is racy, it's possible we
         // haven't finished writing the test DB yet. In that case this test
-        // could pass when it shoudl fail, but it shouldn't make the test fail
+        // could pass when it should fail, but it shouldn't make the test fail
         // when it should pass.
     }
 

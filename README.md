@@ -90,7 +90,7 @@ command = ["cargo", "test"]
 ### Writing the test command
 
 The test command's job is to produce a zero (success) or nonzero (failure) status
-code. By defualt, it's run from the root directory of a copy of the repository,
+code. By default, it's run from the root directory of a copy of the repository,
 with the commit to be tested already checked out.
 
 If your test command is nontrivial, use `limmat --config $config test
