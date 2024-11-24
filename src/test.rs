@@ -107,6 +107,7 @@ pub struct Test {
     // Manager setup will fail if there are cycles in this graph or named tests
     // do not exist.
     pub depends_on: Vec<TestName>,
+    pub merge_output: bool,
 }
 
 impl Test {
@@ -698,9 +699,14 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         let mut cmd = self.test_case.test.command();
         let mut cmd = cmd
             .current_dir(current_dir)
-            .stdout(self.output.stdout().context("no stdout handle available")?)
-            .stderr(self.output.stderr().context("no stdout handle available")?)
             .env("LIMMAT_COMMIT", &self.test_case.commit_hash);
+        if self.test_case.test.merge_output {
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+        } else {
+            cmd.stdout(self.output.stdout().context("no stdout handle available")?);
+            cmd.stderr(self.output.stderr().context("no stdout handle available")?);
+        }
         for (k, v) in self.env.iter() {
             cmd = cmd.env(k, v);
         }
@@ -1152,6 +1158,7 @@ mod tests {
                 cache_policy,
                 config_hash: 0,
                 depends_on: depends_on.into_iter().collect(),
+                merge_output: false,
             }
         }
     }
@@ -1737,6 +1744,7 @@ mod tests {
             cache_policy: CachePolicy::ByCommit,
             config_hash: 0,
             depends_on: vec![],
+            merge_output: false,
         }];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let m = Manager::new(
@@ -1794,6 +1802,7 @@ mod tests {
             cache_policy: CachePolicy::ByCommit,
             config_hash: 0,
             depends_on: vec![],
+            merge_output: false,
         })])
         .expect("couldn't build test DAG");
         let resource_pools = Pools::new(

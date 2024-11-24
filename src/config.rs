@@ -80,7 +80,7 @@ impl Command {
 pub struct Test {
     name: String,
     command: Command,
-    #[serde(default = "default_requires_worktree")]
+    #[serde(default = "default_true")]
     requires_worktree: bool,
     // TODO: This should only refer to resource names.
     resources: Option<Vec<Resource>>,
@@ -94,9 +94,14 @@ pub struct Test {
     cache: CachePolicy,
     #[serde(default)]
     depends_on: Vec<String>,
+    #[serde(default = "default_true")]
+    /// If true, instead of separate stderr and stdout you just get a single
+    /// "output".
+    merge_output: bool,
 }
 
-fn default_requires_worktree() -> bool {
+// https://github.com/serde-rs/serde/issues/368
+fn default_true() -> bool {
     true
 }
 
@@ -160,6 +165,7 @@ impl Test {
             cache_policy: self.cache,
             config_hash,
             depends_on: self.depends_on.iter().map(TestName::new).collect(),
+            merge_output: self.merge_output,
         })
     }
 }

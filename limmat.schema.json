@@ -120,6 +120,11 @@
             "type": "string"
           }
         },
+        "merge_output": {
+          "description": "If true, instead of separate stderr and stdout you just get a single \"output\".",
+          "default": true,
+          "type": "boolean"
+        },
         "name": {
           "type": "string"
         },
