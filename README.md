@@ -41,12 +41,12 @@ download the raw binary, it has no dependencies.
 
 ## Usage
 
-Write a config file (details [below](#configuration)). Assuming you called it `limmat.toml`, and
+Write a config file (details [below](#configuration)) in `limmat.toml` or `.limmat.toml`, and
 the branch you're working on is based on `origin/master`, run this from the root
 of your repository:
 
 ```sh
-limmat watch --config limmat.toml origin/master
+limmat watch origin/master
 ```
 
 Limmat will start testing every commit in the range `origin/master..HEAD`.
@@ -55,6 +55,10 @@ that range and spawns new tests or cancels them as needed to get you your
 feedback as soon as possible.
 
 By default tests are run in separate [Git worktrees](https://git-scm.com/docs/git-worktree).
+
+If you don't want to store the config in the repo, put it elsewhere and point to
+it with `--config`. Alternatively you can run Limmat from a different directory
+and point to the repository with `--repo`.
 
 ## Configuration
 

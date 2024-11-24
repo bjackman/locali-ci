@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use clap::{arg, Parser as _, Subcommand};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
@@ -57,9 +57,10 @@ struct Args {
     // https://stackoverflow.com/questions/76341332/clap-default-value-for-pathbuf
     #[arg(short, long, default_value_t = {".".to_string()})]
     repo: String,
-    /// Path to TOML config file.
-    #[arg(short, long, required = true)]
-    config: PathBuf,
+    /// Path to TOML config file. Default is $LIMMAT_CONFIG if non-empty,
+    /// or ./limmat.toml if it exists, or ./.limmat.toml if it exists
+    #[arg(short, long)]
+    config: Option<PathBuf>,
     /// Directory where results will be stored.
     #[arg(long, default_value_t = default_result_db())]
     result_db: DisplayablePathBuf,
@@ -105,6 +106,27 @@ fn default_hostname() -> String {
         .to_owned()
         .into_string()
         .expect("hostname wasn't utf-8")
+}
+
+// Returns the path we should look for the the config. Although this is
+// influenced by the existence of files, it doesn't guarantee that the returned
+// file exists.
+fn find_config(config_arg: &Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    if let Some(path) = config_arg {
+        return Ok(path.clone()); // (Might not exist)
+    }
+    if let Some(path) = env::var_os("LIMMAT_CONFIG") {
+        return Ok(PathBuf::from(path));
+    }
+    let limmat_dot_toml = PathBuf::from("./limmat.toml");
+    if limmat_dot_toml.exists() {
+        return Ok(limmat_dot_toml);
+    }
+    let dot_limmat_dot_toml = PathBuf::from("./.limmat.toml");
+    if dot_limmat_dot_toml.exists() {
+        return Ok(dot_limmat_dot_toml);
+    }
+    bail!("Neither config nor $LIMMAT_CONFIG were set. No ./limmat.toml or ./.limmat.toml found");
 }
 
 #[derive(clap::Args)]
@@ -476,7 +498,8 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let args = Args::parse();
-    let config_content = fs::read_to_string(&args.config).context("couldn't read config")?;
+    let config_content =
+        fs::read_to_string(&find_config(&args.config)?).context("couldn't read config")?;
     let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
     let config = ParsedConfig::from(config)?;
 
