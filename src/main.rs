@@ -461,7 +461,7 @@ async fn test(
     let test = env.config.tests.node(&test_name).unwrap();
     let test_case = TestCase::new(head.clone(), test.clone());
     let mut needs_resources = test_case.test.needs_resources.clone();
-    let mut job = TestJobBuilder::new(
+    let job = TestJobBuilder::new(
         cancellation_token.clone(),
         test_case,
         OneshotOutput {},

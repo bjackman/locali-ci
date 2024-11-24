@@ -261,14 +261,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 job.notifier.notify_completion(status);
                 return;
             }
-
-            let status = job.run(&pools, origin_worktree.path()).await;
-            if let TestStatus::Completed(ref result) = status {
-                job.output
-                    .set_result(result)
-                    .or_log_error("couldn't save job status");
-            }
-            job.notifier.notify_completion(status);
+            job.run(&pools, origin_worktree.path()).await;
         });
     }
 
@@ -619,7 +612,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
 
     // This is the normal entry point to run a job. It gets the necessary
     // resources from the pools and runs the job.
-    pub async fn run(&mut self, pools: &Pools, origin_worktree_path: &Path) -> TestStatus {
+    pub async fn run(self, pools: &Pools, origin_worktree_path: &Path) -> TestStatus {
         select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
             // and some of those jobs are blocking on resources held by others,
@@ -774,18 +767,23 @@ impl<'a, O: TestJobOutput> TestJob<O> {
     // resources from the pools and you need direct control over where the job
     // runs.
     pub async fn run_with_resources(
-        &mut self,
+        mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
     ) -> TestStatus {
-        match self.run_inner(current_dir, resources).await {
+        let status = match self.run_inner(current_dir, resources).await {
             Err(ref err) => TestStatus::Error(err.to_string()),
             Ok(None) => TestStatus::Canceled,
             Ok(Some(exit_code)) => {
                 let test_result = TestResult { exit_code };
+                self.output
+                    .set_result(&test_result)
+                    .or_log_error("couldn't save job status");
                 TestStatus::Completed(test_result)
             }
-        }
+        };
+        self.notifier.notify_completion(status.clone());
+        status
     }
 }
 
@@ -1921,17 +1919,10 @@ mod tests {
             .unwrap();
         expect_notifs_20s(
             &mut results,
-            [
-                (
-                    f.test_case(&commits[0], 0),
-                    vec![TestStatus::Canceled].into(),
-                ),
-                // Do we want a cancellation notification here? I dunno I guess whatever.
-                (
-                    f.test_case(&commits[1], 0),
-                    vec![TestStatus::Canceled].into(),
-                ),
-            ],
+            [(
+                f.test_case(&commits[0], 0),
+                vec![TestStatus::Canceled].into(),
+            )],
         )
         .await
         .expect("bad test result");
