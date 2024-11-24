@@ -313,9 +313,9 @@ async fn ensure_job_success(
     job.await_dep_success()
         .await
         .map_err(|name| anyhow!("dependency job {name:?} failed"))?;
-    job.get_resources_and_run(resource_pools.as_ref(), &origin_worktree)
-        .await?;
-    Ok(())
+    job.run(resource_pools.as_ref(), &origin_worktree)
+        .await
+        .into()
 }
 
 struct OneshotOutput {}
@@ -472,12 +472,9 @@ async fn test(
     // Doesn't need a worktree, it's gonna do it live and direct in the main tree.
     needs_resources.remove(&ResourceKey::Worktree);
     let resources = env.config.resource_pools.get(needs_resources).await;
-    match job.run(env.repo.path(), &resources).await? {
-        None => println!("Canceled"),
-        Some(exit_code) => println!("Job completed with exit code {exit_code}"),
-    }
-
-    Ok(())
+    let status = job.run_with_resources(env.repo.path(), &resources).await;
+    println!("Finished: {}", status);
+    status.into()
 }
 
 #[tokio::main]

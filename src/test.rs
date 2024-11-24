@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use futures::future::{self, select_all, try_join_all, Either, FutureExt};
 use itertools::Itertools;
 #[allow(unused_imports)]
@@ -262,20 +262,12 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 return;
             }
 
-            let status = match job
-                .get_resources_and_run(&pools, origin_worktree.path())
-                .await
-            {
-                Err(ref err) => TestStatus::Error(err.to_string()),
-                Ok(None) => TestStatus::Canceled,
-                Ok(Some(exit_code)) => {
-                    let test_result = TestResult { exit_code };
-                    job.output
-                        .set_result(&test_result)
-                        .or_log_error("couldn't save job status");
-                    TestStatus::Completed(test_result)
-                }
-            };
+            let status = job.run(&pools, origin_worktree.path()).await;
+            if let TestStatus::Completed(ref result) = status {
+                job.output
+                    .set_result(result)
+                    .or_log_error("couldn't save job status");
+            }
             job.notifier.notify_completion(status);
         });
     }
@@ -625,11 +617,9 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         self.notifier.subscribe_completion()
     }
 
-    pub async fn get_resources_and_run(
-        &mut self,
-        pools: &Pools,
-        origin_worktree_path: &Path,
-    ) -> anyhow::Result<Option<ExitCode>> {
+    // This is the normal entry point to run a job. It gets the necessary
+    // resources from the pools and runs the job.
+    pub async fn run(&mut self, pools: &Pools, origin_worktree_path: &Path) -> TestStatus {
         select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
             // and some of those jobs are blocking on resources held by others,
@@ -639,15 +629,19 @@ impl<'a, O: TestJobOutput> TestJob<O> {
             // will be flaky. Not sure what to do about that.
             biased;
 
-            _ = self.ct.cancelled() => Ok(None),
+            _ = self.ct.cancelled() => TestStatus::Canceled,
             resources = pools.get(self.test_case.test.needs_resources.clone()) =>  {
                 self.notifier.notify(&TestStatus::Started);
                 if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
                     // We "own" this worktree.
-                    self.checkout_and_run(worktrees[0].as_worktree(), &resources).await
+                    let worktree = worktrees[0].as_worktree();
+                    match worktree.checkout(&self.test_case.commit_hash).await {
+                        Err(e) => TestStatus::Error(format!("failed to check out revision: {}", e)),
+                        Ok(_) => self.run_with_resources(worktree.path(), &resources).await
+                    }
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    self.run(origin_worktree_path, &resources).await
+                    self.run_with_resources(origin_worktree_path, &resources).await
                 }
             }
         }
@@ -687,21 +681,13 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         Ok(())
     }
 
-    // Returns Ok(None) when canceled.
-    pub async fn checkout_and_run<W>(
-        &mut self,
-        worktree: &W,
-        resources: &Resources<'a>,
-    ) -> anyhow::Result<Option<ExitCode>>
-    where
-        W: Worktree,
-    {
-        worktree.checkout(&self.test_case.commit_hash).await?;
-        self.run(worktree.path(), resources).await
-    }
-
     // Returns Ok(None) when canceled. Does not return until the child process has shut down.
-    pub async fn run(
+    // This _inner variant is just here so we can use ? in it instead of having
+    // to construct a TestStatus to report errors. I'm not sure if this
+    // awkwardness is my fault for designing the types wrong, or Rust's fault
+    // for not yet stabilising FromResidual which I think  (?) would let me
+    // construct a TestStatus::Error using ?.
+    async fn run_inner(
         &mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
@@ -780,6 +766,24 @@ impl<'a, O: TestJobOutput> TestJob<O> {
                 }
 
                 Ok(None)
+            }
+        }
+    }
+
+    // This is a specialised entry point for when you already have the necessary
+    // resources from the pools and you need direct control over where the job
+    // runs.
+    pub async fn run_with_resources(
+        &mut self,
+        current_dir: &Path,
+        resources: &Resources<'a>,
+    ) -> TestStatus {
+        match self.run_inner(current_dir, resources).await {
+            Err(ref err) => TestStatus::Error(err.to_string()),
+            Ok(None) => TestStatus::Canceled,
+            Ok(Some(exit_code)) => {
+                let test_result = TestResult { exit_code };
+                TestStatus::Completed(test_result)
             }
         }
     }
@@ -875,8 +879,20 @@ impl Display for TestStatus {
             Self::Enqueued => write!(f, "Enqueued"),
             Self::Started => write!(f, "Started"),
             Self::Canceled => write!(f, "Cancelled"),
-            Self::Error(msg) => write!(f, "Failed testing - {:?}", msg),
-            Self::Completed(result) => write!(f, "Completed - {}", result),
+            Self::Error(msg) => write!(f, "Error while testing - {:?}", msg),
+            Self::Completed(result) => write!(f, "Completed - exit code {}", result),
+        }
+    }
+}
+
+impl From<TestStatus> for anyhow::Result<()> {
+    fn from(s: TestStatus) -> anyhow::Result<()> {
+        match s {
+            TestStatus::Completed(TestResult { exit_code: 0 }) => Ok(()),
+            TestStatus::Completed(TestResult { exit_code: code }) => {
+                bail!("Test failed with exit code {}", code)
+            }
+            _ => bail!("{}", s),
         }
     }
 }
