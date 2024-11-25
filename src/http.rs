@@ -65,6 +65,7 @@ impl Ui {
         let app = Router::new()
             .route("/", get(home))
             .route("/updates", get(updates))
+            .route("/favicon.ico", get(include_bytes!("../assets/favicon.ico")))
             .nest_service(
                 "/results",
                 ServeDir::new(self.result_db).not_found_service(handle_404.into_service()),
@@ -138,6 +139,7 @@ async fn home(State(state): State<Arc<UiState>>) -> Html<String> {
                 <script>{htmx_wx_js}</script>
                 <style>{css}</style>
                 <title>{title}</title>
+                <link rel="icon" type="image/x-icon" href="favicon.ico"/>
             </head>
             <body>
                 <div hx-ext="ws" ws-connect="/updates">
