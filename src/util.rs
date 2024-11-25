@@ -12,7 +12,7 @@ use log::{debug, error};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DisplayablePathBuf(pub PathBuf);
 
 impl FromStr for DisplayablePathBuf {

@@ -7,7 +7,7 @@ use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
 use http::Ui;
-use log::info;
+use log::{debug, info};
 use nix::sys::utsname::uname;
 use resource::Pools;
 use resource::{Resource, ResourceKey};
@@ -51,7 +51,7 @@ mod util;
 #[cfg(test)]
 mod test_utils;
 
-#[derive(clap::Parser)]
+#[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     // TODO: Don't require valid utf-8 strings here, OsStrings shoud be fine. But
@@ -75,7 +75,7 @@ struct Args {
     command: Command,
 }
 
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 struct WatchArgs {
     /// Socket address in the form "$ip:$port" to listen on for serving files
     /// over HTTP. For example "127.0.0.1:8080" or ""[::1]:1234". Set the port
@@ -130,13 +130,13 @@ fn find_config(config_arg: &Option<PathBuf>) -> anyhow::Result<PathBuf> {
     bail!("Neither config nor $LIMMAT_CONFIG were set. No ./limmat.toml or ./.limmat.toml found");
 }
 
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 struct TestArgs {
     /// Name of the test to run, per the "name" field in the config file.
     test: String,
 }
 
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 struct GetArgs {
     /// Name of the test to run, per the "name" field in the config file.
     test: String,
@@ -150,7 +150,7 @@ struct GetArgs {
     output: GetOutput,
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, ValueEnum, Debug)]
 enum GetOutput {
     Stdout,
     Stderr,
@@ -169,7 +169,7 @@ impl Display for GetOutput {
     }
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Command {
     /// The main command. Watch a repository and run tests whenever the revision
     /// range changes.
@@ -593,8 +593,10 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let args = Args::parse();
+    debug!("args: {:?}", &args);
     let config_content =
         fs::read_to_string(&find_config(&args.config)?).context("couldn't read config")?;
+    debug!("config:\n{}", &config_content);
     let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
     let config = ParsedConfig::from(config)?;
 
