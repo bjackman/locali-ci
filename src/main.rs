@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::io::{stdout, Stdout};
-use std::path::PathBuf;
+use std::path::{absolute, PathBuf};
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -271,6 +271,14 @@ async fn watch(
         watch_args.hostname.clone(),
         listener,
         env.database.base_dir.clone(),
+        format!(
+            "Limmat | {}",
+            absolute(env.repo.path())
+                .context("error getting absolute path of repo")?
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or("<unknown>".into())
+        ),
     );
     let result_url_base = ui.result_url_base()?;
     let home_url = ui.home_url()?;

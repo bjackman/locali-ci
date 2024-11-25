@@ -33,12 +33,12 @@ pub struct Ui {
 }
 
 impl Ui {
-    pub fn new(hostname: String, listener: TcpListener, result_db: PathBuf) -> Self {
+    pub fn new(hostname: String, listener: TcpListener, result_db: PathBuf, title: String) -> Self {
         Self {
             hostname,
             listener,
             result_db,
-            state: Arc::new(UiState::new()),
+            state: Arc::new(UiState::new(title)),
         }
     }
 
@@ -80,12 +80,14 @@ impl Ui {
 pub struct UiState {
     // This holds the pre-rendered log & test result buffer with links etc.
     log_html_pre: watch::Sender<String>,
+    title: String,
 }
 
 impl UiState {
-    fn new() -> Self {
+    fn new(title: String) -> Self {
         Self {
             log_html_pre: watch::Sender::new("[starting up...]".into()),
+            title,
         }
     }
 
@@ -132,10 +134,10 @@ async fn home(State(state): State<Arc<UiState>>) -> Html<String> {
             <html lang="en">
             <head>
                 <meta charset="utf-8">
-                <title>title</title>
                 <script>{htmx_js}</script>
                 <script>{htmx_wx_js}</script>
                 <style>{css}</style>
+                <title>{title}</title>
             </head>
             <body>
                 <div hx-ext="ws" ws-connect="/updates">
@@ -148,6 +150,7 @@ async fn home(State(state): State<Arc<UiState>>) -> Html<String> {
         htmx_wx_js = include_str!("htmx-wx-ext-2.0.1.js"),
         log_buf = *state.log_html_pre.borrow(),
         css = RenderHtmlPre::CSS,
+        title = state.title,
     )
     .into()
 }
