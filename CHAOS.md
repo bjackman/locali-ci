@@ -4,12 +4,10 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
 ## Bugs (high to low priority):
 
- - BLOCKER: I had a really bad time trying to build a nice reliable TUI, turns
-   out terminal hacking is not fun or satisfying. Eventually I went yolo mode and
-   just made something that does seem to work but hasn't really been tested. Maybe
-   it's fine???
+ - Tests flaking: https://github.com/bjackman/limmat/actions/runs/11999395870
  - UI doesn't appear for a while on startup when the repo/range is big? And
    during that time we don't respond to Ctrl-C.
+ - Probably need to lock the database.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
    was no longer updating the terminal UI. It still seems to actually be running
    the tests. I suspect some task somewhere is panicking, and I haven't done the
