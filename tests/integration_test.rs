@@ -474,7 +474,12 @@ async fn should_run_test(config: &str) {
 #[googletest::test]
 #[tokio::test]
 async fn should_run_test_with_stored_results() {
+    let repo_dir = TempDir::with_prefix("repo").unwrap();
+    LimmatChildBuilder::init_test_repo(repo_dir.path())
+        .await
+        .unwrap();
     let temp_dir = TempDir::new().unwrap();
+
     let signalling_path = temp_dir.path().join("trans-output.txt");
     let config = format!(
         r##"
@@ -512,6 +517,7 @@ async fn should_run_test_with_stored_results() {
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
+        .existing_repo_dir(repo_dir.path().to_owned())
         .start(&config, ["test", "my_other_dep"])
         .await
         .unwrap();
@@ -531,6 +537,7 @@ async fn should_run_test_with_stored_results() {
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
+        .existing_repo_dir(repo_dir.path().to_owned())
         .start(config, ["test", "my_test"])
         .await
         .unwrap();
