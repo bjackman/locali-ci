@@ -63,17 +63,39 @@ impl ChildExt for Child {
 
 struct LimmatChildBuilder {
     temp_dir: TempDir,
+    existing_repo_dir: Option<PathBuf>, // If None, create one right in temp_dir.
     db_dir: PathBuf,
 }
 
 impl LimmatChildBuilder {
     async fn new() -> anyhow::Result<Self> {
         let temp_dir = TempDir::with_prefix("limmat-child")?;
+
+        let db_dir = temp_dir.path().join("cache");
+        create_dir(&db_dir).unwrap();
+        Ok(Self {
+            temp_dir,
+            existing_repo_dir: None,
+            db_dir,
+        })
+    }
+
+    fn db_dir(mut self, dir: PathBuf) -> Self {
+        self.db_dir = dir;
+        self
+    }
+
+    fn existing_repo_dir(mut self, dir: PathBuf) -> Self {
+        self.existing_repo_dir = Some(dir);
+        self
+    }
+
+    async fn init_test_repo(path: &Path) -> anyhow::Result<()> {
         Command::new("git")
             .stderr(Stdio::null())
             .stdout(Stdio::null())
             .arg("init")
-            .current_dir(temp_dir.path())
+            .current_dir(path)
             .status()
             .await?
             .check_exit_ok()
@@ -82,22 +104,14 @@ impl LimmatChildBuilder {
             Command::new("git")
                 .stderr(Stdio::null())
                 .stdout(Stdio::null())
-                .current_dir(temp_dir.path())
+                .current_dir(path)
                 .args(["commit", "--allow-empty", "-m", "lohs geht's buebe"])
                 .status()
                 .await?
                 .check_exit_ok()
                 .context("git commit")?;
         }
-
-        let db_dir = temp_dir.path().join("cache");
-        create_dir(&db_dir).unwrap();
-        Ok(Self { temp_dir, db_dir })
-    }
-
-    fn db_dir(mut self, dir: PathBuf) -> Self {
-        self.db_dir = dir;
-        self
+        Ok(())
     }
 
     async fn start(
@@ -111,13 +125,21 @@ impl LimmatChildBuilder {
         let stderr = File::create(self.temp_dir.path().join("stderr.txt"))?;
         let stdout = File::create(self.temp_dir.path().join("stdout.txt"))?;
 
+        let repo_dir = match self.existing_repo_dir {
+            Some(ref dir) => dir,
+            None => {
+                Self::init_test_repo(self.temp_dir.path()).await?;
+                self.temp_dir.path()
+            }
+        };
+
         let mut cmd: Command = get_test_bin("limmat").into();
         let cmd = cmd
             .args([
                 "--config",
                 "/dev/stdin",
                 "--repo",
-                self.temp_dir.path().to_str().unwrap(),
+                repo_dir.to_str().unwrap(),
                 "--result-db",
                 self.db_dir.to_str().unwrap(),
                 "--worktree-dir",
@@ -530,6 +552,11 @@ async fn should_run_test_with_stored_results() {
 #[googletest::test]
 #[tokio::test]
 async fn should_find_output(want_stdout: &str, want_stderr: &str) {
+    let repo_dir = TempDir::with_prefix("repo").unwrap();
+    LimmatChildBuilder::init_test_repo(repo_dir.path())
+        .await
+        .unwrap();
+
     let config = r##"
             num_worktrees = 1
             [[tests]]
@@ -546,6 +573,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
+        .existing_repo_dir(repo_dir.path().to_owned())
         .start(&config, ["get", "--run", "my_test", "HEAD^"])
         .await
         .unwrap();
@@ -562,6 +590,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
+        .existing_repo_dir(repo_dir.path().to_owned())
         .start(config, ["get", "my_test", "HEAD^", "stderr"])
         .await
         .unwrap();

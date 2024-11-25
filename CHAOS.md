@@ -4,7 +4,6 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
 ## Bugs (high to low priority):
 
- - Tests flaking: https://github.com/bjackman/limmat/actions/runs/11999395870
  - UI doesn't appear for a while on startup when the repo/range is big? And
    during that time we don't respond to Ctrl-C.
  - Probably need to lock the database.
