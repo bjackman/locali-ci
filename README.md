@@ -91,8 +91,8 @@ The test command's job is to produce a zero (success) or nonzero (failure) statu
 code. By default, it's run from the root directory of a copy of the repository,
 with the commit to be tested already checked out.
 
-If your test command is nontrivial, use `limmat --config $config test
-$test_name` to run it immediately in the main worktree and print its output
+If your test command is nontrivial, test it with `limmat test
+$test_name`. This runs it immediately in the main worktree and print its output
 directly to your terminal.
 
 > [!WARNING]
