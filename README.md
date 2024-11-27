@@ -40,7 +40,7 @@ download the raw binary, it has no dependencies.
 ## Usage
 
 Write a config file (details [below](#configuration)) in `limmat.toml` or `.limmat.toml`, and
-the branch you're working on is based on `origin/master`, run this from the root
+if the branch you're working on is based on `origin/master`, run this from the root
 of your repository:
 
 ```sh
