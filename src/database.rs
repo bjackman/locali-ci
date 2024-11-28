@@ -106,6 +106,10 @@ impl DatabaseEntry {
     pub fn stderr_path(&self) -> PathBuf {
         self.base_path.join("stderr.txt")
     }
+
+    pub fn artifacts_dir(&self) -> PathBuf {
+        self.base_path.join("artifacts")
+    }
 }
 
 // Output for an individual test job, stored into the database
