@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::io::{stdout, Stdout};
-use std::path::{absolute, PathBuf};
+use std::path::{absolute, Path, PathBuf};
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -363,7 +363,9 @@ async fn ensure_job_success(
         .into()
 }
 
-struct OneshotOutput {}
+struct OneshotOutput {
+    artifacts_dir: PathBuf,
+}
 
 impl TestJobOutput for OneshotOutput {
     fn stdout(&mut self) -> anyhow::Result<Stdio> {
@@ -375,6 +377,9 @@ impl TestJobOutput for OneshotOutput {
     fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
         eprintln!("Job result: {result:?}");
         Ok(())
+    }
+    fn artifacts_dir(&mut self) -> anyhow::Result<&Path> {
+        Ok(&self.artifacts_dir)
     }
 }
 
@@ -512,7 +517,9 @@ async fn test(
     let job = TestJobBuilder::new(
         cancellation_token.clone(),
         test_case,
-        OneshotOutput {},
+        OneshotOutput {
+            artifacts_dir: TempDir::with_prefix("limmat-artifacts-")?.into_path(),
+        },
         Arc::new(base_job_env(env.repo.path())),
         Vec::new(), // wait_for
     )

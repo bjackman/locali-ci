@@ -9,6 +9,7 @@ use std::{
     process::Stdio,
     sync::Arc,
     time::Duration,
+    path::PathBuf,
 };
 
 use anyhow::{anyhow, bail, Context};
@@ -573,6 +574,8 @@ pub trait TestJobOutput {
     fn stdout(&mut self) -> anyhow::Result<Stdio>;
     // Panics if called more than once.
     fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()>;
+    // Extant directory for the job to put artifacts into.
+    fn artifacts_dir(&mut self) -> anyhow::Result<&Path>;
 }
 
 // This is not really a proper type, it doesn't really mean anything except as an implementation
@@ -683,8 +686,9 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         Ok(())
     }
 
-    fn set_env(&self, cmd: &mut Command, resources: &Resources<'a>) {
+    fn set_env(&self, cmd: &mut Command, resources: &Resources<'a>, artifacts_dir: PathBuf)  {
         cmd.env("LIMMAT_COMMIT", &self.test_case.commit_hash);
+        cmd.env("LIMMAT_ARTIFACTS", artifacts_dir);
         for (k, v) in self.base_env.iter() {
             cmd.env(k, v);
         }
@@ -721,7 +725,8 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         cmd.current_dir(current_dir)
             .stdout(self.output.stdout().context("no stdout handle available")?)
             .stderr(self.output.stderr().context("no stdout handle available")?);
-        self.set_env(&mut cmd, resources);
+        let artifacts_dir = self.output.artifacts_dir()?.to_owned();
+        self.set_env(&mut cmd, resources, artifacts_dir);
         // It would be really confusing and annoying if we exited this function
         // without ensuring the child is dead. So we wrap it in this sketchy
         // drop guard thing.
