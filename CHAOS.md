@@ -67,6 +67,17 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
  - Would be nice to have a way to make the result cache invalidation logic aware
    of config (or other) files that the test command refers to.
  - Probably want a (default?) option to merge stderr and stdout.
+   I started implementing this as a `get` command but there's a few things to
+   think through carefully.
+    - What should the CLI be? I think `get` was a bit weird. Usecases are:
+      - Testing Limmat
+      - Grabbing cached artifacts.
+      - Checking the result of tests in scripts
+      The artifacts one is the most "real" I think. But, we don't even support
+      saving artifacts yet. Next question is - I think this command should fail
+      when the relevant test failed. Should it just repeat the exit code of the
+      test? I think so,  but arguably it's kinda confusing because you can't
+      tell if that's the exit code produced by limmat or by the test.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
  - Probably need to have the system handle cleaning the worktree for you. If
