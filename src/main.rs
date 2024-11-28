@@ -500,9 +500,11 @@ async fn test(
         .skip(1)
         .collect();
 
-    eprintln!("Running {} dependency jobs...", dep_tests.len());
-    ensure_tests_run(&env, cancellation_token.child_token(), dep_tests, &head).await?;
-    eprintln!("Dependency jobs complete.");
+    if !dep_tests.is_empty() {
+        eprintln!("Running {} dependency jobs...", dep_tests.len());
+        ensure_tests_run(&env, cancellation_token.child_token(), dep_tests, &head).await?;
+        eprintln!("Dependency jobs complete.");
+    }
 
     let test = env.config.tests.node(&test_name).unwrap();
     let test_case = TestCase::new(head.clone(), test.clone());
