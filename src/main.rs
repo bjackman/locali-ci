@@ -176,7 +176,7 @@ enum Command {
     Watch(WatchArgs),
     /// Run a one-shot test in the specified repo. Do not cache the results.
     Test(TestArgs),
-    /// Get the path of a test's output in the result database.
+    /// EXPERIMENTAL: Get the path of a test's output in the result database.
     Get(GetArgs),
 }
 
