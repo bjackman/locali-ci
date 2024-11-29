@@ -559,7 +559,7 @@ impl<O: TestJobOutput> TestJobBuilder<O> {
             test_case: self.test_case.clone(),
             _token: self.token,
             output: self.output,
-            env: self.env,
+            base_env: self.env,
             wait_for: self.wait_for,
             notifier: TestStatusNotifier::new(self.test_case, self.global_tx),
         }
@@ -585,7 +585,8 @@ pub struct TestJob<O: TestJobOutput> {
     test_case: TestCase,
     _token: Option<JobToken>,
     output: O,
-    env: Arc<Vec<(String, String)>>,
+    // Just the parts of the environment that are shared with other jobs.
+    base_env: Arc<Vec<(String, String)>>,
     // Job shouldn't start until all of these channels produce a result. If any
     // is unsuccessful it should abort.
     wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
@@ -682,6 +683,27 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         Ok(())
     }
 
+    fn set_env(&self, cmd: &mut Command, resources: &Resources<'a>) {
+        cmd.env("LIMMAT_COMMIT", &self.test_case.commit_hash);
+        for (k, v) in self.base_env.iter() {
+            cmd.env(k, v);
+        }
+        // Set up env vars to communicate token values.
+        for (resource_name, tokens) in resources.tokens() {
+            if tokens.len() == 1 {
+                cmd.env(format!("LIMMAT_RESOURCE_{}", resource_name), &tokens[0]);
+            }
+            for (i, token) in tokens.iter().enumerate() {
+                debug!(
+                    "{} = {}",
+                    format!("LIMMAT_RESOURCE_{}_{}", resource_name, i),
+                    token
+                );
+                cmd.env(format!("LIMMAT_RESOURCE_{}_{}", resource_name, i), token);
+            }
+        }
+    }
+
     // Returns Ok(None) when canceled. Does not return until the child process has shut down.
     // This _inner variant is just here so we can use ? in it instead of having
     // to construct a TestStatus to report errors. I'm not sure if this
@@ -699,25 +721,8 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         let mut cmd = cmd
             .current_dir(current_dir)
             .stdout(self.output.stdout().context("no stdout handle available")?)
-            .stderr(self.output.stderr().context("no stdout handle available")?)
-            .env("LIMMAT_COMMIT", &self.test_case.commit_hash);
-        for (k, v) in self.env.iter() {
-            cmd = cmd.env(k, v);
-        }
-        // Set up env vars to communicate token values.
-        for (resource_name, tokens) in resources.tokens() {
-            if tokens.len() == 1 {
-                cmd = cmd.env(format!("LIMMAT_RESOURCE_{}", resource_name), &tokens[0]);
-            }
-            for (i, token) in tokens.iter().enumerate() {
-                debug!(
-                    "{} = {}",
-                    format!("LIMMAT_RESOURCE_{}_{}", resource_name, i),
-                    token
-                );
-                cmd = cmd.env(format!("LIMMAT_RESOURCE_{}_{}", resource_name, i), token);
-            }
-        }
+            .stderr(self.output.stderr().context("no stdout handle available")?);
+        self.set_env(&mut cmd, resources);
         // It would be really confusing and annoying if we exited this function
         // without ensuring the child is dead. So we wrap it in this sketchy
         // drop guard thing.
