@@ -266,7 +266,7 @@ async fn watch(
     // click terminal hyperlinks.
     let listener = tokio::net::TcpListener::bind(watch_args.http_sockaddr.clone())
         .await
-        .unwrap();
+        .context("setting up HTTP server")?;
     let ui = Ui::new(
         watch_args.hostname.clone(),
         listener,
