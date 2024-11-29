@@ -548,7 +548,13 @@ async fn get_common(
         .rev_parse(&get_args.rev)
         .await
         .context("error looking up commit")?
-        .ok_or_else(|| anyhow!("revision {:?} not found", get_args.test))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "revision {:?} not found in {}",
+                get_args.test,
+                env.repo.path().display()
+            )
+        })?;
 
     if get_args.run {
         let tests: Vec<&Arc<Test>> = env
