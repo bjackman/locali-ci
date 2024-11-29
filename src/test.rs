@@ -5,11 +5,11 @@ use std::{
     ffi::{OsStr, OsString},
     fmt::{Debug, Formatter},
     path::Path,
+    path::PathBuf,
     pin::pin,
     process::Stdio,
     sync::Arc,
     time::Duration,
-    path::PathBuf,
 };
 
 use anyhow::{anyhow, bail, Context};
@@ -686,9 +686,18 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         Ok(())
     }
 
-    fn set_env(&self, cmd: &mut Command, resources: &Resources<'a>, artifacts_dir: PathBuf)  {
+    fn set_env(&self, cmd: &mut Command, resources: &Resources<'a>, artifacts_dir: PathBuf) {
         cmd.env("LIMMAT_COMMIT", &self.test_case.commit_hash);
-        cmd.env("LIMMAT_ARTIFACTS", artifacts_dir);
+        cmd.env("LIMMAT_ARTIFACTS", &artifacts_dir);
+        // TODO: this sucks!!! We wanna be able to lock the artifacts dir for
+        // reading, so this should actually have been passe through from the
+        // process of running the dependency.
+        for dep_name in &self.test_case.test.depends_on {
+            cmd.env(
+                format!("LIMMAT_ARTIFACTS_{}", dep_name.0),
+                artifacts_dir.join("..").join(&dep_name.0),
+            );
+        }
         for (k, v) in self.base_env.iter() {
             cmd.env(k, v);
         }
