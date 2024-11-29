@@ -692,6 +692,8 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         // TODO: this sucks!!! We wanna be able to lock the artifacts dir for
         // reading, so this should actually have been passe through from the
         // process of running the dependency.
+        // Actually this is totally broken because for `limmat test` this isn'
+        // even where the dependency will be.
         for dep_name in &self.test_case.test.depends_on {
             cmd.env(
                 format!("LIMMAT_ARTIFACTS_{}", dep_name.0),
