@@ -697,7 +697,7 @@ impl<'a, O: TestJobOutput> TestJob<O> {
         for dep_name in &self.test_case.test.depends_on {
             cmd.env(
                 format!("LIMMAT_ARTIFACTS_{}", dep_name.0),
-                artifacts_dir.join("..").join(&dep_name.0),
+                artifacts_dir.join("..").join("..").join(&dep_name.0).join("artifacts"),
             );
         }
         for (k, v) in self.base_env.iter() {
