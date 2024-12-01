@@ -365,7 +365,6 @@ mod tests {
             Commit,
         },
         test::{CachePolicy, Test, TestName, TestResult},
-        test_utils::some_time,
     };
 
     use super::*;
@@ -406,9 +405,9 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn output_buffer_smoke() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
-        repo.commit("1", some_time()).await.unwrap();
-        let commit2 = repo.commit("2", some_time()).await.unwrap();
-        let commit3 = repo.commit("3", some_time()).await.unwrap();
+        repo.commit("1").await.unwrap();
+        let commit2 = repo.commit("2").await.unwrap();
+        let commit3 = repo.commit("3").await.unwrap();
         let test1 = fake_test("my_test1", CachePolicy::ByCommit);
         let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 
@@ -453,22 +452,19 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn output_buffer_octopus() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
-        let base_commit = repo.commit("base", some_time()).await.unwrap();
-        let join_commit = repo.commit("join", some_time()).await.unwrap();
-        let commit1 = repo.commit("1", some_time()).await.unwrap();
+        let base_commit = repo.commit("base").await.unwrap();
+        let join_commit = repo.commit("join").await.unwrap();
+        let commit1 = repo.commit("1").await.unwrap();
         repo.checkout(&base_commit.hash).await.unwrap();
-        let commit2 = repo.commit("2", some_time()).await.unwrap();
+        let commit2 = repo.commit("2").await.unwrap();
         repo.checkout(&base_commit.hash).await.unwrap();
-        let commit3 = repo.commit("3", some_time()).await.unwrap();
+        let commit3 = repo.commit("3").await.unwrap();
         let merge = repo
-            .merge(
-                &[
-                    commit1.hash.clone(),
-                    commit2.hash.clone(),
-                    commit3.hash.clone(),
-                ],
-                some_time(),
-            )
+            .merge(&[
+                commit1.hash.clone(),
+                commit2.hash.clone(),
+                commit3.hash.clone(),
+            ])
             .await
             .unwrap();
         let test1 = fake_test("my_test1", CachePolicy::ByCommit);
@@ -524,19 +520,16 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn output_buffer_empty() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
-        let base_commit = repo.commit("base", some_time()).await.unwrap();
-        repo.commit("join", some_time()).await.unwrap();
-        let commit1 = repo.commit("1", some_time()).await.unwrap();
+        let base_commit = repo.commit("base").await.unwrap();
+        repo.commit("join").await.unwrap();
+        let commit1 = repo.commit("1").await.unwrap();
         repo.checkout(&base_commit.hash).await.unwrap();
-        let commit2 = repo.commit("2", some_time()).await.unwrap();
+        let commit2 = repo.commit("2").await.unwrap();
         repo.checkout(&base_commit.hash).await.unwrap();
-        let commit3 = repo.commit("3", some_time()).await.unwrap();
-        repo.merge(
-            &[commit1.hash, commit2.hash.clone(), commit3.hash.clone()],
-            some_time(),
-        )
-        .await
-        .unwrap();
+        let commit3 = repo.commit("3").await.unwrap();
+        repo.merge(&[commit1.hash, commit2.hash.clone(), commit3.hash.clone()])
+            .await
+            .unwrap();
         let test1 = fake_test("my_test1", CachePolicy::ByCommit);
         let test2 = fake_test("my_test2", CachePolicy::ByCommit);
 

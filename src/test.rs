@@ -960,7 +960,7 @@ mod tests {
             CommitHash, TempWorktree,
         },
         resource::Resource,
-        test_utils::{path_exists, some_time, timeout_5s},
+        test_utils::{path_exists, timeout_5s},
     };
 
     use super::*;
@@ -1352,7 +1352,7 @@ mod tests {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         // TODO: We need to have a commit in the repo otherwise manager
         // setup will fail. This is a bug.
-        repo.commit("hello,", some_time())
+        repo.commit("hello,")
             .await
             .expect("couldn't create base commit");
         repo
@@ -1469,7 +1469,7 @@ mod tests {
         let mut results = f.manager.results();
         let commit = f
             .repo
-            .commit("hello,", some_time())
+            .commit("hello,")
             .await
             .expect("couldn't create test commit");
         f.manager.set_revisions(vec![commit.clone()]).await.unwrap();
@@ -1499,7 +1499,7 @@ mod tests {
         // First commit's test will block forever.
         let commit1 = f
             .repo
-            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
             .await
             .expect("couldn't create test commit");
         let mut results = f.manager.results();
@@ -1514,7 +1514,7 @@ mod tests {
         // Second commit's test will terminate quickly.
         let commit2 = f
             .repo
-            .commit("hello,", some_time())
+            .commit("hello,")
             .await
             .expect("couldn't create test commit");
         f.manager
@@ -1590,7 +1590,7 @@ mod tests {
         // First commit's test will block forever.
         let commit = f
             .repo
-            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
             .await
             .expect("couldn't create test commit");
         f.manager.set_revisions([commit.clone()]).await.unwrap();
@@ -1614,7 +1614,7 @@ mod tests {
             .build()
             .await;
         f.repo
-            .commit("yarp", some_time())
+            .commit("yarp")
             .await
             .expect("couldn't create test commit");
 
@@ -1627,13 +1627,13 @@ mod tests {
         // works (it doesn't know about the structure of the history).
         let orig_commit = f
             .repo
-            .commit("yarp", some_time())
+            .commit("yarp")
             .await
             .expect("couldn't create test commit");
         // This one has a different commit hash but the same tree.
         let same_tree = f
             .repo
-            .commit("darp", some_time())
+            .commit("darp")
             .await
             .expect("couldn't create test commit");
 
@@ -1685,7 +1685,7 @@ mod tests {
         for i in 0..50 {
             let commit = f
                 .repo
-                .commit(TestScript::exit_code_tag(i as u32), some_time())
+                .commit(TestScript::exit_code_tag(i as u32))
                 .await
                 .expect("couldn't create test commit");
             for j in 0..num_tests {
@@ -1714,7 +1714,7 @@ mod tests {
         let mut hashes = Vec::new();
         for _ in 0..10 {
             hashes.push(
-                repo.commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+                repo.commit(TestScript::BLOCK_COMMIT_MSG_TAG)
                     .await
                     .expect("couldn't create test commit"),
             );
@@ -1778,7 +1778,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let repo = Arc::new(TempRepo::new().await.unwrap());
         let commit = repo
-            .commit("hello,", some_time())
+            .commit("hello,")
             .await
             .expect("couldn't create test commit");
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
@@ -1890,7 +1890,7 @@ mod tests {
         for _ in 0..5 {
             commits.push(
                 f.repo
-                    .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+                    .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
                     .await
                     .expect("couldn't create test commit"),
             );
@@ -1964,7 +1964,7 @@ mod tests {
         // which is "an error"
         let with_error = f
             .repo
-            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
             .await
             .expect("couldn't create test commit");
         // This commit's tests will shut down with an error exit-code if
@@ -1974,7 +1974,7 @@ mod tests {
         commit_msg.push(TestScript::exit_code_tag(1));
         let with_fail = f
             .repo
-            .commit(commit_msg, some_time())
+            .commit(commit_msg)
             .await
             .expect("couldn't create test commit");
 
@@ -2077,12 +2077,12 @@ mod tests {
             .await;
         let test_commit = f
             .repo
-            .commit(TestScript::BLOCK_COMMIT_MSG_TAG, some_time())
+            .commit(TestScript::BLOCK_COMMIT_MSG_TAG)
             .await
             .expect("couldn't create test commit");
         let head_commit = f
             .repo
-            .commit("woodly doodly", some_time())
+            .commit("woodly doodly")
             .await
             .expect("couldn't create test commit");
         f.manager
@@ -2114,7 +2114,7 @@ mod tests {
             .num_worktrees(2)
             .build()
             .await;
-        let commit = f.repo.commit(commit_msg, some_time()).await.unwrap();
+        let commit = f.repo.commit(commit_msg).await.unwrap();
         f.manager.set_revisions(vec![commit.clone()]).await.unwrap();
         timeout_5s(f.scripts[0].started(&commit.hash))
             .await
