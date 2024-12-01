@@ -6,7 +6,14 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
  - UI doesn't appear for a while on startup when the repo/range is big? And
    during that time we don't respond to Ctrl-C.
- - Probably need to lock the database.
+ - Need some coordination between different processes, in case the user runs
+   `limmat test` or something at the same time as `limmat watch`. It doesn't make
+   sense to lock the whole database (what if they want to watch multiple repos at
+   once?). So probably we should flock the `result.json` or something. This will
+   also later be needed so we can implement pruning of the database to prevent
+   it eating too much disk (we mustn't delete artifacts while tests could still
+   be using them). There are some details to think through here but I'm too
+   tired.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
    was no longer updating the terminal UI. It still seems to actually be running
    the tests. I suspect some task somewhere is panicking, and I haven't done the
