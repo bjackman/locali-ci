@@ -4,8 +4,7 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
 ## Bugs (high to low priority):
 
- - UI doesn't appear for a while on startup when the repo/range is big? And
-   during that time we don't respond to Ctrl-C.
+ - `--http-sockaddr=localhost:8080` still gives you a hostname-based URL.
  - Need some coordination between different processes, in case the user runs
    `limmat test` or something at the same time as `limmat watch`. It doesn't make
    sense to lock the whole database (what if they want to watch multiple repos at
@@ -14,6 +13,9 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
    it eating too much disk (we mustn't delete artifacts while tests could still
    be using them). There are some details to think through here but I'm too
    tired.
+ - It's pretty slow on my work computer. Git performance is crippled by security
+   monitoring on that computer, and the single-thread performance is very poor.
+   But it doesn't seem like Limmat has to be slow.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
    was no longer updating the terminal UI. It still seems to actually be running
    the tests. I suspect some task somewhere is panicking, and I haven't done the
