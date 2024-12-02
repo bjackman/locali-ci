@@ -1191,7 +1191,7 @@ mod tests {
         pid: Pid,
     }
 
-    impl<'a> StartedTestScript<'a> {
+    impl StartedTestScript<'_> {
         // Blocks until the script has received a SIGTERM.
         // Note this is only available on StartedTestScript, because we cannot
         // reliably receive notifications of the script getting SIGTERMed unless

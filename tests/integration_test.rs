@@ -297,7 +297,7 @@ async fn test_worktree_teardown(test_command: &str) {
 }
 
 fn pid_running(pid: pid_t) -> bool {
-    return Path::new(&format!("/proc/{pid}")).exists();
+    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 #[test_log::test(tokio::test)]

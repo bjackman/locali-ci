@@ -66,7 +66,7 @@ pub struct RenderAnsi<'a> {
     text: &'a Text<'a>,
 }
 
-impl<'a> Display for RenderAnsi<'a> {
+impl Display for RenderAnsi<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         for line in self.text.lines.iter() {
             writeln!(f, "{}", RenderAnsiLine { line })?;
@@ -79,7 +79,7 @@ pub struct RenderHtmlPre<'a> {
     text: &'a Text<'a>,
 }
 
-impl<'a> RenderHtmlPre<'a> {
+impl RenderHtmlPre<'_> {
     pub const CSS: &'static str = indoc! { "
         .error {
             background: rgba(255, 0, 0, 0.3);
@@ -103,7 +103,7 @@ impl<'a> RenderHtmlPre<'a> {
     "};
 }
 
-impl<'a> Display for RenderHtmlPre<'a> {
+impl Display for RenderHtmlPre<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "<pre>")?;
         for line in self.text.lines.iter() {
@@ -128,7 +128,7 @@ where
     }
 }
 
-impl<'a> Line<'a> {
+impl Line<'_> {
     // Truncate to the given number of unicode graphemej clusters, disregarding styling.
     pub fn truncate_graphemes(mut self, length: usize) -> Self {
         let mut remaining_length = length;
@@ -153,7 +153,7 @@ struct RenderAnsiLine<'a> {
     line: &'a Line<'a>,
 }
 
-impl<'a> Display for RenderAnsiLine<'a> {
+impl Display for RenderAnsiLine<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         for span in self.line.spans.iter() {
             write!(f, "{}", RenderAnsiSpan { span })?;
@@ -167,7 +167,7 @@ struct RenderHtmlLine<'a> {
     line: &'a Line<'a>,
 }
 
-impl<'a> Display for RenderHtmlLine<'a> {
+impl Display for RenderHtmlLine<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         for span in self.line.spans.iter() {
             write!(f, "{}", RenderHtmlSpan { span })?;
@@ -242,7 +242,7 @@ struct RenderAnsiSpan<'a> {
     span: &'a Span<'a>,
 }
 
-impl<'a> Display for RenderAnsiSpan<'a> {
+impl Display for RenderAnsiSpan<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let output = self.span.content.as_ref();
         let output = match self.span.class {
@@ -267,7 +267,7 @@ struct RenderHtmlSpan<'a> {
     span: &'a Span<'a>,
 }
 
-impl<'a> Display for RenderHtmlSpan<'a> {
+impl Display for RenderHtmlSpan<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if let Some(ref url) = &self.span.url {
             write!(f, r#"<a href="{}">"#, url)?;
