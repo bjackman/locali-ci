@@ -610,3 +610,66 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         ok(eq(want_stderr))
     );
 }
+
+#[googletest::test]
+#[tokio::test]
+async fn should_find_not_race() {
+    let repo_dir = TempDir::with_prefix("repo").unwrap();
+    let tmp_dir = TempDir::new().unwrap();
+    LimmatChildBuilder::init_test_repo(repo_dir.path())
+        .await
+        .unwrap();
+    let db_dir = TempDir::with_prefix("result-db").unwrap();
+
+    let config = format!(
+        r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "my_test"
+            command = "touch {}/started.$$ && sleep 1"
+            shutdown_grace_period_s = 1
+        "##,
+        tmp_dir.path().display()
+    );
+    let mut watch_children = Vec::new();
+    for _ in 0..16 {
+        let child = LimmatChildBuilder::new()
+            .await
+            .unwrap()
+            .db_dir(db_dir.path().to_owned())
+            .existing_repo_dir(repo_dir.path().to_owned())
+            .start(&config, ["watch", "HEAD^"])
+            .await
+            .unwrap();
+        watch_children.push(child);
+    }
+    let mut get_children: Vec<LimmatChild> = Vec::new();
+    for _ in 0..16 {
+        let child = LimmatChildBuilder::new()
+            .await
+            .unwrap()
+            .db_dir(db_dir.path().to_owned())
+            .existing_repo_dir(repo_dir.path().to_owned())
+            .start(&config, ["get", "--run", "my_test", "HEAD"])
+            .await
+            .unwrap();
+        get_children.push(child);
+    }
+
+    for mut child in get_children.into_iter() {
+        timeout(Duration::from_secs(5), child.expect_success())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    // Even though we ran loads of instances of Limmat, only one of them should
+    // have ran the job.
+    let pattern = tmp_dir.path().join("started.*").to_owned();
+    expect_that!(
+        glob(pattern.to_string_lossy().as_ref())
+            .unwrap()
+            .collect::<Vec<_>>(),
+        len(eq(1))
+    );
+}

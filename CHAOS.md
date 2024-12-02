@@ -14,12 +14,12 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
    be using them). There are some details to think through here but I'm too
    tired. Different levels of the problem:
 
-   1. Avoid having concurrent runs of Limmat overwrite each other's outputs
-      making a mess.
-   2. Avoid `cache = "no_caching"` tests modifying the inputs of jobs that
-      depend on them when they get re-run.
-   3. Make a space for logic to prune the database based on size, without
-      worrying about deleting inputs of running jobs.
+   [x] Avoid having concurrent runs of Limmat overwrite each other's outputs
+       making a mess.
+   [ ] Avoid `cache = "no_caching"` tests modifying the inputs of jobs that
+       depend on them when they get re-run.
+   [ ] Make a space for logic to prune the database based on size, without
+       worrying about deleting inputs of running jobs.
 
  - It's pretty slow on my work computer. Git performance is crippled by security
    monitoring on that computer, and the single-thread performance is very poor.
