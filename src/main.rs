@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::{arg, Parser as _, Subcommand, ValueEnum};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
-use database::{Database, DatabaseOutput};
+use database::Database;
 use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
@@ -352,7 +352,7 @@ async fn watch(
 async fn ensure_job_success(
     database: Arc<Database>,
     resource_pools: Arc<Pools>,
-    mut job: TestJob<DatabaseOutput>,
+    mut job: TestJob,
     origin_worktree: PathBuf,
 ) -> anyhow::Result<()> {
     job.await_dep_success()
@@ -411,7 +411,7 @@ async fn ensure_tests_run(
     .bottom_up()
     .try_fold(
         HashMap::new(),
-        |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob<DatabaseOutput>>> {
+        |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob>> {
             let wait_for = test_case
                 .child_ids() // This gives the TestCaseIds of dependency jobs.
                 .iter()
@@ -427,7 +427,6 @@ async fn ensure_tests_run(
                 // TODO: it would be nice if we had an into_ variant of
                 // the bottom_up so we didn't need this clone.
                 test_case.clone(),
-                env.database.create_output(test_case)?,
                 job_env.clone(),
                 wait_for,
             )
@@ -512,7 +511,6 @@ async fn test(
     let job = TestJobBuilder::new(
         cancellation_token.clone(),
         test_case,
-        OneshotOutput {},
         Arc::new(base_job_env(env.repo.path())),
         Vec::new(), // wait_for
     )
@@ -520,7 +518,9 @@ async fn test(
     // Doesn't need a worktree, it's gonna do it live and direct in the main tree.
     needs_resources.remove(&ResourceKey::Worktree);
     let resources = env.config.resource_pools.get(needs_resources).await;
-    let status = job.run_with_resources(env.repo.path(), &resources).await;
+    let status = job
+        .run_with(env.repo.path(), &resources, OneshotOutput {})
+        .await;
     eprintln!("Finished: {}", status);
     status.into()
 }
