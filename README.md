@@ -96,6 +96,11 @@ $test_name`. This runs it immediately in the main worktree and print its output
 directly to your terminal.
 
 > [!WARNING]
+> Limmat doesn't currently lock the result database. If you run `limmat test`
+> while `limmat watch` is running, confusing things might happen. (This is a
+> bug, it should be fixed in an upcoming version!).
+
+> [!WARNING]
 > Limmat doesn't clean the source tree for you, it just does `git checkout`. If
 > your test command can't be trusted to work in a dirty worktree (for example,
 > if you have janky Makefiles) you might want it to start with something like
