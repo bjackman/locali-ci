@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    database::{Database, DatabaseOutput},
+    database::Database,
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
@@ -229,7 +229,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }
     }
 
-    fn spawn_job(&self, mut job: TestJob<DatabaseOutput>) {
+    fn spawn_job(&self, mut job: TestJob) {
         job.notifier.notify(&TestStatus::Enqueued);
 
         let pools = self.resource_pools.clone();
@@ -321,7 +321,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // them into a HashMap instead.
         let jobs = test_cases.bottom_up().try_fold(
             HashMap::new(),
-            |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob<DatabaseOutput>>> {
+            |mut jobs, test_case| -> anyhow::Result<HashMap<TestCaseId, TestJob>> {
                 let wait_for = test_case
                     .child_ids() // This gives the TestCaseIds of dependency jobs.
                     .iter()
@@ -337,7 +337,6 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                     // TODO: it would be nice if we had an into_ variant of
                     // the bottom_up so we didn't need this clone.
                     test_case.clone(),
-                    self.result_db.create_output(test_case)?,
                     self.job_env.clone(),
                     wait_for,
                 )
@@ -509,21 +508,19 @@ impl Drop for ChildDropGuard {
     }
 }
 
-pub struct TestJobBuilder<O> {
+pub struct TestJobBuilder {
     ct: CancellationToken,
     test_case: TestCase,
     token: Option<JobToken>,
-    output: O,
     env: Arc<Vec<(String, String)>>,
     wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
     global_tx: Option<broadcast::Sender<Arc<Notification>>>,
 }
 
-impl<O: TestJobOutput> TestJobBuilder<O> {
+impl TestJobBuilder {
     pub fn new(
         ct: CancellationToken,
         test_case: TestCase,
-        output: O,
         env: Arc<JobEnv>,
         // Job shouldn't start until all of these channels produce a result. If any
         // is unsuccessful it should abort.
@@ -532,7 +529,6 @@ impl<O: TestJobOutput> TestJobBuilder<O> {
         Self {
             ct,
             test_case,
-            output,
             env,
             wait_for,
             token: None,
@@ -553,12 +549,11 @@ impl<O: TestJobOutput> TestJobBuilder<O> {
         self
     }
 
-    pub fn build(self) -> TestJob<O> {
+    pub fn build(self) -> TestJob {
         TestJob {
             ct: self.ct,
             test_case: self.test_case.clone(),
             _token: self.token,
-            output: self.output,
             base_env: self.env,
             wait_for: self.wait_for,
             notifier: TestStatusNotifier::new(self.test_case, self.global_tx),
@@ -580,11 +575,10 @@ pub trait TestJobOutput {
 // to individual fields while a mutable reference exists to the overall struct. I think this is
 // basically one an instance of "view structs" described in
 // https://smallcultfollowing.com/babysteps/blog/2024/06/02/the-borrow-checker-within/
-pub struct TestJob<O: TestJobOutput> {
+pub struct TestJob {
     ct: CancellationToken,
     test_case: TestCase,
     _token: Option<JobToken>,
-    output: O,
     // Just the parts of the environment that are shared with other jobs.
     base_env: Arc<Vec<(String, String)>>,
     // Job shouldn't start until all of these channels produce a result. If any
@@ -593,7 +587,7 @@ pub struct TestJob<O: TestJobOutput> {
     notifier: TestStatusNotifier,
 }
 
-impl<'a, O: TestJobOutput> TestJob<O> {
+impl<'a> TestJob {
     pub fn subscribe_completion(&self) -> broadcast::Receiver<TestStatus> {
         self.notifier.subscribe_completion()
     }
@@ -601,7 +595,8 @@ impl<'a, O: TestJobOutput> TestJob<O> {
     // This is the normal entry point to run a job. It gets the necessary
     // resources from the pools and runs the job. It takes care of notifying
     // anyone who needs to know about the result, and also of checking for
-    // pre-existing results in the database.
+    // pre-existing results in the database and storing the new result if there
+    // is one.
     pub async fn run(
         self,
         database: Arc<Database>,
@@ -617,6 +612,15 @@ impl<'a, O: TestJobOutput> TestJob<O> {
             self.notifier.notify_completion(result.clone());
             return result;
         }
+
+        let output = match database.create_output(&self.test_case) {
+            Err(e) => {
+                let status = TestStatus::Error(format!("failed to create database entry: {}", e));
+                self.notifier.notify_completion(status.clone());
+                return status;
+            }
+            Ok(o) => o,
+        };
 
         select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
@@ -635,11 +639,11 @@ impl<'a, O: TestJobOutput> TestJob<O> {
                     let worktree = worktrees[0].as_worktree();
                     match worktree.checkout(&self.test_case.commit_hash).await {
                         Err(e) => TestStatus::Error(format!("failed to check out revision: {}", e)),
-                        Ok(_) => self.run_with_resources(worktree.path(), &resources).await
+                        Ok(_) => self.run_with(worktree.path(), &resources, output).await
                     }
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    self.run_with_resources(origin_worktree_path, &resources).await
+                    self.run_with(origin_worktree_path, &resources, output).await
                 }
             }
         }
@@ -710,17 +714,18 @@ impl<'a, O: TestJobOutput> TestJob<O> {
     // awkwardness is my fault for designing the types wrong, or Rust's fault
     // for not yet stabilising FromResidual which I think  (?) would let me
     // construct a TestStatus::Error using ?.
-    async fn run_inner(
+    async fn run_inner<O: TestJobOutput>(
         &mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
+        output: &mut O,
     ) -> anyhow::Result<Option<ExitCode>> {
         info!("Starting {:?}", self.test_case);
 
         let mut cmd = self.test_case.test.command();
         cmd.current_dir(current_dir)
-            .stdout(self.output.stdout().context("no stdout handle available")?)
-            .stderr(self.output.stderr().context("no stdout handle available")?);
+            .stdout(output.stdout().context("no stdout handle available")?)
+            .stderr(output.stderr().context("no stdout handle available")?);
         self.set_env(&mut cmd, resources);
         // It would be really confusing and annoying if we exited this function
         // without ensuring the child is dead. So we wrap it in this sketchy
@@ -780,18 +785,21 @@ impl<'a, O: TestJobOutput> TestJob<O> {
 
     // This is a specialised entry point for when you already have the necessary
     // resources from the pools and you need direct control over where the job
-    // runs.
-    pub async fn run_with_resources(
+    // runs and where its output goes. This API is wack and I hate it but I
+    // can't quite seem to figure out the right design in snatched moments on
+    // weeknights.
+    pub async fn run_with(
         mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
+        mut output: impl TestJobOutput,
     ) -> TestStatus {
-        let status = match self.run_inner(current_dir, resources).await {
+        let status = match self.run_inner(current_dir, resources, &mut output).await {
             Err(ref err) => TestStatus::Error(err.to_string()),
             Ok(None) => TestStatus::Canceled,
             Ok(Some(exit_code)) => {
                 let test_result = TestResult { exit_code };
-                self.output
+                output
                     .set_result(&test_result)
                     .or_log_error("couldn't save job status");
                 TestStatus::Completed(test_result)
