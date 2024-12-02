@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::{arg, Parser as _, Subcommand, ValueEnum};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
-use database::Database;
+use database::{Database, LookupResult};
 use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
@@ -38,6 +38,7 @@ use crate::terminal::TerminalSizeWatcher;
 mod config;
 mod dag;
 mod database;
+mod flock;
 mod git;
 mod http;
 mod process;
@@ -563,18 +564,20 @@ async fn get(
         .tests
         .node(&test_name)
         .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?;
-    let db_entry = env
+    let db_entry = match env
         .database
-        .lookup_result(&TestCase::new(rev.clone(), test.clone()))
-        .context("looking up result in database")?
-        .ok_or_else(|| {
-            anyhow!(
-                "no database entry for test {:?} at revision {:?} ({})",
-                test_name.to_string(),
-                get_args.rev,
-                rev.hash
-            )
-        })?;
+        .lookup(&TestCase::new(rev.clone(), test.clone()))
+        .await
+        .context("database lookup")?
+    {
+        LookupResult::FoundResult(e) => e,
+        LookupResult::YouRunIt(_) => bail!(
+            "no database entry for test {:?} at revision {:?} ({})",
+            test_name.to_string(),
+            get_args.rev,
+            rev.hash
+        ),
+    };
     match get_args.output {
         GetOutput::Stdout => println!("{}", db_entry.stdout_path().display()),
         GetOutput::Stderr => println!("{}", db_entry.stderr_path().display()),

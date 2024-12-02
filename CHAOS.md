@@ -12,7 +12,15 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
    also later be needed so we can implement pruning of the database to prevent
    it eating too much disk (we mustn't delete artifacts while tests could still
    be using them). There are some details to think through here but I'm too
-   tired.
+   tired. Different levels of the problem:
+
+   1. Avoid having concurrent runs of Limmat overwrite each other's outputs
+      making a mess.
+   2. Avoid `cache = "no_caching"` tests modifying the inputs of jobs that
+      depend on them when they get re-run.
+   3. Make a space for logic to prune the database based on size, without
+      worrying about deleting inputs of running jobs.
+
  - It's pretty slow on my work computer. Git performance is crippled by security
    monitoring on that computer, and the single-thread performance is very poor.
    But it doesn't seem like Limmat has to be slow.

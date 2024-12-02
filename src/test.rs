@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    database::Database,
+    database::{Database, LookupResult},
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
@@ -612,17 +612,18 @@ impl<'a> TestJob {
             .await
             .map_err(|test_name| anyhow!("dependency job {test_name} failed"))?;
 
-        if let Some(db_entry) = database
-            .lookup_result(&self.test_case)
-            .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
-            .unwrap_or(None)
+        let mut output = match database
+            .lookup(&self.test_case)
+            .await
+            .context("database lookup")?
         {
-            return Ok(db_entry.result().to_owned());
-        }
-
-        let mut output = database
-            .create_output(&self.test_case)
-            .context("creating database entry")?;
+            LookupResult::FoundResult(db_entry) => {
+                debug!("lookup ok");
+                return Ok(db_entry.result().to_owned());
+            }
+            LookupResult::YouRunIt(output) => output,
+        };
+        debug!("lookup ok");
 
         let outcome = select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
