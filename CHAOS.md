@@ -75,6 +75,20 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
    be getting any test results.)
  - Would be nice to have a way to make the result cache invalidation logic aware
    of config (or other) files that the test command refers to.
+   Perhaps one way to do this would be to have something like:
+
+   ```toml
+   [[config_repos]]
+   name = "kernel"
+   path = "path/to"  # Or remote URL - anything Git can clone
+   rev = "master"    # Optional. Watched for updates?
+   [[tests]]
+   name = "uses_config"
+   config_repos = ["kernel"]
+   command = "something_with.sh --config=$LIMMAT_CONFIG_REPO_kernel"
+   ```
+   In this case, does the test get an exclusive copy of the config repo? Should
+   that be configurable?
  - Probably want a (default?) option to merge stderr and stdout.
    I started implementing this as a `get` command but there's a few things to
    think through carefully.
