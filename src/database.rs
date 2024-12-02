@@ -27,6 +27,11 @@ struct TestResultEntry {
     result: TestResult,
 }
 
+pub enum LookupResult {
+    FoundResult(DatabaseEntry),
+    YouRunIt(DatabaseOutput),
+}
+
 impl Database {
     pub fn create_or_open(base_dir: &Path) -> anyhow::Result<Self> {
         create_dir_all(base_dir).context(format!(
@@ -46,7 +51,10 @@ impl Database {
         self.base_dir.join::<&str>(hash.as_ref()).join(test_name)
     }
 
-    pub fn lookup_result(&self, test_case: &TestCase) -> Result<Option<DatabaseEntry>> {
+    pub fn lookup(&self, test_case: &TestCase) -> Result<LookupResult> {
+        // 1. Nothing in the database. Create the output, return it.
+        // 2. Something in the database and we want to cache. Wait for it to be
+        //    unlocked and return it.
         let hash = match test_case.cache_hash {
             None => return Ok(None),
             Some(ref hash) => hash,
