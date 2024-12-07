@@ -714,18 +714,13 @@ impl<'a> TestJob {
         }
     }
 
-    // Returns Ok(None) when canceled. Does not return until the child process has shut down.
-    // This _inner variant is just here so we can use ? in it instead of having
-    // to construct a TestStatus to report errors. I'm not sure if this
-    // awkwardness is my fault for designing the types wrong, or Rust's fault
-    // for not yet stabilising FromResidual which I think  (?) would let me
-    // construct a TestStatus::Error using ?.
+    // Doesn't do the notifying.
     async fn run_inner<O: TestJobOutput>(
         &mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
         output: &mut O,
-    ) -> anyhow::Result<Option<ExitCode>> {
+    ) -> TestOutcome {
         info!("Starting {:?}", self.test_case);
 
         let mut cmd = self.test_case.test.command();
@@ -754,10 +749,8 @@ impl<'a> TestJob {
             // Test completed, figure out the result. I think maybe a true Rustacean would
             // write this block as a single chain of methods? But it seems ridiculous to me.
             {
-                let exit_code = wait_result
-                    .map_err(anyhow::Error::from)?
-                    .code_not_killed()?;
-                Ok(Some(exit_code))
+                let exit_code = wait_result.context("awaiting child")?.code_not_killed()?;
+                Ok(TestResult { exit_code })
             }
             Either::Right((_, child_fut)) => {
                 // Canceled. Shut down the process if necessary.
@@ -784,7 +777,7 @@ impl<'a> TestJob {
                     }
                 }
 
-                Ok(None)
+                Err(TestInconclusive::Canceled)
             }
         }
     }
@@ -800,17 +793,12 @@ impl<'a> TestJob {
         resources: &Resources<'a>,
         mut output: impl TestJobOutput,
     ) -> TestOutcome {
-        let outcome = match self.run_inner(current_dir, resources, &mut output).await {
-            Err(ref err) => Err(TestInconclusive::Error(err.to_string())),
-            Ok(None) => Err(TestInconclusive::Canceled),
-            Ok(Some(exit_code)) => {
-                let test_result = TestResult { exit_code };
-                output
-                    .set_result(&test_result)
-                    .or_log_error("couldn't save job status");
-                Ok(test_result)
-            }
-        };
+        let outcome = self.run_inner(current_dir, resources, &mut output).await;
+        if let Ok(ref test_result) = outcome {
+            output
+                .set_result(test_result)
+                .or_log_error("couldn't save job status");
+        }
         self.notifier.notify_completion(outcome.clone());
         outcome
     }
