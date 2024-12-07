@@ -603,7 +603,7 @@ impl<'a> TestJob {
     // pre-existing results in the database and storing the new result if there
     // is one.
     pub async fn run(
-        self,
+        mut self,
         database: Arc<Database>,
         pools: &Pools,
         origin_worktree_path: &Path,
@@ -618,7 +618,7 @@ impl<'a> TestJob {
             return outcome;
         }
 
-        let output = match database.create_output(&self.test_case) {
+        let mut output = match database.create_output(&self.test_case) {
             Err(e) => {
                 let outcome = Err(TestInconclusive::Error(format!(
                     "failed to create database entry: {}",
@@ -630,7 +630,7 @@ impl<'a> TestJob {
             Ok(o) => o,
         };
 
-        select! {
+        let outcome = select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
             // and some of those jobs are blocking on resources held by others,
             // we want the former jobs to observe their own cancellation before
@@ -646,13 +646,20 @@ impl<'a> TestJob {
                     // We "own" this worktree.
                     let worktree = worktrees[0].as_worktree();
                     worktree.checkout(&self.test_case.commit_hash).await.context("failed to check out revision")?;
-                    self.run_with(worktree.path(), &resources, output).await
+                    self.run_inner(worktree.path(), &resources, &mut output).await
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    self.run_with(origin_worktree_path, &resources, output).await
+                    self.run_inner(origin_worktree_path, &resources, &mut output).await
                 }
             }
+        };
+        self.notifier.notify_completion(outcome.clone());
+        if let Ok(ref test_result) = outcome {
+            output
+                .set_result(test_result)
+                .or_log_error("couldn't save job status");
         }
+        outcome
     }
 
     // Blocks until all dependency jobs have succeeded, or returns an error
@@ -1952,10 +1959,16 @@ mod tests {
             .unwrap();
         expect_notifs_20s(
             &mut results,
-            [(
-                f.test_case(&commits[0], 0),
-                vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
-            )],
+            [
+                (
+                    f.test_case(&commits[0], 0),
+                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
+                ),
+                (
+                    f.test_case(&commits[1], 0),
+                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
+                ),
+            ],
         )
         .await
         .expect("bad test result");
