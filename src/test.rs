@@ -249,11 +249,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                 job.notifier.notify_completion(outcome);
                 return;
             }
-            // Now that TestOutcome is a Result, the compiler warns us about the
-            // fact that the notification logic is kinda fucked (job.run takes
-            // care of sending notifications, but also returns the outcome, weird).
-            // TODO: Get rid of the let _ =
-            let _ = job.run(db, &pools, origin_worktree.path()).await;
+            let _ = job.run_and_report(db, &pools, origin_worktree.path()).await;
         });
     }
 
@@ -599,11 +595,26 @@ impl<'a> TestJob {
 
     // This is the normal entry point to run a job. It gets the necessary
     // resources from the pools and runs the job. It takes care of notifying
-    // anyone who needs to know about the result, and also of checking for
-    // pre-existing results in the database and storing the new result if there
-    // is one.
-    pub async fn run(
+    // anyone who needs to know about the result (i.e. depending jobs, and the
+    // result database), and also of checking for pre-existing results in the
+    // database and storing the new result if there is one.
+    // TODO: It's a little awkward that this needs to return the TestOutcome. A
+    // healthy user shouldn't really need to care. But, at the moment the
+    // implementation of the "test" command is kinda sketchy and runs dependency
+    // jobs via different logic than the "main" job.
+    pub async fn run_and_report(
         mut self,
+        database: Arc<Database>,
+        pools: &Pools,
+        origin_worktree_path: &Path,
+    ) -> TestOutcome {
+        let outcome = self.run(database, pools, origin_worktree_path).await;
+        self.notifier.notify_completion(outcome.clone());
+        outcome
+    }
+
+    async fn run(
+        &mut self,
         database: Arc<Database>,
         pools: &Pools,
         origin_worktree_path: &Path,
@@ -613,22 +624,12 @@ impl<'a> TestJob {
             .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
             .unwrap_or(None)
         {
-            let outcome = Ok(db_entry.result().clone());
-            self.notifier.notify_completion(outcome.clone());
-            return outcome;
+            return Ok(db_entry.result().to_owned());
         }
 
-        let mut output = match database.create_output(&self.test_case) {
-            Err(e) => {
-                let outcome = Err(TestInconclusive::Error(format!(
-                    "failed to create database entry: {}",
-                    e
-                )));
-                self.notifier.notify_completion(outcome.clone());
-                return outcome;
-            }
-            Ok(o) => o,
-        };
+        let mut output = database
+            .create_output(&self.test_case)
+            .context("creating database entry")?;
 
         let outcome = select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
@@ -653,7 +654,6 @@ impl<'a> TestJob {
                 }
             }
         };
-        self.notifier.notify_completion(outcome.clone());
         if let Ok(ref test_result) = outcome {
             output
                 .set_result(test_result)

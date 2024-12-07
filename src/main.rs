@@ -360,7 +360,7 @@ async fn ensure_job_success(
         .await
         .map_err(|name| anyhow!("dependency job {name:?} failed"))?;
     let test_result = job
-        .run(database, resource_pools.as_ref(), &origin_worktree)
+        .run_and_report(database, resource_pools.as_ref(), &origin_worktree)
         .await
         .with_context(|| format!("running dependency job {name}"))?;
     if test_result.exit_code != 0 {
