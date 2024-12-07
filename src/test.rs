@@ -921,7 +921,7 @@ impl Display for TestInconclusive {
 
 impl From<anyhow::Error> for TestInconclusive {
     fn from(err: anyhow::Error) -> TestInconclusive {
-        TestInconclusive::Error(err.to_string())
+        TestInconclusive::Error(format!("{err:#}"))
     }
 }
 
