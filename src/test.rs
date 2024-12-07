@@ -229,27 +229,14 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         }
     }
 
-    fn spawn_job(&self, mut job: TestJob) {
+    fn spawn_job(&self, job: TestJob) {
         job.notifier.notify(&TestStatus::Enqueued);
 
         let pools = self.resource_pools.clone();
         let origin_worktree = self.repo.clone();
         let db = self.result_db.clone();
         tokio::spawn(async move {
-            // Wait for dependencies do be done, bail early if they do anything
-            // but terminate successfully.
-            if let Err(failed_test_name) = job.await_dep_success().await {
-                info!(
-                    "{:?} canceled due to unsuccess of dependency {failed_test_name:?}",
-                    job.test_case
-                );
-                let outcome = Err(TestInconclusive::Error(format!(
-                    "Dependency {failed_test_name:?} unsuccessful"
-                )));
-                job.notifier.notify_completion(outcome);
-                return;
-            }
-            let _ = job.run_and_report(db, &pools, origin_worktree.path()).await;
+            let _ = job.run(db, &pools, origin_worktree.path()).await;
         });
     }
 
@@ -602,23 +589,29 @@ impl<'a> TestJob {
     // healthy user shouldn't really need to care. But, at the moment the
     // implementation of the "test" command is kinda sketchy and runs dependency
     // jobs via different logic than the "main" job.
-    pub async fn run_and_report(
+    pub async fn run(
         mut self,
         database: Arc<Database>,
         pools: &Pools,
         origin_worktree_path: &Path,
     ) -> TestOutcome {
-        let outcome = self.run(database, pools, origin_worktree_path).await;
+        let outcome = self.do_run(database, pools, origin_worktree_path).await;
         self.notifier.notify_completion(outcome.clone());
         outcome
     }
 
-    async fn run(
+    async fn do_run(
         &mut self,
         database: Arc<Database>,
         pools: &Pools,
         origin_worktree_path: &Path,
     ) -> TestOutcome {
+        // Wait for dependencies do be done, bail early if they do anything
+        // but terminate successfully.
+        self.await_dep_success()
+            .await
+            .map_err(|test_name| anyhow!("dependency job {test_name} failed"))?;
+
         if let Some(db_entry) = database
             .lookup_result(&self.test_case)
             .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
@@ -647,10 +640,10 @@ impl<'a> TestJob {
                     // We "own" this worktree.
                     let worktree = worktrees[0].as_worktree();
                     worktree.checkout(&self.test_case.commit_hash).await.context("failed to check out revision")?;
-                    self.run_inner(worktree.path(), &resources, &mut output).await
+                    self.execute_child(worktree.path(), &resources, &mut output).await
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    self.run_inner(origin_worktree_path, &resources, &mut output).await
+                    self.execute_child(origin_worktree_path, &resources, &mut output).await
                 }
             }
         };
@@ -664,7 +657,7 @@ impl<'a> TestJob {
 
     // Blocks until all dependency jobs have succeeded, or returns an error
     // reporting the name of the job that terminated without success.
-    pub async fn await_dep_success(&mut self) -> Result<(), TestName> {
+    async fn await_dep_success(&mut self) -> Result<(), TestName> {
         // This is another thing where the tokio::sync::watch API is a bit
         // weird, there's no way to wait for a message without passing a
         // predicate, so we have to pass a dummy one.
@@ -721,8 +714,8 @@ impl<'a> TestJob {
         }
     }
 
-    // Doesn't do the notifying.
-    async fn run_inner<O: TestJobOutput>(
+    // The core part of the job - runs the actual process and returns its result.
+    async fn execute_child<O: TestJobOutput>(
         &mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
@@ -800,7 +793,9 @@ impl<'a> TestJob {
         resources: &Resources<'a>,
         mut output: impl TestJobOutput,
     ) -> TestOutcome {
-        let outcome = self.run_inner(current_dir, resources, &mut output).await;
+        let outcome = self
+            .execute_child(current_dir, resources, &mut output)
+            .await;
         if let Ok(ref test_result) = outcome {
             output
                 .set_result(test_result)
