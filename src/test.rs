@@ -1,4 +1,4 @@
-use core::{fmt, fmt::Display};
+use core::{error::Error, fmt, fmt::Display};
 use std::{
     borrow::Borrow,
     collections::HashMap,
@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use futures::future::{self, select_all, try_join_all, Either, FutureExt};
 use itertools::Itertools;
 #[allow(unused_imports)]
@@ -243,12 +243,17 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                     "{:?} canceled due to unsuccess of dependency {failed_test_name:?}",
                     job.test_case
                 );
-                let outcome =
-                    TestOutcome::Error(format!("Dependency {failed_test_name:?} unsuccessful"));
+                let outcome = Err(TestInconclusive::Error(format!(
+                    "Dependency {failed_test_name:?} unsuccessful"
+                )));
                 job.notifier.notify_completion(outcome);
                 return;
             }
-            job.run(db, &pools, origin_worktree.path()).await;
+            // Now that TestOutcome is a Result, the compiler warns us about the
+            // fact that the notification logic is kinda fucked (job.run takes
+            // care of sending notifications, but also returns the outcome, weird).
+            // TODO: Get rid of the let _ =
+            let _ = job.run(db, &pools, origin_worktree.path()).await;
         });
     }
 
@@ -608,14 +613,17 @@ impl<'a> TestJob {
             .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
             .unwrap_or(None)
         {
-            let outcome = TestOutcome::Completed(db_entry.result().clone());
+            let outcome = Ok(db_entry.result().clone());
             self.notifier.notify_completion(outcome.clone());
             return outcome;
         }
 
         let output = match database.create_output(&self.test_case) {
             Err(e) => {
-                let outcome = TestOutcome::Error(format!("failed to create database entry: {}", e));
+                let outcome = Err(TestInconclusive::Error(format!(
+                    "failed to create database entry: {}",
+                    e
+                )));
                 self.notifier.notify_completion(outcome.clone());
                 return outcome;
             }
@@ -631,16 +639,14 @@ impl<'a> TestJob {
             // will be flaky. Not sure what to do about that.
             biased;
 
-            _ = self.ct.cancelled() => TestOutcome::Canceled,
+            _ = self.ct.cancelled() => Err(TestInconclusive::Canceled),
             resources = pools.get(self.test_case.test.needs_resources.clone()) =>  {
                 self.notifier.notify(&TestStatus::Started);
                 if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
                     // We "own" this worktree.
                     let worktree = worktrees[0].as_worktree();
-                    match worktree.checkout(&self.test_case.commit_hash).await {
-                        Err(e) => TestOutcome::Error(format!("failed to check out revision: {}", e)),
-                        Ok(_) => self.run_with(worktree.path(), &resources, output).await
-                    }
+                    worktree.checkout(&self.test_case.commit_hash).await.context("failed to check out revision")?;
+                    self.run_with(worktree.path(), &resources, output).await
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
                     self.run_with(origin_worktree_path, &resources, output).await
@@ -668,7 +674,7 @@ impl<'a> TestJob {
             // (including the "impossible" case that the sender has been dropped
             // and the rx.wait_for call failed) here, we trust that the other
             // side of the notifier has reported any issues appropriately.
-            if let Ok(TestOutcome::Completed(result)) = &outcome {
+            if let Ok(Ok(result)) = &outcome {
                 if result.exit_code == 0 {
                     debug!(
                         "{:?}: Dependency {:?} succeeded",
@@ -795,18 +801,22 @@ impl<'a> TestJob {
         mut output: impl TestJobOutput,
     ) -> TestOutcome {
         let outcome = match self.run_inner(current_dir, resources, &mut output).await {
-            Err(ref err) => TestOutcome::Error(err.to_string()),
-            Ok(None) => TestOutcome::Canceled,
+            Err(ref err) => Err(TestInconclusive::Error(err.to_string())),
+            Ok(None) => Err(TestInconclusive::Canceled),
             Ok(Some(exit_code)) => {
                 let test_result = TestResult { exit_code };
                 output
                     .set_result(&test_result)
                     .or_log_error("couldn't save job status");
-                TestOutcome::Completed(test_result)
+                Ok(test_result)
             }
         };
         self.notifier.notify_completion(outcome.clone());
         outcome
+    }
+
+    pub fn test_name(&self) -> &TestName {
+        &self.test_case.test.name
     }
 }
 
@@ -894,43 +904,38 @@ impl Display for TestStatus {
         match self {
             Self::Enqueued => write!(f, "Enqueued"),
             Self::Started => write!(f, "Started"),
-            Self::Finished(outcome) => write!(f, "{}", outcome),
+            Self::Finished(Err(inconclusive)) => write!(f, "{}", inconclusive),
+            Self::Finished(Ok(result)) => write!(f, "{}", result),
         }
     }
 }
 
 // Final result of an attempt to run a test.
+pub type TestOutcome = Result<TestResult, TestInconclusive>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TestOutcome {
+pub enum TestInconclusive {
     Canceled,
-    // anyhow::Error doesn't implement Clone. We don't really need the overall
-    // error handling fanciness since this is just part of the normal flow of
-    // the program, so we just define this as a normal case among this enum.
+    // anyhow::Error doesn't implement Clone.
     Error(String), // This includes the test getting terminated by a signal.
-    Completed(TestResult),
 }
 
-impl From<TestOutcome> for anyhow::Result<()> {
-    fn from(s: TestOutcome) -> anyhow::Result<()> {
-        match s {
-            TestOutcome::Completed(TestResult { exit_code: 0 }) => Ok(()),
-            TestOutcome::Completed(TestResult { exit_code: code }) => {
-                bail!("Test failed with exit code {}", code)
-            }
-            _ => bail!("{}", s),
-        }
-    }
-}
-
-impl Display for TestOutcome {
+impl Display for TestInconclusive {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Canceled => write!(f, "Canceled"),
             Self::Error(msg) => write!(f, "Error while testing - {:?}", msg),
-            Self::Completed(result) => write!(f, "Completed - exit code {}", result),
         }
     }
 }
+
+impl From<anyhow::Error> for TestInconclusive {
+    fn from(err: anyhow::Error) -> TestInconclusive {
+        TestInconclusive::Error(err.to_string())
+    }
+}
+
+impl Error for TestInconclusive {}
 
 // Result of a test that ran to completion.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1504,7 +1509,7 @@ mod tests {
                 vec![
                     TestStatus::Enqueued,
                     TestStatus::Started,
-                    TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: 0 })),
+                    TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
                 ]
                 .into(),
             )],
@@ -1563,7 +1568,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Finished(TestOutcome::Canceled),
+                        TestStatus::Finished(Err(TestInconclusive::Canceled)),
                     ]
                     .into(),
                 ),
@@ -1572,7 +1577,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Finished(TestOutcome::Canceled),
+                        TestStatus::Finished(Err(TestInconclusive::Canceled)),
                     ]
                     .into(),
                 ),
@@ -1583,7 +1588,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: 0 })),
+                        TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
                     ]
                     .into(),
                 ),
@@ -1592,7 +1597,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: 0 })),
+                        TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
                     ]
                     .into(),
                 ),
@@ -1717,7 +1722,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: i })),
+                        TestStatus::Finished(Ok(TestResult { exit_code: i })),
                     ]
                     .into(),
                 ));
@@ -1961,7 +1966,7 @@ mod tests {
             &mut results,
             [(
                 f.test_case(&commits[0], 0),
-                vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
+                vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
             )],
         )
         .await
@@ -2039,8 +2044,8 @@ mod tests {
             &mut results,
             [(
                 f.test_case(&with_error, 0),
-                vec![TestStatus::Finished(TestOutcome::Error(String::from(
-                    "terminated by signal 10",
+                vec![TestStatus::Finished(Err(TestInconclusive::Error(
+                    String::from("terminated by signal 10"),
                 )))]
                 .into(),
             )],
@@ -2056,15 +2061,15 @@ mod tests {
             [
                 (
                     f.test_case(&with_error, 1),
-                    vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
+                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
                 ),
                 (
                     f.test_case(&with_fail, 0),
-                    vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
+                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
                 ),
                 (
                     f.test_case(&with_fail, 1),
-                    vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
+                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
                 ),
             ],
         )

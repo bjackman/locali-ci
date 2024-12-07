@@ -355,12 +355,21 @@ async fn ensure_job_success(
     mut job: TestJob,
     origin_worktree: PathBuf,
 ) -> anyhow::Result<()> {
+    let name = job.test_name().to_owned();
     job.await_dep_success()
         .await
         .map_err(|name| anyhow!("dependency job {name:?} failed"))?;
-    job.run(database, resource_pools.as_ref(), &origin_worktree)
+    let test_result = job
+        .run(database, resource_pools.as_ref(), &origin_worktree)
         .await
-        .into()
+        .with_context(|| format!("running dependency job {name}"))?;
+    if test_result.exit_code != 0 {
+        bail!(
+            "dependency job {name} failed with exit code {}",
+            test_result.exit_code
+        );
+    }
+    Ok(())
 }
 
 struct OneshotOutput {}
@@ -518,11 +527,11 @@ async fn test(
     // Doesn't need a worktree, it's gonna do it live and direct in the main tree.
     needs_resources.remove(&ResourceKey::Worktree);
     let resources = env.config.resource_pools.get(needs_resources).await;
-    let status = job
+    let result = job
         .run_with(env.repo.path(), &resources, OneshotOutput {})
-        .await;
-    eprintln!("Finished: {}", status);
-    status.into()
+        .await?;
+    eprintln!("Finished: {}", result);
+    Ok(())
 }
 
 async fn get(

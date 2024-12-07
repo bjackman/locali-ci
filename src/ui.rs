@@ -10,7 +10,7 @@ use crate::{
     database::Database,
     git::{CommitHash, Worktree},
     http::UiState,
-    test::{Notification, TestCase, TestName, TestOutcome, TestStatus},
+    test::{Notification, TestCase, TestInconclusive, TestName, TestStatus},
     text::{Class, Line, Span, Text},
     util::{Rect, ResultExt as _},
 };
@@ -325,10 +325,12 @@ impl OutputBuffer {
         let mut spans = Vec::new();
         for (name, tracked_case) in tracked_cases {
             let status_part = match &tracked_case.status {
-                TestStatus::Finished(TestOutcome::Error(msg)) => {
+                // Note - cancellation is an "error" in the type system but we
+                // don't treat it as an error in the UI.
+                TestStatus::Finished(Err(TestInconclusive::Error(msg))) => {
                     Span::new(msg).with_class(Class::Error)
                 }
-                TestStatus::Finished(TestOutcome::Completed(result)) => {
+                TestStatus::Finished(Ok(result)) => {
                     if result.exit_code == 0 {
                         Span::new("success").with_class(Class::Success)
                     } else {
@@ -422,14 +424,12 @@ mod tests {
             fake_notif(
                 &commit3.hash,
                 &test2,
-                TestStatus::Finished(crate::test::TestOutcome::Completed(TestResult {
-                    exit_code: 0,
-                })),
+                TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
             ),
             fake_notif(
                 &commit2.hash,
                 &test1,
-                TestStatus::Finished(crate::test::TestOutcome::Error("oh no".to_owned())),
+                TestStatus::Finished(Err(TestInconclusive::Error("oh no".to_owned()))),
             ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
@@ -488,14 +488,12 @@ mod tests {
             fake_notif(
                 &commit3.hash,
                 &test2,
-                TestStatus::Finished(crate::test::TestOutcome::Completed(TestResult {
-                    exit_code: 0,
-                })),
+                TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
             ),
             fake_notif(
                 &commit2.hash,
                 &test1,
-                TestStatus::Finished(crate::test::TestOutcome::Error("oh no".to_owned())),
+                TestStatus::Finished(Err(TestInconclusive::Error("oh no".to_owned()))),
             ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
@@ -556,14 +554,12 @@ mod tests {
             fake_notif(
                 &commit3.hash,
                 &test1,
-                TestStatus::Finished(crate::test::TestOutcome::Completed(TestResult {
-                    exit_code: 0,
-                })),
+                TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
             ),
             fake_notif(
                 &commit2.hash,
                 &test2,
-                TestStatus::Finished(crate::test::TestOutcome::Error("oh no".to_owned())),
+                TestStatus::Finished(Err(TestInconclusive::Error("oh no".to_owned()))),
             ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
