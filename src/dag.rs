@@ -326,6 +326,7 @@ mod tests {
     #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![]]); "tree")]
     #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![],
                        vec![5], vec![6, 7], vec![], vec![]]); "trees")]
+    #[test_case(nodes([vec![1, 2], vec![3], vec![3], vec![]]); "fail")]
     fn test_bottom_up(edges: Vec<TestGraphNode>) {
         let all_nodes: HashSet<usize, RandomState> = HashSet::from_iter(0..edges.len());
         let dag = Dag::new(edges).unwrap();
@@ -338,6 +339,17 @@ mod tests {
             HashSet::from_iter(order.clone().map(|node| node.id)),
             "Not all nodes visited"
         );
+        // BUG: This assertion fails for dag::tests::test_bottom_up::fail:
+        //      assertion `left == right` failed: Some nodes have been visited more than once
+        //      left: 4
+        //      right: 5
+        // TODO: Uncomment once bug is fixed.
+        //
+        // assert_eq!(
+        //     dag.nodes.len(),
+        //     order.clone().count(),
+        //     "Some nodes have been visited more than once"
+        // );
         let mut seen: HashSet<usize> = HashSet::new();
         for node in order {
             for child_id in node.child_ids() {
@@ -366,6 +378,14 @@ mod tests {
     #[test_case(nodes([vec![1], vec![2, 3], vec![], vec![],
                        vec![5], vec![6, 7], vec![], vec![]]),
                 4, vec![4, 5, 7, 6]; "trees 2")]
+    // BUG: This test fails:
+    //      assertion `left == right` failed
+    //      left: [0, 2, 3, 4, 1, 4]
+    //      right: [0, 2, 3, 1, 4]
+    // TODO: Uncomment once bug is fixed.
+    //
+    // #[test_case(nodes([vec![1, 2], vec![4], vec![3], vec![4], vec![]]),
+    //             0, vec![0, 2, 3, 1, 4]; "fail")]
     fn test_top_down(edges: Vec<TestGraphNode>, from: usize, want_order: Vec<usize>) {
         let dag = Dag::new(edges).unwrap();
         let order = dag.top_down_from(&from).unwrap();
