@@ -243,9 +243,9 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                     "{:?} canceled due to unsuccess of dependency {failed_test_name:?}",
                     job.test_case
                 );
-                let status =
-                    TestStatus::Error(format!("Dependency {failed_test_name:?} unsuccessful"));
-                job.notifier.notify_completion(status);
+                let outcome =
+                    TestOutcome::Error(format!("Dependency {failed_test_name:?} unsuccessful"));
+                job.notifier.notify_completion(outcome);
                 return;
             }
             job.run(db, &pools, origin_worktree.path()).await;
@@ -390,7 +390,7 @@ struct TestStatusNotifier {
     // online as the best way to broadcast a single value. But that's not at all
     // what it's actually designed for and using it that way makes for
     // extremely weird code.
-    completion_tx: broadcast::Sender<TestStatus>,
+    completion_tx: broadcast::Sender<TestOutcome>,
 }
 
 impl TestStatusNotifier {
@@ -404,7 +404,7 @@ impl TestStatusNotifier {
     }
 
     // Get notified when the job on the other end of this notifier is complete.
-    fn subscribe_completion(&self) -> broadcast::Receiver<TestStatus> {
+    fn subscribe_completion(&self) -> broadcast::Receiver<TestOutcome> {
         self.completion_tx.subscribe()
     }
 
@@ -425,10 +425,10 @@ impl TestStatusNotifier {
     // using here means that we can only ever reliably send one message. If we
     // got that wrong the results would be confusing to debug, so that's why
     // sending the message consumes the JobDebNotifier.
-    fn notify_completion(self, status: TestStatus) {
-        self.notify(&status);
+    fn notify_completion(self, outcome: TestOutcome) {
+        self.notify(&TestStatus::Finished(outcome.clone()));
         // Inner failure means nobody is listening. This is fine and normal.
-        let _ = self.completion_tx.send(status);
+        let _ = self.completion_tx.send(outcome);
     }
 }
 
@@ -513,7 +513,7 @@ pub struct TestJobBuilder {
     test_case: TestCase,
     token: Option<JobToken>,
     env: Arc<Vec<(String, String)>>,
-    wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
+    wait_for: Vec<(TestName, broadcast::Receiver<TestOutcome>)>,
     global_tx: Option<broadcast::Sender<Arc<Notification>>>,
 }
 
@@ -524,7 +524,7 @@ impl TestJobBuilder {
         env: Arc<JobEnv>,
         // Job shouldn't start until all of these channels produce a result. If any
         // is unsuccessful it should abort.
-        wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
+        wait_for: Vec<(TestName, broadcast::Receiver<TestOutcome>)>,
     ) -> Self {
         Self {
             ct,
@@ -583,12 +583,12 @@ pub struct TestJob {
     base_env: Arc<Vec<(String, String)>>,
     // Job shouldn't start until all of these channels produce a result. If any
     // is unsuccessful it should abort.
-    wait_for: Vec<(TestName, broadcast::Receiver<TestStatus>)>,
+    wait_for: Vec<(TestName, broadcast::Receiver<TestOutcome>)>,
     notifier: TestStatusNotifier,
 }
 
 impl<'a> TestJob {
-    pub fn subscribe_completion(&self) -> broadcast::Receiver<TestStatus> {
+    pub fn subscribe_completion(&self) -> broadcast::Receiver<TestOutcome> {
         self.notifier.subscribe_completion()
     }
 
@@ -602,22 +602,22 @@ impl<'a> TestJob {
         database: Arc<Database>,
         pools: &Pools,
         origin_worktree_path: &Path,
-    ) -> TestStatus {
+    ) -> TestOutcome {
         if let Some(db_entry) = database
             .lookup_result(&self.test_case)
             .inspect_err(|e| error!("Failed to read cached test result, will overwrite: {e:?}"))
             .unwrap_or(None)
         {
-            let result = TestStatus::Completed(db_entry.result().clone());
-            self.notifier.notify_completion(result.clone());
-            return result;
+            let outcome = TestOutcome::Completed(db_entry.result().clone());
+            self.notifier.notify_completion(outcome.clone());
+            return outcome;
         }
 
         let output = match database.create_output(&self.test_case) {
             Err(e) => {
-                let status = TestStatus::Error(format!("failed to create database entry: {}", e));
-                self.notifier.notify_completion(status.clone());
-                return status;
+                let outcome = TestOutcome::Error(format!("failed to create database entry: {}", e));
+                self.notifier.notify_completion(outcome.clone());
+                return outcome;
             }
             Ok(o) => o,
         };
@@ -631,14 +631,14 @@ impl<'a> TestJob {
             // will be flaky. Not sure what to do about that.
             biased;
 
-            _ = self.ct.cancelled() => TestStatus::Canceled,
+            _ = self.ct.cancelled() => TestOutcome::Canceled,
             resources = pools.get(self.test_case.test.needs_resources.clone()) =>  {
                 self.notifier.notify(&TestStatus::Started);
                 if let Some(worktrees) = resources.resources(&ResourceKey::Worktree) {
                     // We "own" this worktree.
                     let worktree = worktrees[0].as_worktree();
                     match worktree.checkout(&self.test_case.commit_hash).await {
-                        Err(e) => TestStatus::Error(format!("failed to check out revision: {}", e)),
+                        Err(e) => TestOutcome::Error(format!("failed to check out revision: {}", e)),
                         Ok(_) => self.run_with(worktree.path(), &resources, output).await
                     }
                 } else {
@@ -662,13 +662,13 @@ impl<'a> TestJob {
             .collect();
         let mut wait_for: Vec<_> = wait_for.into_iter().map(Box::pin).collect();
         while !wait_for.is_empty() {
-            let ((test_name, test_status), _idx, remaining) = select_all(wait_for).await;
+            let ((test_name, outcome), _idx, remaining) = select_all(wait_for).await;
             wait_for = remaining;
             // We are squashing lots of different types of failures and aborts
             // (including the "impossible" case that the sender has been dropped
             // and the rx.wait_for call failed) here, we trust that the other
             // side of the notifier has reported any issues appropriately.
-            if let Ok(TestStatus::Completed(result)) = &test_status {
+            if let Ok(TestOutcome::Completed(result)) = &outcome {
                 if result.exit_code == 0 {
                     debug!(
                         "{:?}: Dependency {:?} succeeded",
@@ -679,7 +679,7 @@ impl<'a> TestJob {
             }
             info!(
                 "Dependency {:?} of {:?} failed: {:?}",
-                test_name, self.test_case.test.name, test_status
+                test_name, self.test_case.test.name, outcome
             );
             return Err(test_name.clone());
         }
@@ -793,20 +793,20 @@ impl<'a> TestJob {
         current_dir: &Path,
         resources: &Resources<'a>,
         mut output: impl TestJobOutput,
-    ) -> TestStatus {
-        let status = match self.run_inner(current_dir, resources, &mut output).await {
-            Err(ref err) => TestStatus::Error(err.to_string()),
-            Ok(None) => TestStatus::Canceled,
+    ) -> TestOutcome {
+        let outcome = match self.run_inner(current_dir, resources, &mut output).await {
+            Err(ref err) => TestOutcome::Error(err.to_string()),
+            Ok(None) => TestOutcome::Canceled,
             Ok(Some(exit_code)) => {
                 let test_result = TestResult { exit_code };
                 output
                     .set_result(&test_result)
                     .or_log_error("couldn't save job status");
-                TestStatus::Completed(test_result)
+                TestOutcome::Completed(test_result)
             }
         };
-        self.notifier.notify_completion(status.clone());
-        status
+        self.notifier.notify_completion(outcome.clone());
+        outcome
     }
 }
 
@@ -886,6 +886,22 @@ pub type ExitCode = i32;
 pub enum TestStatus {
     Enqueued,
     Started,
+    Finished(TestOutcome),
+}
+
+impl Display for TestStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Enqueued => write!(f, "Enqueued"),
+            Self::Started => write!(f, "Started"),
+            Self::Finished(outcome) => write!(f, "{}", outcome),
+        }
+    }
+}
+
+// Final result of an attempt to run a test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestOutcome {
     Canceled,
     // anyhow::Error doesn't implement Clone. We don't really need the overall
     // error handling fanciness since this is just part of the normal flow of
@@ -894,23 +910,11 @@ pub enum TestStatus {
     Completed(TestResult),
 }
 
-impl Display for TestStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Enqueued => write!(f, "Enqueued"),
-            Self::Started => write!(f, "Started"),
-            Self::Canceled => write!(f, "Cancelled"),
-            Self::Error(msg) => write!(f, "Error while testing - {:?}", msg),
-            Self::Completed(result) => write!(f, "Completed - exit code {}", result),
-        }
-    }
-}
-
-impl From<TestStatus> for anyhow::Result<()> {
-    fn from(s: TestStatus) -> anyhow::Result<()> {
+impl From<TestOutcome> for anyhow::Result<()> {
+    fn from(s: TestOutcome) -> anyhow::Result<()> {
         match s {
-            TestStatus::Completed(TestResult { exit_code: 0 }) => Ok(()),
-            TestStatus::Completed(TestResult { exit_code: code }) => {
+            TestOutcome::Completed(TestResult { exit_code: 0 }) => Ok(()),
+            TestOutcome::Completed(TestResult { exit_code: code }) => {
                 bail!("Test failed with exit code {}", code)
             }
             _ => bail!("{}", s),
@@ -918,6 +922,17 @@ impl From<TestStatus> for anyhow::Result<()> {
     }
 }
 
+impl Display for TestOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Canceled => write!(f, "Canceled"),
+            Self::Error(msg) => write!(f, "Error while testing - {:?}", msg),
+            Self::Completed(result) => write!(f, "Completed - exit code {}", result),
+        }
+    }
+}
+
+// Result of a test that ran to completion.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TestResult {
     // Note this is called "exit_code" instead of "return_code" because it really
@@ -1489,7 +1504,7 @@ mod tests {
                 vec![
                     TestStatus::Enqueued,
                     TestStatus::Started,
-                    TestStatus::Completed(TestResult { exit_code: 0 }),
+                    TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: 0 })),
                 ]
                 .into(),
             )],
@@ -1548,7 +1563,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Canceled,
+                        TestStatus::Finished(TestOutcome::Canceled),
                     ]
                     .into(),
                 ),
@@ -1557,7 +1572,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Canceled,
+                        TestStatus::Finished(TestOutcome::Canceled),
                     ]
                     .into(),
                 ),
@@ -1568,7 +1583,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Completed(TestResult { exit_code: 0 }),
+                        TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: 0 })),
                     ]
                     .into(),
                 ),
@@ -1577,7 +1592,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Completed(TestResult { exit_code: 0 }),
+                        TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: 0 })),
                     ]
                     .into(),
                 ),
@@ -1702,7 +1717,7 @@ mod tests {
                     vec![
                         TestStatus::Enqueued,
                         TestStatus::Started,
-                        TestStatus::Completed(TestResult { exit_code: i }),
+                        TestStatus::Finished(TestOutcome::Completed(TestResult { exit_code: i })),
                     ]
                     .into(),
                 ));
@@ -1946,7 +1961,7 @@ mod tests {
             &mut results,
             [(
                 f.test_case(&commits[0], 0),
-                vec![TestStatus::Canceled].into(),
+                vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
             )],
         )
         .await
@@ -2024,7 +2039,10 @@ mod tests {
             &mut results,
             [(
                 f.test_case(&with_error, 0),
-                vec![TestStatus::Error(String::from("terminated by signal 10"))].into(),
+                vec![TestStatus::Finished(TestOutcome::Error(String::from(
+                    "terminated by signal 10",
+                )))]
+                .into(),
             )],
         )
         .await
@@ -2038,15 +2056,15 @@ mod tests {
             [
                 (
                     f.test_case(&with_error, 1),
-                    vec![TestStatus::Canceled].into(),
+                    vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
                 ),
                 (
                     f.test_case(&with_fail, 0),
-                    vec![TestStatus::Canceled].into(),
+                    vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
                 ),
                 (
                     f.test_case(&with_fail, 1),
-                    vec![TestStatus::Canceled].into(),
+                    vec![TestStatus::Finished(TestOutcome::Canceled)].into(),
                 ),
             ],
         )

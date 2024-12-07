@@ -10,7 +10,7 @@ use crate::{
     database::Database,
     git::{CommitHash, Worktree},
     http::UiState,
-    test::{Notification, TestCase, TestName, TestStatus},
+    test::{Notification, TestCase, TestName, TestOutcome, TestStatus},
     text::{Class, Line, Span, Text},
     util::{Rect, ResultExt as _},
 };
@@ -325,8 +325,10 @@ impl OutputBuffer {
         let mut spans = Vec::new();
         for (name, tracked_case) in tracked_cases {
             let status_part = match &tracked_case.status {
-                TestStatus::Error(msg) => Span::new(msg).with_class(Class::Error),
-                TestStatus::Completed(result) => {
+                TestStatus::Finished(TestOutcome::Error(msg)) => {
+                    Span::new(msg).with_class(Class::Error)
+                }
+                TestStatus::Finished(TestOutcome::Completed(result)) => {
                     if result.exit_code == 0 {
                         Span::new("success").with_class(Class::Success)
                     } else {
@@ -420,9 +422,15 @@ mod tests {
             fake_notif(
                 &commit3.hash,
                 &test2,
-                TestStatus::Completed(TestResult { exit_code: 0 }),
+                TestStatus::Finished(crate::test::TestOutcome::Completed(TestResult {
+                    exit_code: 0,
+                })),
             ),
-            fake_notif(&commit2.hash, &test1, TestStatus::Error("oh no".to_owned())),
+            fake_notif(
+                &commit2.hash,
+                &test1,
+                TestStatus::Finished(crate::test::TestOutcome::Error("oh no".to_owned())),
+            ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
@@ -480,9 +488,15 @@ mod tests {
             fake_notif(
                 &commit3.hash,
                 &test2,
-                TestStatus::Completed(TestResult { exit_code: 0 }),
+                TestStatus::Finished(crate::test::TestOutcome::Completed(TestResult {
+                    exit_code: 0,
+                })),
             ),
-            fake_notif(&commit2.hash, &test1, TestStatus::Error("oh no".to_owned())),
+            fake_notif(
+                &commit2.hash,
+                &test1,
+                TestStatus::Finished(crate::test::TestOutcome::Error("oh no".to_owned())),
+            ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
@@ -542,9 +556,15 @@ mod tests {
             fake_notif(
                 &commit3.hash,
                 &test1,
-                TestStatus::Completed(TestResult { exit_code: 0 }),
+                TestStatus::Finished(crate::test::TestOutcome::Completed(TestResult {
+                    exit_code: 0,
+                })),
             ),
-            fake_notif(&commit2.hash, &test2, TestStatus::Error("oh no".to_owned())),
+            fake_notif(
+                &commit2.hash,
+                &test2,
+                TestStatus::Finished(crate::test::TestOutcome::Error("oh no".to_owned())),
+            ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
             update_tracked_cases(&mut tracked_cases, Arc::new(notif));
