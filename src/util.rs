@@ -2,6 +2,7 @@ use core::fmt;
 use std::{
     fmt::{Display, Formatter},
     future::Future,
+    io,
     ops::Deref,
     path::PathBuf,
     str::FromStr,
@@ -109,4 +110,23 @@ impl ErrGroup {
 pub struct Rect {
     pub cols: usize,
     pub rows: usize,
+}
+
+pub trait IoResultExt {
+    fn ignore(self, kind: io::ErrorKind) -> Self;
+}
+
+impl IoResultExt for io::Result<()> {
+    fn ignore(self, kind: io::ErrorKind) -> io::Result<()> {
+        match self {
+            Err(e) => {
+                if e.kind() == kind {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+            Ok(()) => Ok(()),
+        }
+    }
 }
