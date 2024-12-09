@@ -1,6 +1,6 @@
 use std::{
     fs::{create_dir_all, File, OpenOptions},
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     process::Stdio,
 };
@@ -72,31 +72,39 @@ impl Database {
 
         // First we lock the file for reading so we can check if there's a result in there already.
         // This will block if someone else is running the test.
-        let flock = SharedFlock::lock(json_file)
+        let mut flock = SharedFlock::lock(json_file)
             .await
             .context("locking JSON file for reading")?;
 
-        match serde_json::from_reader::<_, TestResultEntry>(&flock.file) {
-            Ok(test_result) => {
-                // Has the configuration changed? if not we need to rerun regardless.
-                if test_result.config_hash == test_case.test.config_hash {
-                    // Was the test configured to accept cached results?
-                    if test_case.cache_hash.is_some() {
-                        // Cool, we're done.
-                        return Ok(LookupResult::FoundResult(DatabaseEntry {
-                            base_path: result_dir.clone(),
-                            result: test_result,
-                        }));
+        let mut json = String::new();
+        flock
+            .file
+            .read_to_string(&mut json)
+            .context("reading JSON")?;
+        if !json.is_empty() {
+            match serde_json::from_str::<TestResultEntry>(&json) {
+                Ok(test_result) => {
+                    // Has the configuration changed? if not we need to rerun regardless.
+                    if test_result.config_hash == test_case.test.config_hash {
+                        // Was the test configured to accept cached results?
+                        if test_case.cache_hash.is_some() {
+                            // Cool, we're done.
+                            return Ok(LookupResult::FoundResult(DatabaseEntry {
+                                base_path: result_dir.clone(),
+                                result: test_result,
+                            }));
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                // This probably just means limmat got killed before we finished
-                // writing the result.
-                debug!(
-                    "Error reading result JSON from {}: {e}",
-                    json_path.display()
-                );
+                Err(e) => {
+                    // This probably just means limmat got killed before we finished
+                    // writing the result.
+                    debug!(
+                        "Error reading result JSON from {}: {e} - JSON\n{:?}",
+                        json_path.display(),
+                        json,
+                    );
+                }
             }
         }
 

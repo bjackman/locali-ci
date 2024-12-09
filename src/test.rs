@@ -620,12 +620,10 @@ impl<'a> TestJob {
             .context("database lookup")?
         {
             LookupResult::FoundResult(db_entry) => {
-                debug!("lookup ok");
                 return Ok(db_entry.result().to_owned());
             }
             LookupResult::YouRunIt(output) => output,
         };
-        debug!("lookup ok");
 
         let outcome = select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
