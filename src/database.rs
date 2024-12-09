@@ -1,8 +1,7 @@
 use std::{
     fs::{create_dir_all, File, OpenOptions},
-    io::{Read as _, Write as _},
+    io::{Read as _, Seek as _, Write as _},
     path::{Path, PathBuf},
-    process::Stdio,
 };
 
 use anyhow::{Context, Result};
@@ -107,6 +106,9 @@ impl Database {
                 }
             }
         }
+        // Gotta rewind as well as truncate, otherwise the file is padded with 0s.
+        flock.file.rewind().context("rewinding JSON file")?;
+        flock.file.set_len(0).context("truncating JSON file")?;
 
         // We have to run the test. Upgrade the lock to exclusive.
         let flock = flock.upgrade().await.context("upgrading JSON file lock")?;
@@ -119,6 +121,7 @@ impl Database {
 }
 
 // Existing entry in the database.
+#[derive(Debug)]
 pub struct DatabaseEntry {
     base_path: PathBuf,
     result: TestResultEntry,
@@ -167,16 +170,20 @@ impl DatabaseOutput {
 }
 
 impl TestJobOutput for DatabaseOutput {
-    fn stdout(&mut self) -> Result<Stdio> {
+    type Stream = File;
+
+    fn stdout(&mut self) -> Result<File> {
         assert!(!self.stdout_opened);
         self.stdout_opened = true;
-        Ok(Stdio::from(File::create(self.base_dir.join("stdout.txt"))?))
+        let path = self.base_dir.join("stdout.txt");
+        File::create(&path).with_context(|| format!("creating {}", path.display()))
     }
 
-    fn stderr(&mut self) -> Result<Stdio> {
+    fn stderr(&mut self) -> Result<File> {
         assert!(!self.stderr_opened);
         self.stderr_opened = true;
-        Ok(Stdio::from(File::create(self.base_dir.join("stderr.txt"))?))
+        let path = self.base_dir.join("stderr.txt");
+        File::create(&path).with_context(|| format!("creating {}", path.display()))
     }
 
     // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
@@ -194,5 +201,69 @@ impl TestJobOutput for DatabaseOutput {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::TempDir;
+
+    use crate::{git::Commit, test::Test};
+
+    use super::*;
+
+    #[test_log::test(tokio::test)]
+    async fn test_corrupted_result() {
+        let db_dir = TempDir::new().unwrap();
+        let db = Database::create_or_open(db_dir.path()).unwrap();
+
+        // Setup: Create a corrupted database entry. This simulates Limmat
+        // getting killed in the middle of writing.
+        // Best way to make sure we are corrupting data that the database will
+        // really is to have the database write it in the first place.
+        let test_case = TestCase::new(Commit::arbitrary(), Arc::new(Test::arbitrary()));
+        let json_path = {
+            let mut output = match db.lookup(&test_case).await.unwrap() {
+                LookupResult::FoundResult(_) => panic!("Found result in empty database"),
+                LookupResult::YouRunIt(output) => output,
+            };
+            output
+                .stderr()
+                .unwrap()
+                .write_all(b"hello stderr\n")
+                .unwrap();
+            output
+                .stdout()
+                .unwrap()
+                .write_all(b"hello stdout\n")
+                .unwrap();
+            output.set_result(&TestResult { exit_code: 1 }).unwrap();
+            output.base_dir.join("result.json")
+        };
+        {
+            let mut f = OpenOptions::new()
+                .write(true)
+                .open(json_path)
+                .expect("couldn't open JSON file");
+            for _ in 0..16 {
+                f.write_all(b"I DON`T TIHKN THA'TS JASON BATMAN,,,\n")
+                    .unwrap();
+            }
+        }
+
+        // Act: Now open the entry. It should just silently act as though nothing was there.
+        {
+            let mut output = match db.lookup(&test_case).await.unwrap() {
+                LookupResult::FoundResult(e) => panic!("successfully read corrupted JSON? {e:?}"),
+                LookupResult::YouRunIt(output) => output,
+            };
+            output.set_result(&TestResult { exit_code: 2 }).unwrap();
+        }
+        // Now it should be valid again.
+        match db.lookup(&test_case).await.unwrap() {
+            LookupResult::FoundResult(entry) => assert_eq!(entry.result.result.exit_code, 2),
+            LookupResult::YouRunIt(_) => panic!("no JSON found after DB corruption"),
+        };
+    }
+}
 // TODO:
 // - Test behaviour on already-existing directories

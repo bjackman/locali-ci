@@ -373,6 +373,8 @@ async fn ensure_job_success(
 struct OneshotOutput {}
 
 impl TestJobOutput for OneshotOutput {
+    type Stream = Stdio;
+
     fn stdout(&mut self) -> anyhow::Result<Stdio> {
         Ok(Stdio::inherit())
     }

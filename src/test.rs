@@ -140,6 +140,20 @@ impl Test {
             .unwrap_or(&0)
             != &0
     }
+
+    #[cfg(test)]
+    pub fn arbitrary() -> Self {
+        Test {
+            name: TestName::new("my_test"),
+            program: OsString::from("bash"),
+            args: vec!["yer".into()],
+            needs_resources: [].into(),
+            shutdown_grace_period: Duration::from_secs(5),
+            cache_policy: CachePolicy::ByCommit,
+            config_hash: 123,
+            depends_on: vec![],
+        }
+    }
 }
 
 impl Display for Test {
@@ -553,10 +567,12 @@ impl TestJobBuilder {
 }
 
 pub trait TestJobOutput {
+    type Stream: Into<Stdio>;
+
     // Panics if called more than once.
-    fn stderr(&mut self) -> anyhow::Result<Stdio>;
+    fn stderr(&mut self) -> anyhow::Result<Self::Stream>;
     // Panics if called more than once.
-    fn stdout(&mut self) -> anyhow::Result<Stdio>;
+    fn stdout(&mut self) -> anyhow::Result<Self::Stream>;
     // Panics if called more than once.
     fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()>;
 }

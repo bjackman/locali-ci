@@ -166,6 +166,16 @@ pub struct Commit {
     pub tree: TreeHash,
 }
 
+impl Commit {
+    #[cfg(test)]
+    pub fn arbitrary() -> Self {
+        Self {
+            hash: CommitHash::new("080b8ecbad3e34e55c5a035af80100f73b742a8d"),
+            tree: TreeHash::new("6366d790125291272542a6b40f6fd3400e080821"),
+        }
+    }
+}
+
 impl From<Commit> for CommitHash {
     fn from(val: Commit) -> Self {
         val.hash
