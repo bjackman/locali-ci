@@ -127,7 +127,7 @@ impl<G: GraphNode> Dag<G> {
 
     // Iterate over nodes, visiting children before their parents.
     pub fn bottom_up(&self) -> TopologicalSort<'_, G> {
-        TopologicalSort::new(&self, (0..self.nodes.len()).collect())
+        TopologicalSort::new(self, (0..self.nodes.len()).collect())
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = &G> + Clone {
@@ -147,8 +147,7 @@ impl<G: GraphNode> Dag<G> {
         // because we need something with `DoubleEndedIterator` trait (i.e. Vec::<_>).
         // Maybe there's a better way.
         Some(
-            TopologicalSort::new(&self, vec![*self.id_to_idx.get(id.borrow())?])
-                .into_iter()
+            TopologicalSort::new(self, vec![*self.id_to_idx.get(id.borrow())?])
                 .collect::<Vec<&G>>()
                 .into_iter()
                 .rev(),
