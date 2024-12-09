@@ -111,6 +111,9 @@ impl Database {
         flock.file.set_len(0).context("truncating JSON file")?;
 
         // We have to run the test. Upgrade the lock to exclusive.
+        // BUG: This is garbage. If this worked as I expected, it would deadlock.
+        // But it doesn't seem to do that in practice. Upgrading the lock just
+        // releases it and then takes it again.
         let flock = flock.upgrade().await.context("upgrading JSON file lock")?;
 
         Ok(LookupResult::YouRunIt(
