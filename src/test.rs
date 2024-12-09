@@ -400,6 +400,7 @@ impl TestStatusNotifier {
 
     // Report a general update to the status of the test job.
     pub fn notify(&self, status: &TestStatus) {
+        debug!("{:?}: {}", self.test_case, status);
         // Inner failure means nobody is listening. This is expected when running unit tests.
         let notif = Arc::new(Notification {
             test_case: self.test_case.clone(),
