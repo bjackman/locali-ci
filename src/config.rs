@@ -117,10 +117,7 @@ impl Test {
     // Convert to the "real" object. other_tests is the set of other tests that
     // have already been parsed, which must include all of these test's
     // transitive dependencies (or this will panic).
-    pub fn parse(
-        &self,
-        other_tests: &Dag<Arc<test::Test>>,
-    ) -> anyhow::Result<test::Test> {
+    pub fn parse(&self, other_tests: &Dag<Arc<test::Test>>) -> anyhow::Result<test::Test> {
         let mut seen_resources = HashSet::new();
         for resource in self.resources.as_ref().unwrap_or(&vec![]) {
             if seen_resources.contains(&resource.name()) {
