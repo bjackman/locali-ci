@@ -626,7 +626,7 @@ async fn should_find_not_race() {
             num_worktrees = 1
             [[tests]]
             name = "my_test"
-            command = "touch {}/started.$$ && sleep 1"
+            command = "touch {}/started.$$.$LIMMAT_COMMIT && sleep 1"
             shutdown_grace_period_s = 1
         "##,
         tmp_dir.path().display()
@@ -656,7 +656,7 @@ async fn should_find_not_race() {
         get_children.push(child);
     }
 
-    for mut child in get_children.into_iter() {
+    for child in get_children.iter_mut() {
         timeout(Duration::from_secs(5), child.expect_success())
             .await
             .unwrap()
@@ -666,7 +666,7 @@ async fn should_find_not_race() {
     // Even though we ran loads of instances of Limmat, only one of them should
     // have ran the job.
     let pattern = tmp_dir.path().join("started.*").to_owned();
-    expect_that!(
+    assert_that!(
         glob(pattern.to_string_lossy().as_ref())
             .unwrap()
             .collect::<Vec<_>>(),
