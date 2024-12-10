@@ -28,7 +28,9 @@ struct TestResultEntry {
 }
 
 pub enum LookupResult {
+    // Result found in the the database, here it is.
     FoundResult(DatabaseEntry),
+    // No result, you can run it and write the output here.
     YouRunIt(DatabaseOutput),
 }
 
@@ -52,16 +54,14 @@ impl Database {
     }
 
     // Either get or create a result in the database. If there's a test running,
-    // this blocks until it's done. If it returns YouRunIt, then you get to
-    // write via the provided output into the database. In that case, you will
-    // block anyonne else trying to get the entry until you drop the DatabaseOutput.
+    // this blocks until it's done.
     pub async fn lookup(&self, test_case: &TestCase) -> Result<LookupResult> {
         let result_dir = self.result_path(test_case.storage_hash(), &test_case.test.name);
         create_dir_all(&result_dir)
             .with_context(|| format!("creating commit result dir at {}", result_dir.display()))?;
         let json_path = result_dir.join("result.json");
 
-        let parse_result = |json: &str| -> Option<DatabaseEntry> {
+        let parse_result = |json: &str| -> Option<TestResultEntry> {
             // Manually ignore empty JSON to avoid log spam.
             if json.is_empty() {
                 return None;
@@ -73,10 +73,7 @@ impl Database {
                         // Was the test configured to accept cached results?
                         if test_case.cache_hash.is_some() {
                             // Cool, we're done.
-                            return Some(DatabaseEntry {
-                                base_path: result_dir.clone(),
-                                result: test_result,
-                            });
+                            return Some(test_result);
                         }
                     }
                 }
@@ -106,8 +103,12 @@ impl Database {
                 .await
                 .context("locking JSON file for reading")?;
 
-            if let Some(entry) = parse_result(flock.content()) {
-                return Ok(LookupResult::FoundResult(entry));
+            if let Some(test_result) = parse_result(flock.content()) {
+                return Ok(LookupResult::FoundResult(DatabaseEntry {
+                    base_path: result_dir.clone(),
+                    result: test_result,
+                    _json_flock: flock,
+                }));
             }
 
             // Seems we have to run the test. For that we'll need an exclusive lock.
@@ -135,11 +136,13 @@ impl Database {
     }
 }
 
-// Existing entry in the database.
+// Existing entry in the database. Until you drop this object, the entry is read-locked, meaning
+// you prevent anyone else from re-running the test.
 #[derive(Debug)]
 pub struct DatabaseEntry {
     base_path: PathBuf,
     result: TestResultEntry,
+    _json_flock: SharedFlock,
 }
 
 impl DatabaseEntry {
@@ -156,7 +159,8 @@ impl DatabaseEntry {
     }
 }
 
-// Output for an individual test job, stored into the database
+// Output for an individual test job, stored into the database. Includes an exclusive lock on
+// the database entry, nobody can read the result or run the test case until you drop this object.
 pub struct DatabaseOutput {
     base_dir: PathBuf, // Must exist.
     stdout_opened: bool,

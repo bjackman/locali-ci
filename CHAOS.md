@@ -5,22 +5,6 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 ## Bugs (high to low priority):
 
  - `--http-sockaddr=localhost:8080` still gives you a hostname-based URL.
- - Need some coordination between different processes, in case the user runs
-   `limmat test` or something at the same time as `limmat watch`. It doesn't make
-   sense to lock the whole database (what if they want to watch multiple repos at
-   once?). So probably we should flock the `result.json` or something. This will
-   also later be needed so we can implement pruning of the database to prevent
-   it eating too much disk (we mustn't delete artifacts while tests could still
-   be using them). There are some details to think through here but I'm too
-   tired. Different levels of the problem:
-
-   [x] Avoid having concurrent runs of Limmat overwrite each other's outputs
-       making a mess.
-   [ ] Avoid `cache = "no_caching"` tests modifying the inputs of jobs that
-       depend on them when they get re-run.
-   [ ] Make a space for logic to prune the database based on size, without
-       worrying about deleting inputs of running jobs.
-
  - It's pretty slow on my work computer. Git performance is crippled by security
    monitoring on that computer, and the single-thread performance is very poor.
    But it doesn't seem like Limmat has to be slow.

@@ -51,6 +51,7 @@ async fn flock_async(fd: RawFd, kind: LockKind) -> anyhow::Result<()> {
 }
 
 // A simple "read" lock on a file.
+#[derive(Debug)]
 pub struct SharedFlock {
     file: File,
     content: String,
