@@ -1,10 +1,9 @@
 use std::{
     fs::{create_dir_all, File, OpenOptions},
-    io::{Read as _, Seek as _, Write as _},
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 #[allow(unused_imports)]
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -61,37 +60,23 @@ impl Database {
         create_dir_all(&result_dir)
             .with_context(|| format!("creating commit result dir at {}", result_dir.display()))?;
         let json_path = result_dir.join("result.json");
-        let json_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(result_dir.join("result.json"))
-            .context("opening result JSON")?;
 
-        // First we lock the file for reading so we can check if there's a result in there already.
-        // This will block if someone else is running the test.
-        let mut flock = SharedFlock::lock(json_file)
-            .await
-            .context("locking JSON file for reading")?;
-
-        let mut json = String::new();
-        flock
-            .file
-            .read_to_string(&mut json)
-            .context("reading JSON")?;
-        if !json.is_empty() {
-            match serde_json::from_str::<TestResultEntry>(&json) {
+        let parse_result = |json: &str| -> Option<DatabaseEntry> {
+            // Manually ignore empty JSON to avoid log spam.
+            if json.is_empty() {
+                return None;
+            }
+            match serde_json::from_str::<TestResultEntry>(json) {
                 Ok(test_result) => {
                     // Has the configuration changed? if not we need to rerun regardless.
                     if test_result.config_hash == test_case.test.config_hash {
                         // Was the test configured to accept cached results?
                         if test_case.cache_hash.is_some() {
                             // Cool, we're done.
-                            return Ok(LookupResult::FoundResult(DatabaseEntry {
+                            return Some(DatabaseEntry {
                                 base_path: result_dir.clone(),
                                 result: test_result,
-                            }));
+                            });
                         }
                     }
                 }
@@ -105,21 +90,48 @@ impl Database {
                     );
                 }
             }
+            None
+        };
+
+        // Don't block forever.
+        for _ in 0..5 {
+            let json_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(result_dir.join("result.json"))
+                .context("opening result JSON")?;
+            let flock = SharedFlock::new(json_file)
+                .await
+                .context("locking JSON file for reading")?;
+
+            if let Some(entry) = parse_result(flock.content()) {
+                return Ok(LookupResult::FoundResult(entry));
+            }
+
+            // Seems we have to run the test. For that we'll need an exclusive lock.
+            let flock = flock.upgrade().await.context("upgrading JSON file lock")?;
+
+            // But, that upgrade wasn't atomic, someone else might have jumped
+            // in and run the test. Check if that's the case...
+            if parse_result(flock.content()).is_some() {
+                // OK great someone ran the test, so we just wanna return the result. But for that
+                // we need to downgrade the lock to a shared lock, which is also not atomic. At the
+                // time of writing, this is harmless: we know the test case is cacheable (otherwise
+                // parse_result never returns Some) so if someone else gets the lock during the
+                // downgrade, they aren't gonna re-run the test. But, we want the flexibility to
+                // later implement at-will re-runs of tests, and more importantly deletion of test
+                // results. So we downgrade the lock by just going back around this loop.
+                continue;
+            }
+
+            return Ok(LookupResult::YouRunIt(
+                DatabaseOutput::new(result_dir, test_case.test.config_hash, flock)
+                    .context("creating database entry")?,
+            ));
         }
-        // Gotta rewind as well as truncate, otherwise the file is padded with 0s.
-        flock.file.rewind().context("rewinding JSON file")?;
-        flock.file.set_len(0).context("truncating JSON file")?;
-
-        // We have to run the test. Upgrade the lock to exclusive.
-        // BUG: This is garbage. If this worked as I expected, it would deadlock.
-        // But it doesn't seem to do that in practice. Upgrading the lock just
-        // releases it and then takes it again.
-        let flock = flock.upgrade().await.context("upgrading JSON file lock")?;
-
-        Ok(LookupResult::YouRunIt(
-            DatabaseOutput::new(result_dir, test_case.test.config_hash, flock)
-                .context("creating database entry")?,
-        ))
+        bail!("too much database contention, something fishy going on")
     }
 }
 
@@ -198,15 +210,14 @@ impl TestJobOutput for DatabaseOutput {
             result: result.clone(),
         };
         self.json_flock
-            .file
-            .write_all(&serde_json::to_vec(&entry).expect("failed to serialize TestStatus"))
+            .set_content(&serde_json::to_vec(&entry).expect("failed to serialize TestStatus"))
             .context("writing JSON result")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{io::Write as _, sync::Arc};
 
     use tempfile::TempDir;
 

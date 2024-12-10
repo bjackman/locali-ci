@@ -7,10 +7,11 @@
 
 use std::{
     fs::File,
+    io::{Read as _, Seek as _, Write as _},
     os::fd::{AsRawFd as _, RawFd},
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as _};
 
 use nix::{
     errno::Errno,
@@ -49,27 +50,69 @@ async fn flock_async(fd: RawFd, kind: LockKind) -> anyhow::Result<()> {
     task::spawn_blocking(move || flock(fd, kind)).await.unwrap()
 }
 
+// A simple "read" lock on a file.
 pub struct SharedFlock {
-    // Hack: just making this public avoids needing to do a bunch of Rustery.
-    // This means users can get at the fd and fuck things up if they want, but
-    // flocking is kinda fundamentally like that anyway I think (it's not really
-    // possible for this library to prevent bugs, since flocks are fundamentally
-    // global to the process, not really isolated to the file descriptor).
-    pub file: File,
+    file: File,
+    content: String,
 }
 
 impl SharedFlock {
-    pub async fn lock(file: File) -> anyhow::Result<Self> {
+    // Lock an open file, this also immediately reads the whole content which
+    // can access via `content`. The file should be freshly-opened.
+    pub async fn new(mut file: File) -> anyhow::Result<Self> {
         flock_async(file.as_raw_fd(), LockKind::Shared).await?;
-        Ok(Self { file })
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .context("reading locked file")?;
+        Ok(Self { file, content })
     }
 
-    pub async fn upgrade(self) -> anyhow::Result<ExclusiveFlock> {
-        flock_async(self.file.as_raw_fd(), LockKind::Exclusive).await?;
-        Ok(ExclusiveFlock { file: self.file })
+    // The content of the file.
+    // This returns a reference to reflect the fact that the validity of the
+    // content is tied to the lifetime of the lock.
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    // Upgrade to a "write" lock. This is not an atomic operation, when you do
+    // this the content of the file can change, which is reflected by the fact
+    // that the reference returned by `content` is invalid now, so you should
+    // check the `content` of the result again.
+    pub async fn upgrade(mut self) -> anyhow::Result<ExclusiveFlock> {
+        self.file.rewind().context("rewinding locked file")?;
+        ExclusiveFlock::new(self.file).await
     }
 }
 
+// A simple "write" lock on a file.
 pub struct ExclusiveFlock {
-    pub file: File,
+    file: File,
+    content: String,
+}
+
+impl ExclusiveFlock {
+    async fn new(mut file: File) -> anyhow::Result<Self> {
+        debug_assert_eq!(file.stream_position().unwrap(), 0);
+        flock_async(file.as_raw_fd(), LockKind::Exclusive).await?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .context("reading locked")?;
+        file.rewind().context("rewinding locked file")?;
+        Ok(Self { file, content })
+    }
+
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    // Replace the content of the file.
+    pub fn set_content(&mut self, content: &[u8]) -> anyhow::Result<()> {
+        debug_assert_eq!(self.file.stream_position().unwrap(), 0);
+        self.file.set_len(0).context("truncating locked file")?;
+        self.file
+            .write_all(content)
+            .context("writing locked file")?;
+        // TODO: it would be nicer if this method consumed self, then we wouldn't have to rewind.
+        self.file.rewind().context("rewinding locked file")
+    }
 }
