@@ -57,20 +57,20 @@ mod test_utils;
 struct Args {
     // TODO: Don't require valid utf-8 strings here, OsStrings shoud be fine. But
     // https://stackoverflow.com/questions/76341332/clap-default-value-for-pathbuf
-    #[arg(short, long, default_value_t = {".".to_string()})]
+    #[arg(short, long, default_value_t = {".".to_string()}, global = true)]
     repo: String,
     /// Path to TOML config file. Default is $LIMMAT_CONFIG if non-empty,
     /// or ./limmat.toml if it exists, or ./.limmat.toml if it exists
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     config: Option<PathBuf>,
     /// Directory where results will be stored.
-    #[arg(long, default_value_t = default_result_db())]
+    #[arg(long, default_value_t = default_result_db(), global = true)]
     result_db: DisplayablePathBuf,
     /// Filename prefix for temporary worktrees.
-    #[arg(long, default_value_t = {"limmat-worktree".to_string()})]
+    #[arg(long, default_value_t = {"limmat-worktree".to_string()}, global = true)]
     worktree_prefix: String,
     /// Directory (must exist) to create temporary worktrees in.
-    #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()})]
+    #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()}, global = true)]
     worktree_dir: String,
     #[command(subcommand)]
     command: Command,
