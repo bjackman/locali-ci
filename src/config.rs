@@ -149,6 +149,7 @@ impl Test {
                 .hash(&mut hasher);
         }
         let config_hash = hasher.finish();
+        debug!("Config hash for {}: {:?}", self.name, config_hash);
 
         Ok(test::Test {
             name: TestName::new(self.name.clone()),
