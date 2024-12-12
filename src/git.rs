@@ -464,17 +464,28 @@ impl TempWorktree {
             temp_dir,
             cleaned_up: false,
         };
-        let mut cmd = origin.git(["worktree", "add"]);
-        let cmd = cmd.arg(zelf.temp_dir.path()).arg("HEAD");
-        select! {
-            _ = ct.cancelled().fuse() => {
-                zelf.cleanup().await;
-                bail!("canceled")
-            },
-            res = cmd.execute().fuse() => {
-                res.context("'git worktree add' failed")?;
-                Ok(zelf)
-            },
+        // Dumb workaround for https://github.com/bjackman/limmat/issues/14
+        let mut attempts = 1;
+        loop {
+            let mut cmd = origin.git(["worktree", "add"]);
+            let cmd = cmd.arg(zelf.temp_dir.path()).arg("HEAD");
+            select! {
+                _ = ct.cancelled().fuse() => {
+                    zelf.cleanup().await;
+                    bail!("canceled")
+                },
+                res = cmd.execute().fuse() => {
+                    match res {
+                        Ok(_) => return Ok(zelf),
+                        Err(e) => {
+                            if attempts >= 5 {
+                                bail!("git worktree add failed: {}", e);
+                            }
+                            attempts += 1;
+                        },
+                    }
+                },
+            }
         }
     }
 
