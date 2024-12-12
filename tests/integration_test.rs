@@ -65,6 +65,7 @@ struct LimmatChildBuilder {
     temp_dir: TempDir,
     existing_repo_dir: Option<PathBuf>, // If None, create one right in temp_dir.
     db_dir: PathBuf,
+    dump_output_on_panic: bool,
 }
 
 impl LimmatChildBuilder {
@@ -77,6 +78,7 @@ impl LimmatChildBuilder {
             temp_dir,
             existing_repo_dir: None,
             db_dir,
+            dump_output_on_panic: true,
         })
     }
 
@@ -87,6 +89,11 @@ impl LimmatChildBuilder {
 
     fn existing_repo_dir(mut self, dir: PathBuf) -> Self {
         self.existing_repo_dir = Some(dir);
+        self
+    }
+
+    fn dump_output_on_panic(mut self, dump: bool) -> Self {
+        self.dump_output_on_panic = dump;
         self
     }
 
@@ -160,6 +167,7 @@ impl LimmatChildBuilder {
         Ok(LimmatChild {
             temp_dir: self.temp_dir,
             child,
+            dump_output_on_panic: self.dump_output_on_panic,
         })
     }
 }
@@ -168,6 +176,7 @@ impl LimmatChildBuilder {
 struct LimmatChild {
     temp_dir: TempDir,
     child: Child,
+    dump_output_on_panic: bool,
 }
 
 impl LimmatChild {
@@ -175,6 +184,10 @@ impl LimmatChild {
     async fn expect_success(&mut self) -> anyhow::Result<()> {
         let status = self.child.wait().await.expect("error waiting for child");
         if !status.success() {
+            if !self.dump_output_on_panic {
+                eprintln!("Child Limmat process failed, dumping stderr");
+                self.dump_stderr();
+            }
             bail!("Child process didn't succed: {:?}", status);
         }
         Ok(())
@@ -183,32 +196,36 @@ impl LimmatChild {
     fn stdout(&self) -> anyhow::Result<String> {
         fs::read_to_string(self.temp_dir.path().join("stdout.txt")).context("reading child stdout")
     }
+
+    fn dump_stderr(&self) {
+        let file = match File::open(self.temp_dir.path().join("stderr.txt")) {
+            // Don't panic while panicking, it's messy
+            Err(err) => {
+                eprintln!("Failed to open stderr file while panicking: {}", err);
+                return;
+            }
+            Ok(file) => file,
+        };
+        let reader = BufReader::new(file);
+        // Read the file line-by-line and print each line
+        for line in reader.lines() {
+            eprintln!(
+                "{}",
+                line.unwrap_or_else(|e| format!("<read error: {}>", e))
+            );
+        }
+    }
 }
 
 impl Drop for LimmatChild {
     fn drop(&mut self) {
-        if panicking() {
-            // Hack: when running tests via cargo-stress, there's no convenient
-            // way to get stderr of the test process, let alone of its
-            // subprocesses. So just dump the child's stderr to stdout when
-            // we're panicking.
-            let file = match File::open(self.temp_dir.path().join("stderr.txt")) {
-                // Don't panic while panicking, it's messy
-                Err(err) => {
-                    eprintln!("Failed to open stderr file while panicking: {}", err);
-                    return;
-                }
-                Ok(file) => file,
-            };
+        // Hack: when running tests via cargo-stress, there's no convenient
+        // way to get stderr of the test process, let alone of its
+        // subprocesses. So just dump the child's stderr to stdout when
+        // we're panicking.
+        if self.dump_output_on_panic && panicking() {
             eprintln!("Panic happening, assuming its a test failure, dumping child stderr.");
-            let reader = BufReader::new(file);
-            // Read the file line-by-line and print each line
-            for line in reader.lines() {
-                eprintln!(
-                    "{}",
-                    line.unwrap_or_else(|e| format!("<read error: {}>", e))
-                );
-            }
+            self.dump_stderr();
         }
     }
 }
@@ -637,6 +654,8 @@ async fn should_find_not_race() {
             .await
             .unwrap()
             .db_dir(db_dir.path().to_owned())
+            // Hack - this is making for annoying log spam when it fails at the moment.
+            .dump_output_on_panic(false)
             .existing_repo_dir(repo_dir.path().to_owned())
             .start(&config, ["watch", "HEAD^"])
             .await
@@ -650,13 +669,15 @@ async fn should_find_not_race() {
             .unwrap()
             .db_dir(db_dir.path().to_owned())
             .existing_repo_dir(repo_dir.path().to_owned())
+            // Hack - this is making for annoying log spam when it fails at the moment.
+            .dump_output_on_panic(false)
             .start(&config, ["get", "--run", "my_test", "HEAD"])
             .await
             .unwrap();
         get_children.push(child);
     }
 
-    for child in get_children.iter_mut() {
+    for mut child in get_children.into_iter() {
         timeout(Duration::from_secs(5), child.expect_success())
             .await
             .unwrap()
@@ -666,7 +687,7 @@ async fn should_find_not_race() {
     // Even though we ran loads of instances of Limmat, only one of them should
     // have ran the job.
     let pattern = tmp_dir.path().join("started.*").to_owned();
-    assert_that!(
+    expect_that!(
         glob(pattern.to_string_lossy().as_ref())
             .unwrap()
             .collect::<Vec<_>>(),
