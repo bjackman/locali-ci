@@ -262,16 +262,14 @@ pub trait Worktree: Debug {
     }
 
     async fn checkout(&self, commit: &CommitHash) -> anyhow::Result<()> {
-        self.git(["checkout"])
-            .arg(commit)
-            .output()
-            .await?
-            .ok()
-            .context(format!(
-                "checking out revision {:?} in {:?}",
-                commit,
-                self.path()
-            ))
+        let mut cmd = self.git(["checkout"]);
+        cmd.arg(commit);
+        debug!("Running command: {:?}", cmd.as_std().get_args());
+        cmd.output().await?.ok().context(format!(
+            "checking out revision {:?} in {:?}",
+            commit,
+            self.path()
+        ))
     }
 
     async fn log_graph<S, T>(&self, range_spec: S, format_spec: T) -> anyhow::Result<OsString>
@@ -409,6 +407,7 @@ pub trait Worktree: Debug {
         // that API is designed for users who assume the revision exists.
         let mut cmd = self.git(["log", "-n1", "--format=%H %T"]);
         let cmd = cmd.arg(rev_spec);
+        debug!("Running command: {:?}", cmd.as_std().get_args());
         let output = cmd.output().await.context("failed to run 'git log -n1'")?;
         // Hack: empirically, git returns 128 when the range is invalid, it's not documented
         // but hopefully this is stable behaviour that we're supposed to be able to rely on for
@@ -466,6 +465,7 @@ impl TempWorktree {
         };
         let mut cmd = origin.git(["worktree", "add"]);
         let cmd = cmd.arg(zelf.temp_dir.path()).arg("HEAD");
+        debug!("Running command: {:?}", cmd.as_std().get_args());
         select! {
             _ = ct.cancelled().fuse() => {
                 zelf.cleanup().await;
