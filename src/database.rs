@@ -36,6 +36,12 @@ pub enum LookupResult {
     YouRunIt(DatabaseOutput),
 }
 
+// "Database" which is really just a directory. Entries are flocked via their main JSON file.
+// I am not really sure if this flocking is safe if you open the same entry
+// twice within the same process:
+// https://stackoverflow.com/questions/79266574/is-flock-per-ofd-or-per-process-per-file
+// For now I am just gonna assume flock has the most helpful semantics among the
+// range of ambiguity and hope it's fine.
 impl Database {
     pub fn create_or_open(base_dir: &Path) -> anyhow::Result<Self> {
         create_dir_all(base_dir).context(format!(
