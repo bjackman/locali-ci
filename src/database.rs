@@ -184,7 +184,7 @@ pub struct DatabaseOutput {
 }
 
 impl DatabaseOutput {
-    pub fn new(
+    fn new(
         base_dir: PathBuf, // Must exist.
         config_hash: ConfigHash,
         json_flock: ExclusiveFlock,
