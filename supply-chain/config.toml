@@ -6,8 +6,17 @@
 [cargo-vet]
 version = "0.10"
 
+[imports.actix]
+url = "https://raw.githubusercontent.com/actix/supply-chain/main/audits.toml"
+
+[imports.bytecode-alliance]
+url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
+
 [imports.google]
 url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.toml"
+
+[imports.mozilla]
+url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
 [policy.limmat]
 audit-as-crates-io = true
@@ -148,10 +157,6 @@ criteria = "safe-to-deploy"
 version = "0.2.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.crypto-common]]
-version = "0.1.6"
-criteria = "safe-to-deploy"
-
 [[exemptions.data-encoding]]
 version = "2.6.0"
 criteria = "safe-to-deploy"
@@ -180,10 +185,6 @@ criteria = "safe-to-deploy"
 version = "1.0.17"
 criteria = "safe-to-deploy"
 
-[[exemptions.either]]
-version = "1.13.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.env_filter]]
 version = "0.1.2"
 criteria = "safe-to-deploy"
@@ -204,14 +205,6 @@ criteria = "safe-to-deploy"
 version = "0.2.25"
 criteria = "safe-to-deploy"
 
-[[exemptions.fnv]]
-version = "1.0.7"
-criteria = "safe-to-deploy"
-
-[[exemptions.form_urlencoded]]
-version = "1.2.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.fsevent-sys]]
 version = "4.1.0"
 criteria = "safe-to-deploy"
@@ -224,10 +217,6 @@ criteria = "safe-to-deploy"
 version = "0.3.31"
 criteria = "safe-to-deploy"
 
-[[exemptions.futures-core]]
-version = "0.3.31"
-criteria = "safe-to-deploy"
-
 [[exemptions.futures-executor]]
 version = "0.3.31"
 criteria = "safe-to-deploy"
@@ -237,10 +226,6 @@ version = "0.3.31"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-macro]]
-version = "0.3.31"
-criteria = "safe-to-deploy"
-
-[[exemptions.futures-sink]]
 version = "0.3.31"
 criteria = "safe-to-deploy"
 
@@ -274,10 +259,6 @@ criteria = "safe-to-run"
 
 [[exemptions.hashbrown]]
 version = "0.15.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.heck]]
-version = "0.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.hermit-abi]]
@@ -368,10 +349,6 @@ criteria = "safe-to-deploy"
 version = "0.4.12"
 criteria = "safe-to-deploy"
 
-[[exemptions.matchers]]
-version = "0.1.0"
-criteria = "safe-to-run"
-
 [[exemptions.matchit]]
 version = "0.7.3"
 criteria = "safe-to-deploy"
@@ -404,14 +381,6 @@ criteria = "safe-to-deploy"
 version = "6.1.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.nu-ansi-term]]
-version = "0.46.0"
-criteria = "safe-to-run"
-
-[[exemptions.num-traits]]
-version = "0.2.19"
-criteria = "safe-to-run"
-
 [[exemptions.object]]
 version = "0.36.5"
 criteria = "safe-to-deploy"
@@ -424,10 +393,6 @@ criteria = "safe-to-deploy"
 version = "0.2.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.overload]]
-version = "0.1.1"
-criteria = "safe-to-run"
-
 [[exemptions.parking_lot]]
 version = "0.12.3"
 criteria = "safe-to-deploy"
@@ -436,16 +401,8 @@ criteria = "safe-to-deploy"
 version = "0.9.10"
 criteria = "safe-to-deploy"
 
-[[exemptions.percent-encoding]]
-version = "2.3.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.pin-project-lite]]
 version = "0.2.15"
-criteria = "safe-to-deploy"
-
-[[exemptions.pin-utils]]
-version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ppv-lite86]]
@@ -496,10 +453,6 @@ criteria = "safe-to-run"
 version = "0.8.5"
 criteria = "safe-to-deploy"
 
-[[exemptions.rustc-demangle]]
-version = "0.1.24"
-criteria = "safe-to-deploy"
-
 [[exemptions.rustix]]
 version = "0.38.39"
 criteria = "safe-to-deploy"
@@ -544,10 +497,6 @@ criteria = "safe-to-deploy"
 version = "0.7.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.sha1]]
-version = "0.10.6"
-criteria = "safe-to-deploy"
-
 [[exemptions.sharded-slab]]
 version = "0.1.7"
 criteria = "safe-to-run"
@@ -580,10 +529,6 @@ criteria = "safe-to-deploy"
 version = "0.2.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.strsim]]
-version = "0.11.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.syn]]
 version = "2.0.87"
 criteria = "safe-to-deploy"
@@ -610,14 +555,6 @@ criteria = "safe-to-run"
 
 [[exemptions.test-case-macros]]
 version = "3.3.1"
-criteria = "safe-to-run"
-
-[[exemptions.test-log]]
-version = "0.2.16"
-criteria = "safe-to-run"
-
-[[exemptions.test-log-macros]]
-version = "0.2.16"
 criteria = "safe-to-run"
 
 [[exemptions.test_bin]]
