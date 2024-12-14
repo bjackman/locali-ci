@@ -1,9 +1,7 @@
 use std::{
-    collections::HashSet,
     fs::{create_dir, create_dir_all, File, OpenOptions},
     io::ErrorKind::AlreadyExists,
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
 };
 
 use anyhow::{bail, Context, Result};
@@ -38,24 +36,12 @@ pub enum LookupResult {
     YouRunIt(DatabaseOutput),
 }
 
-// At least on non-Linux systems
-// (https://stackoverflow.com/questions/79266574/is-flock-per-ofd-or-per-process-per-file),
-// flocks are global to the process, which means it wouldn't be safe if you
-// instantiated two instances of the same database.
-static DATABASE_MUTEX: LazyLock<Mutex<HashSet<PathBuf>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
-
-// "Database" for limmat which is actually just a directory with some sketch flocking-based logic.
 impl Database {
-    // Panics if you open the same path twice in the same process.
     pub fn create_or_open(base_dir: &Path) -> anyhow::Result<Self> {
         create_dir_all(base_dir).context(format!(
             "creating result database dir at {}",
             base_dir.display()
         ))?;
-        if !DATABASE_MUTEX.lock().unwrap().insert(base_dir.into()) {
-            panic!("database opened twice at {}", base_dir.display());
-        }
         Ok(Self {
             base_dir: base_dir.to_owned(),
         })
@@ -149,12 +135,6 @@ impl Database {
             ));
         }
         bail!("too much database contention, something fishy going on")
-    }
-}
-
-impl Drop for Database {
-    fn drop(&mut self) {
-        DATABASE_MUTEX.lock().unwrap().remove(&self.base_dir);
     }
 }
 
