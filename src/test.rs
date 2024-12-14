@@ -567,12 +567,10 @@ impl TestJobBuilder {
 }
 
 pub trait TestJobOutput {
-    type Stream: Into<Stdio>;
-
     // Panics if called more than once.
-    fn stderr(&mut self) -> anyhow::Result<Self::Stream>;
+    fn stderr(&mut self) -> anyhow::Result<Stdio>;
     // Panics if called more than once.
-    fn stdout(&mut self) -> anyhow::Result<Self::Stream>;
+    fn stdout(&mut self) -> anyhow::Result<Stdio>;
     // Panics if called more than once.
     fn set_result(self, result: &TestResult) -> anyhow::Result<()>;
     // Extant directory for the job to put artifacts into.

@@ -2,6 +2,7 @@ use std::{
     fs::{create_dir, create_dir_all, File, OpenOptions},
     io::ErrorKind::AlreadyExists,
     path::{Path, PathBuf},
+    process::Stdio,
 };
 
 use anyhow::{bail, Context, Result};
@@ -204,23 +205,29 @@ impl DatabaseOutput {
             json_flock,
         })
     }
-}
 
-impl TestJobOutput for DatabaseOutput {
-    type Stream = File;
-
-    fn stdout(&mut self) -> Result<File> {
+    fn stdout_file(&mut self) -> anyhow::Result<File> {
         assert!(!self.stdout_opened);
         self.stdout_opened = true;
         let path = self.base_dir.join("stdout.txt");
         File::create(&path).with_context(|| format!("creating {}", path.display()))
     }
 
-    fn stderr(&mut self) -> Result<File> {
+    fn stderr_file(&mut self) -> anyhow::Result<File> {
         assert!(!self.stderr_opened);
         self.stderr_opened = true;
         let path = self.base_dir.join("stderr.txt");
         File::create(&path).with_context(|| format!("creating {}", path.display()))
+    }
+}
+
+impl TestJobOutput for DatabaseOutput {
+    fn stdout(&mut self) -> Result<Stdio> {
+        Ok(self.stdout_file()?.into())
+    }
+
+    fn stderr(&mut self) -> Result<Stdio> {
+        Ok(self.stderr_file()?.into())
     }
 
     // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
@@ -267,12 +274,12 @@ mod tests {
                 LookupResult::YouRunIt(output) => output,
             };
             output
-                .stderr()
+                .stderr_file()
                 .unwrap()
                 .write_all(b"hello stderr\n")
                 .unwrap();
             output
-                .stdout()
+                .stdout_file()
                 .unwrap()
                 .write_all(b"hello stdout\n")
                 .unwrap();
