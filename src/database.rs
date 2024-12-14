@@ -224,7 +224,7 @@ impl TestJobOutput for DatabaseOutput {
     }
 
     // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
-    fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
+    fn set_result(mut self, result: &TestResult) -> anyhow::Result<()> {
         assert!(!self.status_written);
         self.status_written = true;
         let entry = TestResultEntry {
@@ -276,8 +276,9 @@ mod tests {
                 .unwrap()
                 .write_all(b"hello stdout\n")
                 .unwrap();
+            let json_path = output.base_dir.join("result.json");
             output.set_result(&TestResult { exit_code: 1 }).unwrap();
-            output.base_dir.join("result.json")
+            json_path
         };
         {
             let mut f = OpenOptions::new()
@@ -292,7 +293,7 @@ mod tests {
 
         // Act: Now open the entry. It should just silently act as though nothing was there.
         {
-            let mut output = match db.lookup(&test_case).await.unwrap() {
+            let output = match db.lookup(&test_case).await.unwrap() {
                 LookupResult::FoundResult(e) => panic!("successfully read corrupted JSON? {e:?}"),
                 LookupResult::YouRunIt(output) => output,
             };

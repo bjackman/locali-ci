@@ -574,7 +574,7 @@ pub trait TestJobOutput {
     // Panics if called more than once.
     fn stdout(&mut self) -> anyhow::Result<Self::Stream>;
     // Panics if called more than once.
-    fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()>;
+    fn set_result(self, result: &TestResult) -> anyhow::Result<()>;
     // Extant directory for the job to put artifacts into.
     fn artifacts_dir(&mut self) -> &Path;
 }

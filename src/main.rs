@@ -392,7 +392,7 @@ impl TestJobOutput for OneshotOutput {
     fn stderr(&mut self) -> anyhow::Result<Stdio> {
         Ok(Stdio::inherit())
     }
-    fn set_result(&mut self, result: &TestResult) -> anyhow::Result<()> {
+    fn set_result(self, result: &TestResult) -> anyhow::Result<()> {
         eprintln!("Job result: {result:?}");
         Ok(())
     }
