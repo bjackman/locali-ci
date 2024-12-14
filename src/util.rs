@@ -10,6 +10,7 @@ use std::{
 
 #[allow(unused_imports)]
 use log::{debug, error};
+use sha3::digest;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -128,5 +129,26 @@ impl IoResultExt for io::Result<()> {
             }
             Ok(()) => Ok(()),
         }
+    }
+}
+
+// I want to use the RustCrypto hasher types as a Hasher (i.e. on objects that
+// don't actually provide bytes). I suspect the fact that this isn't
+// well-supported means it's a terrible idea in general. I don't really know why
+// that is, but it's certainly harmless here. So, this is an adapter for making
+// a std::hash::Hasher from a digest::Digest.
+pub struct DigestHasher<D: digest::Digest> {
+    pub digest: D,
+}
+
+impl<D: digest::Digest> std::hash::Hasher for DigestHasher<D> {
+    fn write(&mut self, bytes: &[u8]) {
+        self.digest.update(bytes)
+    }
+
+    // This is required for the Hasher trait, but you shouldn't call it, it's
+    // just throwing hash bits away for no reason.
+    fn finish(&self) -> u64 {
+        panic!("don't call this");
     }
 }

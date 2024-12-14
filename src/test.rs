@@ -59,7 +59,7 @@ impl CachePolicy {
 }
 
 // Some unspecified hash, don't care too much about stability across builds.
-pub type ConfigHash = u64;
+pub type ConfigHash = Vec<u8>;
 
 #[derive(Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct TestName(String);
@@ -150,7 +150,7 @@ impl Test {
             needs_resources: [].into(),
             shutdown_grace_period: Duration::from_secs(5),
             cache_policy: CachePolicy::ByCommit,
-            config_hash: 123,
+            config_hash: vec![1, 2, 3],
             depends_on: vec![],
         }
     }
@@ -1195,7 +1195,7 @@ mod tests {
                 },
                 shutdown_grace_period: Duration::from_secs(5),
                 cache_policy,
-                config_hash: 0,
+                config_hash: vec![0],
                 depends_on: depends_on.into_iter().collect(),
             }
         }
@@ -1780,7 +1780,7 @@ mod tests {
             ]),
             shutdown_grace_period: Duration::from_secs(5),
             cache_policy: CachePolicy::ByCommit,
-            config_hash: 0,
+            config_hash: vec![0],
             depends_on: vec![],
         }];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
@@ -1837,7 +1837,7 @@ mod tests {
             .into(),
             shutdown_grace_period: Duration::from_secs(5),
             cache_policy: CachePolicy::ByCommit,
-            config_hash: 0,
+            config_hash: vec![0],
             depends_on: vec![],
         })])
         .expect("couldn't build test DAG");

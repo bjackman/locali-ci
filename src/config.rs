@@ -2,7 +2,7 @@ use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
     ffi::OsString,
-    hash::{DefaultHasher, Hash as _, Hasher as _},
+    hash::Hash as _,
     sync::Arc,
     time::Duration,
 };
@@ -12,11 +12,13 @@ use anyhow::{bail, Context as _};
 use log::debug;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use sha3::{Digest, Sha3_256};
 
 use crate::{
     dag::{Dag, GraphNode},
     resource::{self, Pools, ResourceKey},
     test::{self, CachePolicy, TestDag, TestName},
+    util::DigestHasher,
 };
 
 #[derive(Deserialize, JsonSchema, Debug, Hash, Clone)]
@@ -139,7 +141,9 @@ impl Test {
 
         // Hash the config, also taking into account the hashes of the
         // dependency test configs.
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = DigestHasher {
+            digest: Sha3_256::new(),
+        };
         self.hash(&mut hasher);
         for dep_name in &self.depends_on {
             other_tests
@@ -148,7 +152,7 @@ impl Test {
                 .config_hash
                 .hash(&mut hasher);
         }
-        let config_hash = hasher.finish();
+        let config_hash = hasher.digest.finalize().to_vec();
         debug!("Config hash for {}: {:?}", self.name, config_hash);
 
         Ok(test::Test {

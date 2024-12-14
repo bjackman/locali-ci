@@ -130,7 +130,7 @@ impl Database {
             }
 
             return Ok(LookupResult::YouRunIt(
-                DatabaseOutput::new(result_dir, test_case.test.config_hash, flock)
+                DatabaseOutput::new(result_dir, test_case.test.config_hash.clone(), flock)
                     .context("creating database entry")?,
             ));
         }
@@ -218,7 +218,7 @@ impl TestJobOutput for DatabaseOutput {
         assert!(!self.status_written);
         self.status_written = true;
         let entry = TestResultEntry {
-            config_hash: self.config_hash,
+            config_hash: self.config_hash.clone(),
             result: result.clone(),
         };
         self.json_flock
