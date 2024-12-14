@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::{arg, Parser as _, Subcommand, ValueEnum};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
-use database::{Database, LookupResult};
+use database::{Database, DatabaseEntry, LookupResult};
 use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
@@ -137,15 +137,22 @@ struct TestArgs {
     test: String,
 }
 
-#[derive(clap::Args, Debug)]
-struct GetArgs {
-    /// Name of the test to run, per the "name" field in the config file.
+// Args common to commands that get results from the database
+#[derive(clap::Args, Debug, Clone)]
+struct DatabaseLookupArgs {
+    /// Name of the test, per the "name" field in the config file.
     test: String,
     /// Whether to run the test if the result is not in the database.
     #[arg(long, default_value_t = false)]
     run: bool,
     /// Revision to test. Any git revspec is fine.
     rev: String,
+}
+
+#[derive(clap::Args, Debug)]
+struct GetArgs {
+    #[command(flatten)]
+    lookup_args: DatabaseLookupArgs,
     /// Which output from the job do we want?
     #[arg(default_value_t = GetOutput::Stdout)]
     output: GetOutput,
@@ -179,6 +186,8 @@ enum Command {
     Test(TestArgs),
     /// EXPERIMENTAL: Get the path of a test's output in the result database.
     Get(GetArgs),
+    /// Get the path to the artifacts for a given test
+    Artifacts(DatabaseLookupArgs),
 }
 
 // Kitchen-sink object for global shit.
@@ -543,20 +552,20 @@ async fn test(
     Ok(())
 }
 
-async fn get(
+async fn lookup(
     env: Env,
     cancellation_token: CancellationToken,
-    get_args: GetArgs,
-) -> anyhow::Result<()> {
-    let test_name = TestName::new(get_args.test.clone());
+    lookup_args: &DatabaseLookupArgs,
+) -> anyhow::Result<DatabaseEntry> {
+    let test_name = TestName::new(lookup_args.test.clone());
     let rev = env
         .repo
-        .rev_parse(&get_args.rev)
+        .rev_parse(&lookup_args.rev)
         .await
         .context("error looking up commit")?
-        .ok_or_else(|| anyhow!("revision {:?} not found", get_args.test))?;
+        .ok_or_else(|| anyhow!("revision {:?} not found", lookup_args.test))?;
 
-    if get_args.run {
+    if lookup_args.run {
         let tests: Vec<&Arc<Test>> = env
             .config
             .tests
@@ -575,24 +584,42 @@ async fn get(
         .tests
         .node(&test_name)
         .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?;
-    let db_entry = match env
+    match env
         .database
         .lookup(&TestCase::new(rev.clone(), test.clone()))
         .await
         .context("database lookup")?
     {
-        LookupResult::FoundResult(e) => e,
+        LookupResult::FoundResult(e) => Ok(e),
         LookupResult::YouRunIt(_) => bail!(
             "no database entry for test {:?} at revision {:?} ({})",
             test_name.to_string(),
-            get_args.rev,
+            lookup_args.rev,
             rev.hash
         ),
-    };
+    }
+}
+
+async fn get(
+    env: Env,
+    cancellation_token: CancellationToken,
+    get_args: GetArgs,
+) -> anyhow::Result<()> {
+    let db_entry = lookup(env, cancellation_token, &get_args.lookup_args).await?;
     match get_args.output {
         GetOutput::Stdout => println!("{}", db_entry.stdout_path().display()),
         GetOutput::Stderr => println!("{}", db_entry.stderr_path().display()),
     }
+    Ok(())
+}
+
+async fn artifacts(
+    env: Env,
+    cancellation_token: CancellationToken,
+    lookup_args: DatabaseLookupArgs,
+) -> anyhow::Result<()> {
+    let db_entry = lookup(env, cancellation_token, &lookup_args).await?;
+    println!("{}", db_entry.artifacts_dir().display());
     Ok(())
 }
 
@@ -644,5 +671,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Watch(watch_args) => watch(env, cancellation_token, watch_args).await,
         Command::Test(ref test_args) => test(env, cancellation_token, test_args).await,
         Command::Get(get_args) => get(env, cancellation_token, get_args).await,
+        Command::Artifacts(lookup_args) => artifacts(env, cancellation_token, lookup_args).await,
     }
 }

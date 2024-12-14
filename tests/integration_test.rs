@@ -598,6 +598,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
             command = """
             echo burgle schmurgle
             echo bungle bingle >&2
+            touch $LIMMAT_ARTIFACTS/my_artifact
             """
 
             shutdown_grace_period_s = 1
@@ -636,6 +637,22 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         fs::read_to_string(child.stdout().unwrap().trim()),
         ok(eq(want_stderr))
     );
+
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .db_dir(db_dir.path().to_owned())
+        .existing_repo_dir(repo_dir.path().to_owned())
+        .start(config, ["artifacts", "my_test", "HEAD^"])
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_true!(Path::new(child.stdout().unwrap().trim())
+        .join("my_artifact")
+        .exists());
 }
 
 #[googletest::test]
@@ -708,6 +725,51 @@ async fn should_find_not_race() {
 #[googletest::test]
 #[tokio::test]
 async fn limmat_artifacts_test_cmd() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let config = r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "my_test"
+            command = "echo hwat >> $LIMMAT_ARTIFACTS/foo"
+        "##
+    .to_string();
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .env("TMPDIR", temp_dir.path().as_os_str())
+        .start(&config, ["test", "my_test"])
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+
+    // The "test" command dumps artifacts into a temp directory, there should be
+    // a single file in the temp directory (in a subdir) which should be a
+    // single file.
+    let mut temp_dir_files: Vec<PathBuf> =
+        glob(&temp_dir.path().join("**").join("*").to_string_lossy())
+            .expect("failed to glob")
+            .collect::<result::Result<Vec<PathBuf>, GlobError>>()
+            .expect("error in glob result")
+            .into_iter()
+            .filter(|p| !p.is_dir())
+            .collect();
+    assert_that!(temp_dir_files, len(eq(1)));
+    let artifact_path = temp_dir_files.pop().unwrap();
+    expect_that!(artifact_path.file_name(), some(eq("foo")));
+    expect_that!(
+        artifact_path.parent().and_then(|p| p.parent()),
+        some(eq(temp_dir.path()))
+    );
+    expect_that!(fs::read_to_string(artifact_path), ok(eq("hwat\n")));
+}
+
+#[googletest::test]
+#[tokio::test]
+async fn artifacts_cmd() {
     let temp_dir = TempDir::new().unwrap();
 
     let config = r##"
