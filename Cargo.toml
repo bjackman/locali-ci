@@ -46,6 +46,7 @@ indoc = "2.0.5"
 unicode-segmentation = "1.12.0"
 crossterm = {version = "0.28.1", features = ["event-stream"] }
 schemars = "0.8.21"
+sha3 = "0.10.8"
 
 [dev-dependencies]
 test-case = "3.3"

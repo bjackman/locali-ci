@@ -15,6 +15,9 @@ url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-c
 [imports.google]
 url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.toml"
 
+[imports.isrg]
+url = "https://raw.githubusercontent.com/divviup/libprio-rs/main/supply-chain/audits.toml"
+
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
@@ -51,10 +54,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.backtrace]]
 version = "0.3.74"
-criteria = "safe-to-deploy"
-
-[[exemptions.base64]]
-version = "0.22.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.block-buffer]]
@@ -99,10 +98,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.crossterm_winapi]]
 version = "0.9.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.crunchy]]
-version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.data-encoding]]
@@ -315,14 +310,6 @@ criteria = "safe-to-run"
 
 [[exemptions.rand]]
 version = "0.8.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.rand_chacha]]
-version = "0.3.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.rand_core]]
-version = "0.6.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.redox_syscall]]
