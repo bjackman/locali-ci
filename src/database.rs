@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     flock::{ExclusiveFlock, SharedFlock},
     git::Hash,
-    test::{ConfigHash, TestCase, TestJobOutput, TestName, TestResult},
+    test::{ConfigHash, TestCase, TestName, TestResult},
     util::IoResultExt as _,
 };
 
@@ -258,10 +258,8 @@ impl DatabaseOutput {
         let path = self.base_dir.join("stderr.txt");
         File::create(&path).with_context(|| format!("creating {}", path.display()))
     }
-}
 
-impl TestJobOutput for DatabaseOutput {
-    fn stdout(&mut self) -> Result<Stdio> {
+    pub fn stdout(&mut self) -> Result<Stdio> {
         assert!(!self.stdout_opened);
         self.stdout_opened = true;
         if let Some(stdout) = self.provided_stdout.take() {
@@ -270,7 +268,7 @@ impl TestJobOutput for DatabaseOutput {
         Ok(self.stdout_file()?.into())
     }
 
-    fn stderr(&mut self) -> Result<Stdio> {
+    pub fn stderr(&mut self) -> Result<Stdio> {
         assert!(!self.stderr_opened);
         self.stderr_opened = true;
         if let Some(stderr) = self.provided_stderr.take() {
@@ -288,7 +286,7 @@ impl TestJobOutput for DatabaseOutput {
     // downgrade rarely gets "beaten" by an exclusive lock. (Also, it should be
     // rare that we delete an entry when there's a test running that depends on
     // it).
-    async fn set_result(mut self, result: &TestResult) -> anyhow::Result<DatabaseEntry> {
+    pub async fn set_result(mut self, result: &TestResult) -> anyhow::Result<DatabaseEntry> {
         assert!(!self.status_written);
         self.status_written = true;
         let entry = TestResultEntry {
@@ -312,7 +310,7 @@ impl TestJobOutput for DatabaseOutput {
         })
     }
 
-    fn artifacts_dir(&mut self) -> &Path {
+    pub fn artifacts_dir(&mut self) -> &Path {
         &self.artifacts_dir
     }
 }

@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    database::{Database, DatabaseEntry, LookupResult},
+    database::{Database, DatabaseOutput, LookupResult},
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
@@ -566,16 +566,6 @@ impl TestJobBuilder {
     }
 }
 
-pub trait TestJobOutput {
-    // Panics if called more than once.
-    fn stderr(&mut self) -> anyhow::Result<Stdio>;
-    // Panics if called more than once.
-    fn stdout(&mut self) -> anyhow::Result<Stdio>;
-    async fn set_result(self, result: &TestResult) -> anyhow::Result<DatabaseEntry>;
-    // Extant directory for the job to put artifacts into.
-    fn artifacts_dir(&mut self) -> &Path;
-}
-
 // This is not really a proper type, it doesn't really mean anything except as an implementation
 // detail of its user. I tried to get rid of it but then you run into issues with getting references
 // to individual fields while a mutable reference exists to the overall struct. I think this is
@@ -734,11 +724,11 @@ impl<'a> TestJob {
     }
 
     // The core part of the job - runs the actual process and returns its result.
-    async fn execute_child<O: TestJobOutput>(
+    async fn execute_child(
         &mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
-        output: &mut O,
+        output: &mut DatabaseOutput,
     ) -> TestOutcome {
         info!("Starting {:?}", self.test_case);
 
@@ -810,7 +800,7 @@ impl<'a> TestJob {
         mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
-        mut output: impl TestJobOutput,
+        mut output: DatabaseOutput,
     ) -> TestOutcome {
         let outcome = self
             .execute_child(current_dir, resources, &mut output)
