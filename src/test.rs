@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    database::{Database, LookupResult},
+    database::{Database, DatabaseEntry, LookupResult},
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
@@ -571,8 +571,7 @@ pub trait TestJobOutput {
     fn stderr(&mut self) -> anyhow::Result<Stdio>;
     // Panics if called more than once.
     fn stdout(&mut self) -> anyhow::Result<Stdio>;
-    // Panics if called more than once.
-    fn set_result(self, result: &TestResult) -> anyhow::Result<()>;
+    async fn set_result(self, result: &TestResult) -> anyhow::Result<DatabaseEntry>;
     // Extant directory for the job to put artifacts into.
     fn artifacts_dir(&mut self) -> &Path;
 }
@@ -668,6 +667,7 @@ impl<'a> TestJob {
         if let Ok(ref test_result) = outcome {
             output
                 .set_result(test_result)
+                .await
                 .or_log_error("couldn't save job status");
         }
         outcome
@@ -818,6 +818,7 @@ impl<'a> TestJob {
         if let Ok(ref test_result) = outcome {
             output
                 .set_result(test_result)
+                .await
                 .or_log_error("couldn't save job status");
         }
         self.notifier.notify_completion(outcome.clone());

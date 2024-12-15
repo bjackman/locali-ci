@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::{arg, Parser as _, Subcommand, ValueEnum};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
-use database::{Database, DatabaseEntry, LookupResult};
+use database::{Database, DatabaseEntry, DatabaseOutput, LookupResult};
 use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
@@ -17,16 +17,14 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::io::{stdout, Stdout};
-use std::path::{absolute, Path, PathBuf};
+use std::path::{absolute, PathBuf};
 use std::pin::pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::{env, fmt, fs, str};
 use tempfile::TempDir;
-use test::{
-    base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder, TestJobOutput, TestName,
-};
-use test::{Test, TestResult};
+use test::Test;
+use test::{base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder, TestName};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
@@ -379,26 +377,6 @@ async fn ensure_job_success(
     Ok(())
 }
 
-struct OneshotOutput {
-    artifacts_dir: PathBuf,
-}
-
-impl TestJobOutput for OneshotOutput {
-    fn stdout(&mut self) -> anyhow::Result<Stdio> {
-        Ok(Stdio::inherit())
-    }
-    fn stderr(&mut self) -> anyhow::Result<Stdio> {
-        Ok(Stdio::inherit())
-    }
-    fn set_result(self, result: &TestResult) -> anyhow::Result<()> {
-        eprintln!("Job result: {result:?}");
-        Ok(())
-    }
-    fn artifacts_dir(&mut self) -> &Path {
-        &self.artifacts_dir
-    }
-}
-
 // Run a set of tests at a given version, in worktrees, in parallel, unless
 // there's already a result in the database. Error if any fail.
 async fn ensure_tests_run(
@@ -539,12 +517,12 @@ async fn test(
     // Doesn't need a worktree, it's gonna do it live and direct in the main tree.
     needs_resources.remove(&ResourceKey::Worktree);
     let resources = env.config.resource_pools.get(needs_resources).await;
-    let artifacts_dir = TempDir::with_prefix("limmat-artifacts-")?.into_path();
+    let output_dir = TempDir::with_prefix("limmat-output-")?.into_path();
     eprintln!(
         "Test artifacts will be stored under {}",
-        artifacts_dir.display()
+        output_dir.display()
     );
-    let output = OneshotOutput { artifacts_dir };
+    let output = DatabaseOutput::ephemeral(output_dir, Stdio::inherit(), Stdio::inherit()).await?;
     let result = job.run_with(env.repo.path(), &resources, output).await?;
     eprintln!("Finished: {}", result);
     Ok(())

@@ -219,7 +219,6 @@ impl DatabaseOutput {
     // storing "ephemeral" results (not in the sense that we destroy them
     // ourselves, just in the sense that we don't really look after them and the
     // user is likely to delete them later). base_dir must exist.
-    #[expect(dead_code)]
     pub async fn ephemeral(
         base_dir: PathBuf,
         stdout: Stdio,
@@ -227,8 +226,12 @@ impl DatabaseOutput {
     ) -> anyhow::Result<Self> {
         let artifacts_dir = base_dir.join("artifacts").to_owned();
         create_dir(&artifacts_dir).context("creating artifacts dir")?;
-        let json_file =
-            File::create(base_dir.join("result.json")).context("creating result.json")?;
+        let json_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(base_dir.join("result.json"))
+            .context("creating ephemeral result JSON")?;
         Ok(Self {
             base_dir,
             artifacts_dir,
@@ -276,8 +279,16 @@ impl TestJobOutput for DatabaseOutput {
         Ok(self.stderr_file()?.into())
     }
 
-    // TODO: Figure out how to record errors in the more general case, probably with a JSON object.
-    fn set_result(mut self, result: &TestResult) -> anyhow::Result<()> {
+    // Set the result and return the created entry. Unfortunately because flock
+    // downgrades are non-atomic, it's possible for this to fail as someone can
+    // grab the lock while we are downgrading and delete the entry. (At time of
+    // writing there is no logic to delete entries but I plan to implement this).
+    // I'm hopeful that this won't really happen in practice, hopefully flock
+    // implementations treat shared locks as having higher-priority, so the
+    // downgrade rarely gets "beaten" by an exclusive lock. (Also, it should be
+    // rare that we delete an entry when there's a test running that depends on
+    // it).
+    async fn set_result(mut self, result: &TestResult) -> anyhow::Result<DatabaseEntry> {
         assert!(!self.status_written);
         self.status_written = true;
         let entry = TestResultEntry {
@@ -286,7 +297,19 @@ impl TestJobOutput for DatabaseOutput {
         };
         self.json_flock
             .set_content(&serde_json::to_vec(&entry).expect("failed to serialize TestStatus"))
-            .context("writing JSON result")
+            .context("writing JSON result")?;
+        Ok(DatabaseEntry {
+            base_path: self.base_dir,
+            result: TestResultEntry {
+                config_hash: self.config_hash,
+                result: result.clone(),
+            },
+            _json_flock: self
+                .json_flock
+                .downgrade()
+                .await
+                .context("downgrading result JSON flock")?,
+        })
     }
 
     fn artifacts_dir(&mut self) -> &Path {
@@ -330,7 +353,10 @@ mod tests {
                 .write_all(b"hello stdout\n")
                 .unwrap();
             let json_path = output.base_dir.join("result.json");
-            output.set_result(&TestResult { exit_code: 1 }).unwrap();
+            output
+                .set_result(&TestResult { exit_code: 1 })
+                .await
+                .unwrap();
             json_path
         };
         {
@@ -350,7 +376,10 @@ mod tests {
                 LookupResult::FoundResult(e) => panic!("successfully read corrupted JSON? {e:?}"),
                 LookupResult::YouRunIt(output) => output,
             };
-            output.set_result(&TestResult { exit_code: 2 }).unwrap();
+            output
+                .set_result(&TestResult { exit_code: 2 })
+                .await
+                .unwrap();
         }
         // Now it should be valid again.
         match db.lookup(&test_case).await.unwrap() {

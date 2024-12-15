@@ -749,19 +749,28 @@ async fn limmat_artifacts_test_cmd() {
     // The "test" command dumps artifacts into a temp directory, there should be
     // a single file in the temp directory (in a subdir) which should be a
     // single file.
-    let mut temp_dir_files: Vec<PathBuf> =
-        glob(&temp_dir.path().join("**").join("*").to_string_lossy())
-            .expect("failed to glob")
-            .collect::<result::Result<Vec<PathBuf>, GlobError>>()
-            .expect("error in glob result")
-            .into_iter()
-            .filter(|p| !p.is_dir())
-            .collect();
-    assert_that!(temp_dir_files, len(eq(1)));
-    let artifact_path = temp_dir_files.pop().unwrap();
+    let mut artifacts_dir_files: Vec<PathBuf> = glob(
+        &temp_dir
+            .path()
+            .join("**")
+            .join("artifacts")
+            .join("*")
+            .to_string_lossy(),
+    )
+    .expect("failed to glob")
+    .collect::<result::Result<Vec<PathBuf>, GlobError>>()
+    .expect("error in glob result")
+    .into_iter()
+    .filter(|p| !p.is_dir())
+    .collect();
+    assert_that!(artifacts_dir_files, len(eq(1)));
+    let artifact_path = artifacts_dir_files.pop().unwrap();
     expect_that!(artifact_path.file_name(), some(eq("foo")));
     expect_that!(
-        artifact_path.parent().and_then(|p| p.parent()),
+        artifact_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent()),
         some(eq(temp_dir.path()))
     );
     expect_that!(fs::read_to_string(artifact_path), ok(eq("hwat\n")));
@@ -794,19 +803,28 @@ async fn artifacts_cmd() {
     // The "test" command dumps artifacts into a temp directory, there should be
     // a single file in the temp directory (in a subdir) which should be a
     // single file.
-    let mut temp_dir_files: Vec<PathBuf> =
-        glob(&temp_dir.path().join("**").join("*").to_string_lossy())
-            .expect("failed to glob")
-            .collect::<result::Result<Vec<PathBuf>, GlobError>>()
-            .expect("error in glob result")
-            .into_iter()
-            .filter(|p| !p.is_dir())
-            .collect();
-    assert_that!(temp_dir_files, len(eq(1)));
-    let artifact_path = temp_dir_files.pop().unwrap();
+    let mut artifacts_files: Vec<PathBuf> = glob(
+        &temp_dir
+            .path()
+            .join("**")
+            .join("artifacts")
+            .join("*")
+            .to_string_lossy(),
+    )
+    .expect("failed to glob")
+    .collect::<result::Result<Vec<PathBuf>, GlobError>>()
+    .expect("error in glob result")
+    .into_iter()
+    .filter(|p| !p.is_dir())
+    .collect();
+    assert_that!(artifacts_files, len(eq(1)));
+    let artifact_path = artifacts_files.pop().unwrap();
     expect_that!(artifact_path.file_name(), some(eq("foo")));
     expect_that!(
-        artifact_path.parent().and_then(|p| p.parent()),
+        artifact_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent()),
         some(eq(temp_dir.path()))
     );
     expect_that!(fs::read_to_string(artifact_path), ok(eq("hwat\n")));

@@ -1,9 +1,13 @@
 // The async-file-lock crate has some issues:
+//
 // 1. It doesn't look like it allows upgrades/downgrades of the lock.
 // 2. It hasn't been upgraded to tokio 1.0, (I looked briefly at upgrading it but it has a
 //    bunch of functionality I don't need or understand, couldn't be bothered).
 // 3. I think it leaks threads if you drop the futures it gives you.
 //    https://github.com/Stock84-dev/async-file-lock/issues/3
+//
+// This is a very simple flock library that is not really generic, it serves the
+// rather specific needs of using small files kinda like "database entries".
 
 use std::{
     fs::File,
@@ -50,7 +54,6 @@ async fn flock_async(fd: RawFd, kind: LockKind) -> anyhow::Result<()> {
     task::spawn_blocking(move || flock(fd, kind)).await.unwrap()
 }
 
-// A simple "read" lock on a file.
 #[derive(Debug)]
 pub struct SharedFlock {
     file: File,
@@ -92,6 +95,7 @@ pub struct ExclusiveFlock {
 }
 
 impl ExclusiveFlock {
+    // Even though this is a "write lock" in a sense, the file needs to be open for reading too.
     pub async fn new(mut file: File) -> anyhow::Result<Self> {
         debug_assert_eq!(file.stream_position().unwrap(), 0);
         flock_async(file.as_raw_fd(), LockKind::Exclusive).await?;
@@ -115,5 +119,11 @@ impl ExclusiveFlock {
             .context("writing locked file")?;
         // TODO: it would be nicer if this method consumed self, then we wouldn't have to rewind.
         self.file.rewind().context("rewinding locked file")
+    }
+
+    // See SharedFlock::upgrade - same limiations apply.
+    pub async fn downgrade(mut self) -> anyhow::Result<SharedFlock> {
+        self.file.rewind().context("rewinding locked file")?;
+        SharedFlock::new(self.file).await
     }
 }
