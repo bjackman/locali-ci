@@ -9,11 +9,13 @@ use anyhow::{bail, Context, Result};
 #[allow(unused_imports)]
 use log::debug;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use tempfile::NamedTempFile;
 
 use crate::{
     flock::{ExclusiveFlock, SharedFlock},
     git::Hash,
-    test::{ConfigHash, TestCase, TestName, TestResult},
+    test::{ConfigHash, ExitCode, TestCase, TestName, TestResult},
     util::IoResultExt as _,
 };
 
@@ -117,6 +119,8 @@ impl Database {
                     base_path: result_dir.clone(),
                     result: test_result,
                     _json_flock: flock,
+                    #[cfg(test)]
+                    _tempfile: None,
                 }));
             }
 
@@ -152,11 +156,17 @@ pub struct DatabaseEntry {
     base_path: PathBuf,
     result: TestResultEntry,
     _json_flock: SharedFlock,
+    #[cfg(test)]
+    _tempfile: Option<NamedTempFile>,
 }
 
 impl DatabaseEntry {
     pub fn result(&self) -> &TestResult {
         &self.result.result
+    }
+
+    pub fn exit_code(&self) -> ExitCode {
+        self.result.result.exit_code
     }
 
     pub fn stdout_path(&self) -> PathBuf {
@@ -169,6 +179,20 @@ impl DatabaseEntry {
 
     pub fn artifacts_dir(&self) -> PathBuf {
         self.base_path.join("artifacts")
+    }
+
+    #[cfg(test)]
+    pub async fn fake(result: TestResult) -> Self {
+        let tempfile = NamedTempFile::new().unwrap();
+        Self {
+            base_path: "".into(),
+            result: TestResultEntry {
+                config_hash: b"FAKE CONFIG HASH".into(),
+                result,
+            },
+            _json_flock: SharedFlock::new(tempfile.reopen().unwrap()).await.unwrap(),
+            _tempfile: Some(tempfile),
+        }
     }
 }
 
@@ -307,6 +331,8 @@ impl DatabaseOutput {
                 .downgrade()
                 .await
                 .context("downgrading result JSON flock")?,
+            #[cfg(test)]
+            _tempfile: None,
         })
     }
 

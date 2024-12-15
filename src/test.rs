@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dag::{Dag, GraphNode},
-    database::{Database, DatabaseOutput, LookupResult},
+    database::{Database, DatabaseEntry, DatabaseOutput, LookupResult},
     git::{Commit, CommitHash, Hash, Worktree},
     process::ExitStatusExt as _,
     resource::{Pools, ResourceKey, Resources},
@@ -620,18 +620,18 @@ impl<'a> TestJob {
             .await
             .map_err(|test_name| anyhow!("dependency job {test_name} failed"))?;
 
-        let mut output = match database
+        let output = match database
             .lookup(&self.test_case)
             .await
             .context("database lookup")?
         {
             LookupResult::FoundResult(db_entry) => {
-                return Ok(db_entry.result().to_owned());
+                return Ok(Arc::new(db_entry));
             }
             LookupResult::YouRunIt(output) => output,
         };
 
-        let outcome = select! {
+        select! {
             // This "biased" is here because otherwise when we cancel a bunch of jobs all at once,
             // and some of those jobs are blocking on resources held by others,
             // we want the former jobs to observe their own cancellation before
@@ -647,20 +647,13 @@ impl<'a> TestJob {
                     // We "own" this worktree.
                     let worktree = worktrees[0].as_worktree();
                     worktree.checkout(&self.test_case.commit_hash).await.context("failed to check out revision")?;
-                    self.execute_child(worktree.path(), &resources, &mut output).await
+                    self.execute_child(worktree.path(), &resources, output).await
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    self.execute_child(origin_worktree_path, &resources, &mut output).await
+                    self.execute_child(origin_worktree_path, &resources, output).await
                 }
             }
-        };
-        if let Ok(ref test_result) = outcome {
-            output
-                .set_result(test_result)
-                .await
-                .or_log_error("couldn't save job status");
         }
-        outcome
     }
 
     // Blocks until all dependency jobs have succeeded, or returns an error
@@ -682,8 +675,8 @@ impl<'a> TestJob {
             // (including the "impossible" case that the sender has been dropped
             // and the rx.wait_for call failed) here, we trust that the other
             // side of the notifier has reported any issues appropriately.
-            if let Ok(Ok(result)) = &outcome {
-                if result.exit_code == 0 {
+            if let Ok(Ok(db_entry)) = &outcome {
+                if db_entry.exit_code() == 0 {
                     debug!(
                         "{:?}: Dependency {:?} succeeded",
                         self.test_case.test.name, test_name
@@ -728,7 +721,7 @@ impl<'a> TestJob {
         &mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
-        output: &mut DatabaseOutput,
+        mut output: DatabaseOutput,
     ) -> TestOutcome {
         info!("Starting {:?}", self.test_case);
 
@@ -759,7 +752,9 @@ impl<'a> TestJob {
             // write this block as a single chain of methods? But it seems ridiculous to me.
             {
                 let exit_code = wait_result.context("awaiting child")?.code_not_killed()?;
-                Ok(TestResult { exit_code })
+                Ok(Arc::new(
+                    output.set_result(&TestResult { exit_code }).await?,
+                ))
             }
             Either::Right((_, child_fut)) => {
                 // Canceled. Shut down the process if necessary.
@@ -800,17 +795,9 @@ impl<'a> TestJob {
         mut self,
         current_dir: &Path,
         resources: &Resources<'a>,
-        mut output: DatabaseOutput,
+        output: DatabaseOutput,
     ) -> TestOutcome {
-        let outcome = self
-            .execute_child(current_dir, resources, &mut output)
-            .await;
-        if let Ok(ref test_result) = outcome {
-            output
-                .set_result(test_result)
-                .await
-                .or_log_error("couldn't save job status");
-        }
+        let outcome = self.execute_child(current_dir, resources, output).await;
         self.notifier.notify_completion(outcome.clone());
         outcome
     }
@@ -894,7 +881,7 @@ impl GraphNode for TestCase {
 
 pub type ExitCode = i32;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum TestStatus {
     Enqueued,
     Started,
@@ -907,13 +894,13 @@ impl Display for TestStatus {
             Self::Enqueued => write!(f, "Enqueued"),
             Self::Started => write!(f, "Started"),
             Self::Finished(Err(inconclusive)) => write!(f, "{}", inconclusive),
-            Self::Finished(Ok(result)) => write!(f, "{}", result),
+            Self::Finished(Ok(db_entry)) => write!(f, "{}", db_entry.result()),
         }
     }
 }
 
 // Final result of an attempt to run a test.
-pub type TestOutcome = Result<TestResult, TestInconclusive>;
+pub type TestOutcome = Result<Arc<DatabaseEntry>, TestInconclusive>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestInconclusive {
@@ -975,8 +962,14 @@ mod tests {
 
     use anyhow::bail;
     use future::{join_all, select_all};
+    use googletest::{
+        description::Description,
+        fail,
+        matcher::MatcherResult,
+        prelude::{eq, Matcher, MatcherBase},
+        verify_that,
+    };
     use itertools::izip;
-    use log::error;
     use tempfile::TempDir;
     use test_case::test_case;
     use tokio::{
@@ -1252,56 +1245,72 @@ mod tests {
         }
     }
 
-    fn dump_want_statuses(want: &HashMap<TestCaseId, (TestCase, VecDeque<TestStatus>)>) -> String {
-        let mut ret = String::from("");
-        for (test_case, statuses) in want.values() {
-            ret.push_str(&format!("{:?}\n", test_case));
-            for status in statuses {
-                ret.push_str(&format!("\t{:?}\n", status));
+    #[derive(MatcherBase, Debug)]
+    enum TestStatusMatcher {
+        Enqueued,
+        Started,
+        Completed(ExitCode),
+        Inconclusive(TestInconclusive),
+    }
+
+    impl Matcher<&TestStatus> for TestStatusMatcher {
+        fn matches(&self, actual: &TestStatus) -> MatcherResult {
+            match (self, actual) {
+                (Self::Enqueued, TestStatus::Enqueued) => MatcherResult::Match,
+                (Self::Started, TestStatus::Started) => MatcherResult::Match,
+                (Self::Completed(exit_code), TestStatus::Finished(Ok(db_entry))) => {
+                    if db_entry.exit_code() == *exit_code {
+                        MatcherResult::Match
+                    } else {
+                        MatcherResult::NoMatch
+                    }
+                }
+                (Self::Inconclusive(want), TestStatus::Finished(Err(got))) => eq(want).matches(got),
+                _ => MatcherResult::NoMatch,
             }
         }
-        ret
+
+        fn describe(&self, matcher_result: MatcherResult) -> Description {
+            match matcher_result {
+                // TODO: hmmm..?
+                MatcherResult::Match => format!("is equal to {:?}", self).into(),
+                MatcherResult::NoMatch => format!("isn't equal to {:?}", self).into(),
+            }
+        }
     }
+
     // Expect the series of notifications provided for each test case.
     // case. Also assert that the necessary precursor notifications arrive.
     // Panics if any of the input series are empty.
     async fn expect_notifs_20s(
         results: &mut broadcast::Receiver<Arc<Notification>>,
-        want: impl IntoIterator<Item = (TestCase, VecDeque<TestStatus>)>,
-    ) -> anyhow::Result<()> {
+        matchers: impl IntoIterator<Item = (TestCase, VecDeque<TestStatusMatcher>)>,
+    ) -> googletest::Result<()> {
         let timeout = Instant::now() + Duration::from_secs(20);
-        let mut want: HashMap<TestCaseId, _> = want
+        let mut matchers: HashMap<TestCaseId, _> = matchers
             .into_iter()
             .map(|(test_case, statuses)| (test_case.id(), (test_case, statuses)))
             .collect();
-        let want_total = want.len();
-        while !want.is_empty() {
+        let want_total = matchers.len();
+        while !matchers.is_empty() {
             let notif = select! {
                 _ = sleep_until(timeout) => {
-                    bail!("timeout after 20s, remaining results ({} of {}):\n{}",
-                        want.len(), want_total, dump_want_statuses(&want));
+                    return fail!("timeout after 20s, {} remaining results of {}",
+                        matchers.len(), want_total);
                 },
                 output = results.recv() => {
-                    output.context(format!(
-                        "test result stream terminated, remaining results:\n{}",
-                        dump_want_statuses(&want)))?
+                    output? // TODO: Descriptive failure (result stream treminated)
                 }
             };
-            let (_tc, want_statuses) = want.get_mut(&notif.test_case.id()).context(format!(
-                "got notification for unexpected test case: {notif:?}",
-            ))?;
-            let want_status = want_statuses.pop_front().expect("empty status series");
-            if want_statuses.is_empty() {
-                want.remove(&notif.test_case.id());
+            let (_tc, tc_matchers) = matchers
+                .get_mut(&notif.test_case.id())
+                .unwrap_or_else(|| panic!("got notification for unexpected test case: {notif:?}"));
+            let matcher = tc_matchers.pop_front().expect("empty matcher series");
+            if tc_matchers.is_empty() {
+                matchers.remove(&notif.test_case.id());
             }
-            if notif.status != want_status {
-                bail!(
-                    "unexpected test notification for {:?}, got {:?} want {:?}",
-                    notif.test_case,
-                    notif.status,
-                    want_status
-                );
-            }
+            // TODO: Why do I need to take references to both of these?? WTF?
+            verify_that!(&notif.status, matcher)?;
         }
         Ok(())
     }
@@ -1509,9 +1518,9 @@ mod tests {
             [(
                 f.test_case(&commit, 0),
                 vec![
-                    TestStatus::Enqueued,
-                    TestStatus::Started,
-                    TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
+                    TestStatusMatcher::Enqueued,
+                    TestStatusMatcher::Started,
+                    TestStatusMatcher::Completed(0),
                 ]
                 .into(),
             )],
@@ -1568,18 +1577,18 @@ mod tests {
                 (
                     f.test_case(&commit1, 0),
                     vec![
-                        TestStatus::Enqueued,
-                        TestStatus::Started,
-                        TestStatus::Finished(Err(TestInconclusive::Canceled)),
+                        TestStatusMatcher::Enqueued,
+                        TestStatusMatcher::Started,
+                        TestStatusMatcher::Inconclusive(TestInconclusive::Canceled),
                     ]
                     .into(),
                 ),
                 (
                     f.test_case(&commit1, 1),
                     vec![
-                        TestStatus::Enqueued,
-                        TestStatus::Started,
-                        TestStatus::Finished(Err(TestInconclusive::Canceled)),
+                        TestStatusMatcher::Enqueued,
+                        TestStatusMatcher::Started,
+                        TestStatusMatcher::Inconclusive(TestInconclusive::Canceled),
                     ]
                     .into(),
                 ),
@@ -1588,18 +1597,18 @@ mod tests {
                 (
                     f.test_case(&commit2, 0),
                     vec![
-                        TestStatus::Enqueued,
-                        TestStatus::Started,
-                        TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
+                        TestStatusMatcher::Enqueued,
+                        TestStatusMatcher::Started,
+                        TestStatusMatcher::Completed(0),
                     ]
                     .into(),
                 ),
                 (
                     f.test_case(&commit2, 1),
                     vec![
-                        TestStatus::Enqueued,
-                        TestStatus::Started,
-                        TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
+                        TestStatusMatcher::Enqueued,
+                        TestStatusMatcher::Started,
+                        TestStatusMatcher::Completed(0),
                     ]
                     .into(),
                 ),
@@ -1722,9 +1731,9 @@ mod tests {
                 want_results.push((
                     f.test_case(&commit, j),
                     vec![
-                        TestStatus::Enqueued,
-                        TestStatus::Started,
-                        TestStatus::Finished(Ok(TestResult { exit_code: i })),
+                        TestStatusMatcher::Enqueued,
+                        TestStatusMatcher::Started,
+                        TestStatusMatcher::Completed(i),
                     ]
                     .into(),
                 ));
@@ -1938,7 +1947,7 @@ mod tests {
             &mut results,
             [(
                 f.test_case(&commits[0], 0),
-                vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                vec![TestStatusMatcher::Enqueued, TestStatusMatcher::Started].into(),
             )],
         )
         .await
@@ -1953,7 +1962,7 @@ mod tests {
             &mut results,
             [(
                 f.test_case(&commits[1], 0),
-                vec![TestStatus::Enqueued].into(),
+                vec![TestStatusMatcher::Enqueued].into(),
             )],
         )
         .await
@@ -1969,11 +1978,11 @@ mod tests {
             [
                 (
                     f.test_case(&commits[0], 0),
-                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
+                    vec![TestStatusMatcher::Inconclusive(TestInconclusive::Canceled)].into(),
                 ),
                 (
                     f.test_case(&commits[1], 0),
-                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
+                    vec![TestStatusMatcher::Inconclusive(TestInconclusive::Canceled)].into(),
                 ),
             ],
         )
@@ -2024,19 +2033,19 @@ mod tests {
             [
                 (
                     f.test_case(&with_error, 0),
-                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                    vec![TestStatusMatcher::Enqueued, TestStatusMatcher::Started].into(),
                 ),
                 (
                     f.test_case(&with_error, 1),
-                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                    vec![TestStatusMatcher::Enqueued, TestStatusMatcher::Started].into(),
                 ),
                 (
                     f.test_case(&with_fail, 0),
-                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                    vec![TestStatusMatcher::Enqueued, TestStatusMatcher::Started].into(),
                 ),
                 (
                     f.test_case(&with_fail, 1),
-                    vec![TestStatus::Enqueued, TestStatus::Started].into(),
+                    vec![TestStatusMatcher::Enqueued, TestStatusMatcher::Started].into(),
                 ),
             ],
         )
@@ -2052,9 +2061,9 @@ mod tests {
             &mut results,
             [(
                 f.test_case(&with_error, 0),
-                vec![TestStatus::Finished(Err(TestInconclusive::Error(
+                vec![TestStatusMatcher::Inconclusive(TestInconclusive::Error(
                     String::from("terminated by signal 10"),
-                )))]
+                ))]
                 .into(),
             )],
         )
@@ -2069,15 +2078,15 @@ mod tests {
             [
                 (
                     f.test_case(&with_error, 1),
-                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
+                    vec![TestStatusMatcher::Inconclusive(TestInconclusive::Canceled)].into(),
                 ),
                 (
                     f.test_case(&with_fail, 0),
-                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
+                    vec![TestStatusMatcher::Inconclusive(TestInconclusive::Canceled)].into(),
                 ),
                 (
                     f.test_case(&with_fail, 1),
-                    vec![TestStatus::Finished(Err(TestInconclusive::Canceled))].into(),
+                    vec![TestStatusMatcher::Inconclusive(TestInconclusive::Canceled)].into(),
                 ),
             ],
         )

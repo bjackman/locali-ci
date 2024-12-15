@@ -330,11 +330,11 @@ impl OutputBuffer {
                 TestStatus::Finished(Err(TestInconclusive::Error(msg))) => {
                     Span::new(msg).with_class(Class::Error)
                 }
-                TestStatus::Finished(Ok(result)) => {
-                    if result.exit_code == 0 {
+                TestStatus::Finished(Ok(db_entry)) => {
+                    if db_entry.exit_code() == 0 {
                         Span::new("success").with_class(Class::Success)
                     } else {
-                        Span::new(format!("failed (status {})", result.exit_code))
+                        Span::new(format!("failed (status {})", db_entry.exit_code()))
                             .with_class(Class::Failure)
                     }
                 }
@@ -364,11 +364,12 @@ mod tests {
     use googletest::{expect_that, prelude::eq};
 
     use crate::{
+        database::DatabaseEntry,
         git::{
             test_utils::{TempRepo, WorktreeExt},
             Commit,
         },
-        test::{CachePolicy, Test, TestName, TestResult},
+        test::{CachePolicy, ExitCode, Test, TestName, TestResult},
     };
 
     use super::*;
@@ -405,6 +406,12 @@ mod tests {
         &<CommitHash as AsRef<str>>::as_ref(&commit.hash)[..7]
     }
 
+    async fn fake_completion(exit_code: ExitCode) -> TestStatus {
+        TestStatus::Finished(Ok(Arc::new(
+            DatabaseEntry::fake(TestResult { exit_code }).await,
+        )))
+    }
+
     #[googletest::test]
     #[test_log::test(tokio::test)]
     async fn output_buffer_smoke() {
@@ -421,11 +428,7 @@ mod tests {
         let mut tracked_cases = HashMap::new();
         for notif in [
             fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
-            fake_notif(
-                &commit3.hash,
-                &test2,
-                TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
-            ),
+            fake_notif(&commit3.hash, &test2, fake_completion(0).await),
             fake_notif(
                 &commit2.hash,
                 &test1,
@@ -485,11 +488,7 @@ mod tests {
         let mut tracked_cases = HashMap::new();
         for notif in [
             fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
-            fake_notif(
-                &commit3.hash,
-                &test2,
-                TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
-            ),
+            fake_notif(&commit3.hash, &test2, fake_completion(0).await),
             fake_notif(
                 &commit2.hash,
                 &test1,
@@ -551,11 +550,7 @@ mod tests {
         let mut tracked_cases = HashMap::new();
         for notif in [
             fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
-            fake_notif(
-                &commit3.hash,
-                &test1,
-                TestStatus::Finished(Ok(TestResult { exit_code: 0 })),
-            ),
+            fake_notif(&commit3.hash, &test1, fake_completion(0).await),
             fake_notif(
                 &commit2.hash,
                 &test2,

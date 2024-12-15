@@ -364,14 +364,14 @@ async fn ensure_job_success(
     origin_worktree: PathBuf,
 ) -> anyhow::Result<()> {
     let name = job.test_name().to_owned();
-    let test_result = job
+    let db_entry = job
         .run(database, resource_pools.as_ref(), &origin_worktree)
         .await
         .with_context(|| format!("running dependency job {name}"))?;
-    if test_result.exit_code != 0 {
+    if db_entry.exit_code() != 0 {
         bail!(
             "dependency job {name} failed with exit code {}",
-            test_result.exit_code
+            db_entry.exit_code()
         );
     }
     Ok(())
@@ -523,8 +523,8 @@ async fn test(
         output_dir.display()
     );
     let output = DatabaseOutput::ephemeral(output_dir, Stdio::inherit(), Stdio::inherit()).await?;
-    let result = job.run_with(env.repo.path(), &resources, output).await?;
-    eprintln!("Finished: {}", result);
+    let db_entry = job.run_with(env.repo.path(), &resources, output).await?;
+    eprintln!("Finished: {}", db_entry.result());
     Ok(())
 }
 
