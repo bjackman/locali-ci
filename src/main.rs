@@ -20,11 +20,11 @@ use std::io::{stdout, Stdout};
 use std::path::{absolute, PathBuf};
 use std::pin::pin;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{env, fmt, fs, str};
 use tempfile::TempDir;
-use test::Test;
 use test::{base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder, TestName};
+use test::{DepDatabaseEntries, Test};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
@@ -362,7 +362,7 @@ async fn ensure_job_success(
     resource_pools: Arc<Pools>,
     job: TestJob,
     origin_worktree: PathBuf,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Arc<DatabaseEntry>> {
     let name = job.test_name().to_owned();
     let db_entry = job
         .run(database, resource_pools.as_ref(), &origin_worktree)
@@ -374,7 +374,7 @@ async fn ensure_job_success(
             db_entry.exit_code()
         );
     }
-    Ok(())
+    Ok(db_entry)
 }
 
 // Run a set of tests at a given version, in worktrees, in parallel, unless
@@ -384,7 +384,7 @@ async fn ensure_tests_run(
     cancellation_token: CancellationToken,
     tests: Vec<&Arc<Test>>,
     rev: &Commit,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<DepDatabaseEntries> {
     let tests = tests.into_iter();
     let num_worktrees = min(
         env.config.num_worktrees,
@@ -451,16 +451,21 @@ async fn ensure_tests_run(
         });
     }
 
+    let dep_db_entries = Arc::new(Mutex::new(HashMap::new()));
     for (_, job) in jobs {
-        eg.spawn(ensure_job_success(
-            env.database.clone(),
-            env.config.resource_pools.clone(),
-            job,
-            env.repo.path().to_owned(),
-        ));
+        let dep_db_entries = dep_db_entries.clone();
+        let db = env.database.clone();
+        let resource_pools = env.config.resource_pools.clone();
+        let repo_path = env.repo.path().to_owned();
+        eg.spawn(async move {
+            let test_name = job.test_name().clone();
+            let db_entry = ensure_job_success(db, resource_pools, job, repo_path).await?;
+            dep_db_entries.lock().unwrap().insert(test_name, db_entry);
+            Ok(())
+        });
     }
 
-    let end_result = eg.wait().await;
+    let result = eg.wait().await;
 
     // Now we have to remember to clean up before returning the result :/
     join_all(
@@ -471,7 +476,11 @@ async fn ensure_tests_run(
     )
     .await;
 
-    end_result
+    result?;
+    Ok(Arc::into_inner(dep_db_entries)
+        .expect("leaked Arc reference")
+        .into_inner()
+        .unwrap())
 }
 
 async fn test(
@@ -498,9 +507,11 @@ async fn test(
         .skip(1)
         .collect();
 
+    let mut dep_db_entries = HashMap::new();
     if !dep_tests.is_empty() {
         eprintln!("Running {} dependency jobs...", dep_tests.len());
-        ensure_tests_run(&env, cancellation_token.child_token(), dep_tests, &head).await?;
+        dep_db_entries =
+            ensure_tests_run(&env, cancellation_token.child_token(), dep_tests, &head).await?;
         eprintln!("Dependency jobs complete.");
     }
 
@@ -523,7 +534,9 @@ async fn test(
         output_dir.display()
     );
     let output = DatabaseOutput::ephemeral(output_dir, Stdio::inherit(), Stdio::inherit()).await?;
-    let db_entry = job.run_with(env.repo.path(), &resources, output).await?;
+    let db_entry = job
+        .run_with(env.repo.path(), &resources, output, dep_db_entries)
+        .await?;
     eprintln!("Finished: {}", db_entry.result());
     Ok(())
 }

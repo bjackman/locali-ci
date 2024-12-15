@@ -583,6 +583,8 @@ pub struct TestJob {
     notifier: TestStatusNotifier,
 }
 
+pub type DepDatabaseEntries = HashMap<TestName, Arc<DatabaseEntry>>;
+
 impl<'a> TestJob {
     pub fn subscribe_completion(&self) -> broadcast::Receiver<TestOutcome> {
         self.notifier.subscribe_completion()
@@ -616,7 +618,8 @@ impl<'a> TestJob {
     ) -> TestOutcome {
         // Wait for dependencies do be done, bail early if they do anything
         // but terminate successfully.
-        self.await_dep_success()
+        let dep_db_entries = self
+            .await_dep_success()
             .await
             .map_err(|test_name| anyhow!("dependency job {test_name} failed"))?;
 
@@ -647,18 +650,19 @@ impl<'a> TestJob {
                     // We "own" this worktree.
                     let worktree = worktrees[0].as_worktree();
                     worktree.checkout(&self.test_case.commit_hash).await.context("failed to check out revision")?;
-                    self.execute_child(worktree.path(), &resources, output).await
+                    self.execute_child(worktree.path(), &resources, output, dep_db_entries).await
                 } else {
                     // We don't "own" the "main" worktree so the job shouldn't mess with it.
-                    self.execute_child(origin_worktree_path, &resources, output).await
+                    self.execute_child(origin_worktree_path, &resources, output, dep_db_entries).await
                 }
             }
         }
     }
 
-    // Blocks until all dependency jobs have succeeded, or returns an error
-    // reporting the name of the job that terminated without success.
-    async fn await_dep_success(&mut self) -> Result<(), TestName> {
+    // Blocks until all dependency jobs have succeeded and returns all the
+    // database entries containing their results, or returns an error reporting
+    // the name of the job that terminated without success.
+    async fn await_dep_success(&mut self) -> Result<DepDatabaseEntries, TestName> {
         // This is another thing where the tokio::sync::watch API is a bit
         // weird, there's no way to wait for a message without passing a
         // predicate, so we have to pass a dummy one.
@@ -668,6 +672,7 @@ impl<'a> TestJob {
             .map(|(name, rx)| rx.recv().map(|status| (name, status)))
             .collect();
         let mut wait_for: Vec<_> = wait_for.into_iter().map(Box::pin).collect();
+        let mut ret = HashMap::new();
         while !wait_for.is_empty() {
             let ((test_name, outcome), _idx, remaining) = select_all(wait_for).await;
             wait_for = remaining;
@@ -681,6 +686,7 @@ impl<'a> TestJob {
                         "{:?}: Dependency {:?} succeeded",
                         self.test_case.test.name, test_name
                     );
+                    ret.insert(test_name.clone(), db_entry.clone());
                     continue;
                 }
             }
@@ -691,10 +697,16 @@ impl<'a> TestJob {
             return Err(test_name.clone());
         }
         debug!("{:?}: Dependencies succeeded", self.test_case);
-        Ok(())
+        Ok(ret)
     }
 
-    fn set_env(&self, cmd: &mut Command, resources: &Resources<'a>, artifacts_dir: &Path) {
+    fn set_env(
+        &self,
+        cmd: &mut Command,
+        resources: &Resources<'a>,
+        artifacts_dir: &Path,
+        dep_db_entries: &DepDatabaseEntries,
+    ) {
         cmd.env("LIMMAT_COMMIT", &self.test_case.commit_hash);
         cmd.env("LIMMAT_ARTIFACTS", artifacts_dir);
         for (k, v) in self.base_env.iter() {
@@ -714,6 +726,12 @@ impl<'a> TestJob {
                 cmd.env(format!("LIMMAT_RESOURCE_{}_{}", resource_name, i), token);
             }
         }
+        for (test_name, db_entry) in dep_db_entries {
+            cmd.env(
+                format!("LIMMAT_ARTIFACTS_{}", test_name),
+                db_entry.artifacts_dir(),
+            );
+        }
     }
 
     // The core part of the job - runs the actual process and returns its result.
@@ -722,6 +740,7 @@ impl<'a> TestJob {
         current_dir: &Path,
         resources: &Resources<'a>,
         mut output: DatabaseOutput,
+        dep_db_entries: DepDatabaseEntries,
     ) -> TestOutcome {
         info!("Starting {:?}", self.test_case);
 
@@ -729,7 +748,7 @@ impl<'a> TestJob {
         cmd.current_dir(current_dir)
             .stdout(output.stdout().context("no stdout handle available")?)
             .stderr(output.stderr().context("no stdout handle available")?);
-        self.set_env(&mut cmd, resources, output.artifacts_dir());
+        self.set_env(&mut cmd, resources, output.artifacts_dir(), &dep_db_entries);
         // It would be really confusing and annoying if we exited this function
         // without ensuring the child is dead. So we wrap it in this sketchy
         // drop guard thing.
@@ -796,8 +815,11 @@ impl<'a> TestJob {
         current_dir: &Path,
         resources: &Resources<'a>,
         output: DatabaseOutput,
+        dep_db_entries: DepDatabaseEntries,
     ) -> TestOutcome {
-        let outcome = self.execute_child(current_dir, resources, output).await;
+        let outcome = self
+            .execute_child(current_dir, resources, output, dep_db_entries)
+            .await;
         self.notifier.notify_completion(outcome.clone());
         outcome
     }
