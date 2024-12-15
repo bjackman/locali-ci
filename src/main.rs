@@ -415,10 +415,8 @@ async fn ensure_tests_run(
                 .child_ids() // This gives the TestCaseIds of dependency jobs.
                 .iter()
                 .map(|tc_id| {
-                    (
-                        test_case.test.name.clone(),
-                        jobs[tc_id.borrow()].subscribe_completion(),
-                    )
+                    let dep_job = &jobs[tc_id.borrow()];
+                    (dep_job.test_name().clone(), dep_job.subscribe_completion())
                 })
                 .collect();
             let job = TestJobBuilder::new(
