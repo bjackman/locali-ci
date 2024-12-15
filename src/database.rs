@@ -172,13 +172,20 @@ impl DatabaseEntry {
     }
 }
 
-// Output for an individual test job, stored into the database. Includes an exclusive lock on
-// the database entry, nobody can read the result or run the test case until you drop this object.
+// Output for an individual test job, which may or may not be stored into the
+// database depending on where it came from. If it is, it ncludes an exclusive
+// lock on the database entry, nobody can read the result or run the test case
+// until you drop this object.
 pub struct DatabaseOutput {
     base_dir: PathBuf,      // Must exist.
     artifacts_dir: PathBuf, // This too.
+    // TODO: this is a mess, probably instead we should use a trait object of some kind. This was
+    // done this way in part to avoid polluting the code with a trait object but
+    // maybe it can be done cleanly specifically within the database module.
     stdout_opened: bool,
+    provided_stdout: Option<Stdio>,
     stderr_opened: bool,
+    provided_stderr: Option<Stdio>,
     status_written: bool,
     config_hash: ConfigHash,
     json_flock: ExclusiveFlock,
@@ -199,23 +206,52 @@ impl DatabaseOutput {
             artifacts_dir,
             base_dir,
             stdout_opened: false,
+            provided_stdout: None,
             stderr_opened: false,
+            provided_stderr: None,
             status_written: false,
             config_hash,
             json_flock,
         })
     }
 
+    // Create a "DatabaseOutput" that is not actually in the database, this can be used for
+    // storing "ephemeral" results (not in the sense that we destroy them
+    // ourselves, just in the sense that we don't really look after them and the
+    // user is likely to delete them later). base_dir must exist.
+    #[expect(dead_code)]
+    pub async fn ephemeral(
+        base_dir: PathBuf,
+        stdout: Stdio,
+        stderr: Stdio,
+    ) -> anyhow::Result<Self> {
+        let artifacts_dir = base_dir.join("artifacts").to_owned();
+        create_dir(&artifacts_dir).context("creating artifacts dir")?;
+        let json_file =
+            File::create(base_dir.join("result.json")).context("creating result.json")?;
+        Ok(Self {
+            base_dir,
+            artifacts_dir,
+            stdout_opened: false,
+            provided_stdout: Some(stdout),
+            stderr_opened: false,
+            provided_stderr: Some(stderr),
+            status_written: false,
+            config_hash: vec![],
+            // Note the locking is unnecessary in the ephemeral case but it's
+            // just easier to do it anyway.
+            json_flock: ExclusiveFlock::new(json_file)
+                .await
+                .context("locking ephemeral JSON result")?,
+        })
+    }
+
     fn stdout_file(&mut self) -> anyhow::Result<File> {
-        assert!(!self.stdout_opened);
-        self.stdout_opened = true;
         let path = self.base_dir.join("stdout.txt");
         File::create(&path).with_context(|| format!("creating {}", path.display()))
     }
 
     fn stderr_file(&mut self) -> anyhow::Result<File> {
-        assert!(!self.stderr_opened);
-        self.stderr_opened = true;
         let path = self.base_dir.join("stderr.txt");
         File::create(&path).with_context(|| format!("creating {}", path.display()))
     }
@@ -223,10 +259,20 @@ impl DatabaseOutput {
 
 impl TestJobOutput for DatabaseOutput {
     fn stdout(&mut self) -> Result<Stdio> {
+        assert!(!self.stdout_opened);
+        self.stdout_opened = true;
+        if let Some(stdout) = self.provided_stdout.take() {
+            return Ok(stdout);
+        }
         Ok(self.stdout_file()?.into())
     }
 
     fn stderr(&mut self) -> Result<Stdio> {
+        assert!(!self.stderr_opened);
+        self.stderr_opened = true;
+        if let Some(stderr) = self.provided_stderr.take() {
+            return Ok(stderr);
+        }
         Ok(self.stderr_file()?.into())
     }
 

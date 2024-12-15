@@ -92,7 +92,7 @@ pub struct ExclusiveFlock {
 }
 
 impl ExclusiveFlock {
-    async fn new(mut file: File) -> anyhow::Result<Self> {
+    pub async fn new(mut file: File) -> anyhow::Result<Self> {
         debug_assert_eq!(file.stream_position().unwrap(), 0);
         flock_async(file.as_raw_fd(), LockKind::Exclusive).await?;
         let mut content = String::new();
