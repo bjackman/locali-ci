@@ -829,3 +829,57 @@ async fn artifacts_cmd() {
     );
     expect_that!(fs::read_to_string(artifact_path), ok(eq("hwat\n")));
 }
+static DEP_CONFIG: &str = r##"
+    num_worktrees = 1
+
+    [[tests]]
+    name = "dep"
+    command = "echo 'ye mighty' >> $LIMMAT_ARTIFACTS/ozy"
+
+    [[tests]]
+    name = "dep2"
+    command = "echo 'and dispair' >> $LIMMAT_ARTIFACTS/trunkless"
+
+    [[tests]]
+    name = "main"
+    depends_on = ["dep", "dep2"]
+    command = "cat $LIMMAT_ARTIFACTS_dep/ozy $LIMMAT_ARTIFACTS_dep2/trunkless"
+"##;
+
+#[googletest::test]
+#[tokio::test]
+async fn dependency_artifacts_get_cmd() {
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .start(
+            DEP_CONFIG.to_string(),
+            ["get", "--run", "main", "HEAD^", "stdout"],
+        )
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(
+        fs::read_to_string(child.stdout().unwrap().trim()),
+        ok(eq("ye mighty\nand dispair\n"))
+    );
+}
+
+#[googletest::test]
+#[tokio::test]
+async fn dependency_artifacts_test_cmd() {
+    let mut child = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .start(DEP_CONFIG.to_string(), ["test", "main"])
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), child.expect_success())
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(child.stdout().unwrap(), eq("ye mighty\nand dispair\n"));
+}
