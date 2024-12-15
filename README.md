@@ -210,12 +210,30 @@ depends_on = ["build-prod"]
 command = "run_tests.sh"
 ```
 
-Tests aren't currently given a practical way to access the _output_ of their
-dependency jobs, so this has limited use-cases right now, primarily:
+### Artifacts
 
-1. You can prioritise the test jobs that give you faster feedback.
-2. If you have some totally out-of-band way to pass output between test jobs, as
-   is the case in the [advanced example](#advanced-example).
+Tests can produce output files, called _artifacts_, and other tests can access
+the artifacts of tests that they depend on. Your test command is passed a
+directory in `$LIMMAT_ARTIFACTS` where it can drop artifact files. Tests with
+dependencies are passed the artifact directories of the dependency jobs in
+`$LIMMAT_ARTIFACTS_<test name>`.
+
+> [!TIP]
+> The fact that test names appear in environment variables means you probably
+> want to use something like `snake_case`. That way the environment variables
+> stay convenient to use in shell scripts.
+
+You can use this:
+
+1. To store extra info from test runs, for example traces or debug data.
+2. To separate your "build" and "test" jobs. For example, if your test job
+   requires a resource, you might want a separate build job to build the code
+   without holding onto that resource, to increase your overall test bandwidth.
+
+   You might also want to do this so that you can build one binary and then
+   run multiple separate test jobs on it.
+
+TODO: Finish documenting this!
 
 ### Reference
 
