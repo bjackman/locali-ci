@@ -1841,23 +1841,57 @@ mod tests {
             .await
             .expect("couldn't create test commit");
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
-        let tests = Dag::new([Arc::new(Test {
-            name: TestName::new("my_test"),
-            program: OsString::from("bash"),
-            args: vec![
-                "-c".into(),
-                OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
-            ],
-            needs_resources: [
-                (ResourceKey::Worktree, 1),
-                (ResourceKey::UserToken("my_resource".into()), 2),
-            ]
-            .into(),
-            shutdown_grace_period: Duration::from_secs(5),
-            cache_policy: CachePolicy::ByCommit,
-            config_hash: vec![0],
-            depends_on: vec![],
-        })])
+
+        // Set up 3 tests, one is just there to be depended and the second is
+        // there to be _not_ depended on.
+        // The third dumps its environment into a file.
+        let tests = Dag::new([
+            Arc::new(Test {
+                name: TestName::new("dep"),
+                program: OsString::from("bash"),
+                args: vec!["-c".into(), OsString::from("true")],
+                needs_resources: [
+                    (ResourceKey::Worktree, 1),
+                    (ResourceKey::UserToken("my_resource".into()), 2),
+                ]
+                .into(),
+                shutdown_grace_period: Duration::from_secs(5),
+                cache_policy: CachePolicy::ByCommit,
+                config_hash: vec![0],
+                depends_on: vec![],
+            }),
+            Arc::new(Test {
+                name: TestName::new("not_dep"),
+                program: OsString::from("bash"),
+                args: vec!["-c".into(), OsString::from("true")],
+                needs_resources: [
+                    (ResourceKey::Worktree, 1),
+                    (ResourceKey::UserToken("my_resource".into()), 2),
+                ]
+                .into(),
+                shutdown_grace_period: Duration::from_secs(5),
+                cache_policy: CachePolicy::ByCommit,
+                config_hash: vec![0],
+                depends_on: vec![],
+            }),
+            Arc::new(Test {
+                name: TestName::new("my_test"),
+                program: OsString::from("bash"),
+                args: vec![
+                    "-c".into(),
+                    OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
+                ],
+                needs_resources: [
+                    (ResourceKey::Worktree, 1),
+                    (ResourceKey::UserToken("my_resource".into()), 2),
+                ]
+                .into(),
+                shutdown_grace_period: Duration::from_secs(5),
+                cache_policy: CachePolicy::ByCommit,
+                config_hash: vec![0],
+                depends_on: vec![TestName("dep".into())],
+            }),
+        ])
         .expect("couldn't build test DAG");
         let resource_pools = Pools::new(
             [(ResourceKey::Worktree, worktree_resources(&repo, 1).await)]
@@ -1917,7 +1951,7 @@ mod tests {
         );
         assert_eq!(
             env.get("LIMMAT_COMMIT").map(|t| CommitHash::new(*t)),
-            Some(commit.hash)
+            Some(&commit.hash).cloned()
         );
         let resource0 = env
             .get("LIMMAT_RESOURCE_my_resource_0")
@@ -1935,6 +1969,25 @@ mod tests {
         );
         assert_eq!(env.get("LIMMAT_RESOURCE_my_resource_2"), None);
         assert_eq!(env.get("LIMMAT_RESOURCE_other_resource_0"), None);
+
+        assert_eq!(
+            Path::new(env.get("LIMMAT_ARTIFACTS").expect("no LIMMAT_ARTIFACTS")),
+            &db_dir
+                .path()
+                .join(commit.hash.to_string())
+                .join("my_test/artifacts")
+        );
+        assert_eq!(
+            Path::new(
+                env.get("LIMMAT_ARTIFACTS_dep")
+                    .expect("no LIMMAT_ARTIFACTS")
+            ),
+            &db_dir
+                .path()
+                .join(commit.hash.to_string())
+                .join("dep/artifacts")
+        );
+        assert_eq!(env.get("LIMMAT_ARTIFACTS_notdep"), None);
     }
 
     #[test_log::test(tokio::test)]
