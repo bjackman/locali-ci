@@ -1836,7 +1836,11 @@ mod tests {
     async fn test_job_env() {
         let temp_dir = TempDir::new().unwrap();
         let repo = Arc::new(TempRepo::new().await.unwrap());
-        let commit = repo
+        let commit1 = repo
+            .commit("hello,")
+            .await
+            .expect("couldn't create test commit");
+        let commit2 = repo
             .commit("hello,")
             .await
             .expect("couldn't create test commit");
@@ -1844,7 +1848,7 @@ mod tests {
 
         // Set up 3 tests, one is just there to be depended and the second is
         // there to be _not_ depended on.
-        // The third dumps its environment into a file.
+        // The third dumps its environment into a file keyed by the test commit.
         let tests = Dag::new([
             Arc::new(Test {
                 name: TestName::new("dep"),
@@ -1879,7 +1883,10 @@ mod tests {
                 program: OsString::from("bash"),
                 args: vec![
                     "-c".into(),
-                    OsString::from(format!("env >> {0:?}/env.txt", temp_dir.path())),
+                    OsString::from(format!(
+                        "env >> {0:?}/${{LIMMAT_COMMIT}}_env.txt",
+                        temp_dir.path()
+                    )),
                 ],
                 needs_resources: [
                     (ResourceKey::Worktree, 1),
@@ -1925,13 +1932,18 @@ mod tests {
             tests,
         );
 
-        m.set_revisions([commit.clone()])
+        m.set_revisions([commit1.clone(), commit2.clone()])
             .await
             .expect("set_revisions failed");
         m.settled().await;
 
-        let env_dump = fs::read_to_string(temp_dir.path().join("env.txt"))
-            .expect("couldn't read env dumped from test script");
+        let env_path = temp_dir.path().join(format!("{}_env.txt", commit2.hash));
+        let env_dump = fs::read_to_string(&env_path).unwrap_or_else(|_| {
+            panic!(
+                "couldn't read env dumped from test script at {}",
+                env_path.display()
+            )
+        });
         let env: HashMap<&str, &str> = env_dump
             .trim()
             .split("\n")
@@ -1951,7 +1963,7 @@ mod tests {
         );
         assert_eq!(
             env.get("LIMMAT_COMMIT").map(|t| CommitHash::new(*t)),
-            Some(&commit.hash).cloned()
+            Some(&commit2.hash).cloned()
         );
         let resource0 = env
             .get("LIMMAT_RESOURCE_my_resource_0")
@@ -1974,7 +1986,7 @@ mod tests {
             Path::new(env.get("LIMMAT_ARTIFACTS").expect("no LIMMAT_ARTIFACTS")),
             &db_dir
                 .path()
-                .join(commit.hash.to_string())
+                .join(commit2.hash.to_string())
                 .join("my_test/artifacts")
         );
         assert_eq!(
@@ -1984,7 +1996,7 @@ mod tests {
             ),
             &db_dir
                 .path()
-                .join(commit.hash.to_string())
+                .join(commit2.hash.to_string())
                 .join("dep/artifacts")
         );
         assert_eq!(env.get("LIMMAT_ARTIFACTS_notdep"), None);
