@@ -716,11 +716,6 @@ impl<'a> TestJob {
                 cmd.env(format!("LIMMAT_RESOURCE_{}", resource_name), &tokens[0]);
             }
             for (i, token) in tokens.iter().enumerate() {
-                debug!(
-                    "{} = {}",
-                    format!("LIMMAT_RESOURCE_{}_{}", resource_name, i),
-                    token
-                );
                 cmd.env(format!("LIMMAT_RESOURCE_{}_{}", resource_name, i), token);
             }
         }
