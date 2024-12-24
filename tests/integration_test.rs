@@ -22,7 +22,7 @@ use nix::{
     sys::signal::{kill, Signal},
     unistd::Pid,
 };
-use tempfile::TempDir;
+use tempfile::{NamedTempFile, TempDir};
 use test_bin::get_test_bin;
 use test_case::test_case;
 use tokio::{
@@ -85,11 +85,11 @@ impl<'a> LimmatChildBuilder {
         let db_dir = temp_dir.path().join("cache");
         create_dir(&db_dir).unwrap();
         Ok(Self {
-            temp_dir,
             repo_dir,
             db_dir,
             dump_output_on_panic: true,
-            env: HashMap::from([("RUST_LOG".into(), "debug".into())]),
+            env: HashMap::new(),
+            temp_dir,
             config: config.as_ref().to_string(),
         })
     }
@@ -139,6 +139,11 @@ impl<'a> LimmatChildBuilder {
 
         let stderr = File::create(self.temp_dir.path().join("stderr.txt"))?;
         let stdout = File::create(self.temp_dir.path().join("stdout.txt"))?;
+        let log_path = NamedTempFile::with_prefix_in("logs-", self.temp_dir.path())
+            .unwrap()
+            .into_temp_path()
+            .keep()
+            .unwrap();
 
         let mut cmd: Command = get_test_bin("limmat").into();
         let cmd = cmd
@@ -161,6 +166,7 @@ impl<'a> LimmatChildBuilder {
             .stderr(stderr)
             .stdout(stdout)
             .envs(&self.env)
+            .env("LIMMAT_LOGFILE", &log_path)
             .kill_on_drop(true);
         let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
@@ -170,6 +176,7 @@ impl<'a> LimmatChildBuilder {
             builder: self,
             child,
             dump_output_on_panic: self.dump_output_on_panic,
+            log_path,
         })
     }
 }
@@ -179,6 +186,7 @@ struct LimmatChild<'a> {
     builder: &'a LimmatChildBuilder,
     child: Child,
     dump_output_on_panic: bool,
+    log_path: PathBuf,
 }
 
 impl<'a> LimmatChild<'a> {
@@ -187,8 +195,8 @@ impl<'a> LimmatChild<'a> {
         let status = self.child.wait().await.expect("error waiting for child");
         if !status.success() {
             if !self.dump_output_on_panic {
-                eprintln!("Child Limmat process failed, dumping stderr");
-                self.dump_stderr();
+                eprintln!("Child Limmat process failed, dumping log");
+                self.dump_log();
             }
             bail!("Child process didn't succed: {:?}", status);
         }
@@ -200,11 +208,11 @@ impl<'a> LimmatChild<'a> {
             .context("reading child stdout")
     }
 
-    fn dump_stderr(&self) {
-        let file = match File::open(self.builder.temp_dir.path().join("stderr.txt")) {
+    fn dump_log(&self) {
+        let file = match File::open(&self.log_path) {
             // Don't panic while panicking, it's messy
             Err(err) => {
-                eprintln!("Failed to open stderr file while panicking: {}", err);
+                eprintln!("Failed to open log file while panicking: {}", err);
                 return;
             }
             Ok(file) => file,
@@ -227,8 +235,8 @@ impl Drop for LimmatChild<'_> {
         // subprocesses. So just dump the child's stderr to stdout when
         // we're panicking.
         if self.dump_output_on_panic && panicking() {
-            eprintln!("Panic happening, assuming its a test failure, dumping child stderr.");
-            self.dump_stderr();
+            eprintln!("Panic happening, assuming its a test failure, dumping child log.");
+            self.dump_log();
         }
     }
 }
@@ -273,7 +281,7 @@ impl<'a> LimmatChild<'a> {
                 Some(0) => return Ok(()),
                 Some(exit_code) => {
                     eprintln!("Dumping failed 'get' command stderr...");
-                    child.dump_stderr();
+                    child.dump_log();
                     bail!("get command failed with code {exit_code}")
                 }
             }

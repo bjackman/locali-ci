@@ -25,7 +25,6 @@ futures = "0.3.30"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 async-stream = "0.3"
-env_logger = "0.11"
 log = "0.4"
 async-condvar-fair = { version = "1.0", features = [ "parking_lot_0_12" ] }
 # https://docs.rs/async-condvar-fair/latest/async_condvar_fair/#mutex-guard-sending-between-threads
@@ -48,6 +47,7 @@ crossterm = {version = "0.28.1", features = ["event-stream"] }
 schemars = "0.8.21"
 sha3 = "0.10.8"
 hex = "0.4.3"
+flexi_logger = "0.29.8"
 
 [dev-dependencies]
 test-case = "3.3"

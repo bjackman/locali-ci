@@ -3,6 +3,7 @@ use clap::{arg, Parser as _, Subcommand, ValueEnum};
 use config::{Config, ParsedConfig};
 use dag::{Dag, GraphNode as _};
 use database::{Database, DatabaseEntry, DatabaseOutput, LookupResult};
+use flexi_logger::{detailed_format, Cleanup, Criterion, FileSpec, Logger, Naming};
 use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
@@ -20,7 +21,7 @@ use std::io::{stdout, Stdout};
 use std::path::{absolute, PathBuf};
 use std::pin::pin;
 use std::process::{ExitCode, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::{env, fmt, fs, str};
 use tempfile::TempDir;
 use test::{base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder, TestName};
@@ -93,13 +94,12 @@ struct WatchArgs {
     base: String,
 }
 
+static PROJECT_DIRS: LazyLock<directories::ProjectDirs> = LazyLock::new(|| {
+    directories::ProjectDirs::from("", "", "limmat").expect("couldn't find user data dir")
+});
+
 fn default_result_db() -> DisplayablePathBuf {
-    DisplayablePathBuf(
-        directories::ProjectDirs::from("", "", "limmat")
-            .expect("couldn't find user data dir")
-            .data_local_dir()
-            .to_owned(),
-    )
+    DisplayablePathBuf(PROJECT_DIRS.data_local_dir().to_owned())
 }
 
 fn default_hostname() -> String {
@@ -636,11 +636,33 @@ async fn artifacts(
     Ok(ExitCode::SUCCESS)
 }
 
+const MEGABYTE: u64 = 1024 * 1024;
+
 // Hack so we can use anyhow::Result infrastructure for convenient coding but
 // also control the exit code directly in some cases: return a result - if it's
 // an error we just use the default error exit code.
 async fn do_main() -> anyhow::Result<ExitCode> {
-    env_logger::init();
+    let mut logger = Logger::try_with_env_or_str("debug")?.format(detailed_format);
+    logger = match env::var_os("LIMMAT_LOGFILE") {
+        Some(path) => logger.log_to_file(
+            FileSpec::try_from(&path)
+                .with_context(|| format!("configuring logging to {:?}", path))?,
+        ),
+        None => {
+            let log_dir = PROJECT_DIRS
+                .state_dir()
+                .unwrap_or(PROJECT_DIRS.data_local_dir());
+            logger
+                .log_to_file(FileSpec::default().directory(log_dir))
+                .create_symlink(log_dir.join("latest.log"))
+                .rotate(
+                    Criterion::Size(64 * MEGABYTE),
+                    Naming::Timestamps,
+                    Cleanup::KeepLogFiles(10),
+                )
+        }
+    };
+    logger.start()?;
 
     // Set up shutdown first, to ensure we correctly handle early signals.
     // It seems extremely difficult to use Tokio's ctrl_c API for this correctly
