@@ -256,12 +256,15 @@ async fn watch_loop(
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");
                 test_manager.cancel_running().await.context("cancelling tests")?;
-                // Ensure jobs are shut down before we delort stuff etc.
-                test_manager.settled().await;
                 break;
             }
         }
     }
+    // Break out of the TUI.
+    drop(ui);
+    eprintln!("Shutting down - waiting for jobs to terminate");
+    // Ensure jobs are shut down before we delort stuff etc.
+    test_manager.settled().await;
     Ok(())
 }
 
@@ -323,6 +326,7 @@ async fn watch(
     // this, but the solution would be to create the worktrees ondemand, when we have a revision we
     // are actually trying to test. That might be a good idea anyway, so probably it's preferable to
     // just do that for its own sake and leave the empty-repo problem as a nice freebie.
+    eprintln!("Creating {} worktrees...", env.config.num_worktrees);
     for _ in 0..env.config.num_worktrees {
         let repo = env.repo.clone();
         let ct = cancellation_token.child_token();
@@ -347,6 +351,7 @@ async fn watch(
     let end_result = eg.wait().await;
 
     // Now we have to remember to clean up before returning the result :/
+    eprintln!("Tearing down worktrees...");
     join_all(
         Arc::into_inner(test_manager)
             .expect("leaked test manager reference")
