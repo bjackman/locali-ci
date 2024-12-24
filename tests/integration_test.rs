@@ -556,7 +556,9 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         .await
         .unwrap();
 
-    let config = r##"
+    let db_dir = TempDir::with_prefix("result-db").unwrap();
+    let builder = LimmatChildBuilder::new(
+        r##"
             num_worktrees = 1
             [[tests]]
             name = "my_test"
@@ -567,13 +569,12 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
             """
 
             shutdown_grace_period_s = 1
-        "##;
-    let db_dir = TempDir::with_prefix("result-db").unwrap();
-    let builder = LimmatChildBuilder::new(config)
-        .await
-        .unwrap()
-        .db_dir(db_dir.path().to_owned())
-        .existing_repo_dir(repo_dir.path().to_owned());
+        "##,
+    )
+    .await
+    .unwrap()
+    .db_dir(db_dir.path().to_owned())
+    .existing_repo_dir(repo_dir.path().to_owned());
     let mut child = builder
         .start(["get", "--run", "my_test", "HEAD^"])
         .await
@@ -623,7 +624,7 @@ async fn should_find_not_race() {
         .unwrap();
     let db_dir = TempDir::with_prefix("result-db").unwrap();
 
-    let config = format!(
+    let builder = LimmatChildBuilder::new(format!(
         r##"
             num_worktrees = 1
             [[tests]]
@@ -632,14 +633,13 @@ async fn should_find_not_race() {
             shutdown_grace_period_s = 1
         "##,
         tmp_dir.path().display()
-    );
-    let builder = LimmatChildBuilder::new(config)
-        .await
-        .unwrap()
-        .db_dir(db_dir.path().to_owned())
-        // Hack - this is making for annoying log spam when it fails at the moment.
-        .dump_output_on_panic(false)
-        .existing_repo_dir(repo_dir.path().to_owned());
+    ))
+    .await
+    .unwrap()
+    .db_dir(db_dir.path().to_owned())
+    // Hack - this is making for annoying log spam when it fails at the moment.
+    .dump_output_on_panic(false)
+    .existing_repo_dir(repo_dir.path().to_owned());
     let mut watch_children = Vec::new();
     for _ in 0..16 {
         let child = builder.start(["watch", "HEAD^"]).await.unwrap();
@@ -677,17 +677,17 @@ async fn should_find_not_race() {
 async fn limmat_artifacts_test_cmd() {
     let temp_dir = TempDir::new().unwrap();
 
-    let config = r##"
+    let builder = LimmatChildBuilder::new(
+        r##"
             num_worktrees = 1
             [[tests]]
             name = "my_test"
             command = "echo hwat >> $LIMMAT_ARTIFACTS/foo"
-        "##
-    .to_string();
-    let builder = LimmatChildBuilder::new(config)
-        .await
-        .unwrap()
-        .env("TMPDIR", temp_dir.path().as_os_str());
+        "##,
+    )
+    .await
+    .unwrap()
+    .env("TMPDIR", temp_dir.path().as_os_str());
     let mut child = builder.start(["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
@@ -729,17 +729,17 @@ async fn limmat_artifacts_test_cmd() {
 async fn artifacts_cmd() {
     let temp_dir = TempDir::new().unwrap();
 
-    let config = r##"
+    let builder = LimmatChildBuilder::new(
+        r##"
             num_worktrees = 1
             [[tests]]
             name = "my_test"
             command = "echo hwat >> $LIMMAT_ARTIFACTS/foo"
-        "##
-    .to_string();
-    let builder = LimmatChildBuilder::new(config)
-        .await
-        .unwrap()
-        .env("TMPDIR", temp_dir.path().as_os_str());
+        "##,
+    )
+    .await
+    .unwrap()
+    .env("TMPDIR", temp_dir.path().as_os_str());
     let mut child = builder.start(["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
