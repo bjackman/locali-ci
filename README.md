@@ -218,22 +218,58 @@ directory in `$LIMMAT_ARTIFACTS` where it can drop artifact files. Tests with
 dependencies are passed the artifact directories of the dependency jobs in
 `$LIMMAT_ARTIFACTS_<test name>`.
 
-> [!TIP]
-> The fact that test names appear in environment variables means you probably
-> want to use something like `snake_case`. That way the environment variables
-> stay convenient to use in shell scripts.
+Artifacts are stored in the result database, they can be found via the `limmat
+artifacts <test> <revision>` command, which prints the directory that would have
+been passed in `$LIMMAT_ARTIFACTS` when the given test was run for the given
+revision.
 
-You can use this:
+Example use-cases for this:
 
-1. To store extra info from test runs, for example traces or debug data.
+1. To store extra info from test runs, for example traces or debug data:
+
+   ```toml
+   [[tests]]
+   name = "strace_example"
+   # strace logs can be handy for debugging odd test failures, but too verbose
+   # to write to stdout, so drop one into the artifacts output.
+   command = "strace -f -o $LIMMAT_ARTIFACTS/strace.log ./run_tests.sh"
+   ```
+
 2. To separate your "build" and "test" jobs. For example, if your test job
    requires a resource, you might want a separate build job to build the code
    without holding onto that resource, to increase your overall test bandwidth.
 
-   You might also want to do this so that you can build one binary and then
-   run multiple separate test jobs on it.
 
-TODO: Finish documenting this!
+   ```toml
+   [[resources]]
+   name = "hw_device"
+   tokens = ["device1.board-farm.example.com", "device2.board-farm.example.com"]
+
+   # Build in a separate job, which doesn't require access to a test device. Put
+   # compilation output in the artifacts directory.
+   [[tests]]
+   name = "build"
+   command = "make -j64 O=$LIMMAT_ARTIFACTS"
+   
+   # Run the tests on a test device, using the output of the "build" job.
+   [[tests]]
+   name = "test_on_hw"
+   resources = ["hw_device"]
+   depends_on = ["build"]
+   command = """
+   ./run_tests.sh  --target-host=$LIMMAT_RESOURCES_hw_device \
+       --build-dir=$LIMMAT_ARTIFACTS_build
+   """
+   ```
+
+3. To use Limmat's result database as a "cache". For example, when running a Git
+   bisection, instead of re-building your code at every revision, if you have a 
+   "build" Limmat job, grab the pre-built binary from `$(limmat artifacts build
+   HEAD)` at each bisection step.
+   
+> [!WARNING]
+> Limmat doesn't yet have logic to prune the result database, if you drop very large
+> files into `$LIMMAT_ARTIFACTS` you can fill up your disk quite quickly.
 
 ### Reference
 
@@ -307,8 +343,18 @@ set -e
 git clean -fdx
 
 make -j defconfig
-make -j16 vmlinux
+make -j16 vmlinux O=$LIMMAT_ARTIFACTS
 """
+
+# Check the locally-built kernel boots in a QEMU VM.
+[[tests]]
+name = "boot_qemu"
+depends_on = ["kbuild"]
+# check_qemu_boot.sh is an external tool (not checked into my kernel repo)
+# So we don't need a worktree to run it. That means we don't need a worktree
+# at all for this job, so we can free one up to run another test job.
+requires_worktree = false
+command = "check_qemu_boot.sh --build-dir=$LIMMAT_ARTIFACTS_kbuild"
 
 # Check the kernel boots on an AMD CPU.
 [[tests]]
