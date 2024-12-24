@@ -19,7 +19,7 @@ use std::fmt::Display;
 use std::io::{stdout, Stdout};
 use std::path::{absolute, PathBuf};
 use std::pin::pin;
-use std::process::Stdio;
+use std::process::{ExitCode, Stdio};
 use std::sync::{Arc, Mutex};
 use std::{env, fmt, fs, str};
 use tempfile::TempDir;
@@ -183,8 +183,10 @@ enum Command {
     /// Run a one-shot test in the specified repo. Do not cache the results.
     Test(TestArgs),
     /// EXPERIMENTAL: Get the path of a test's output in the result database.
+    /// Returns exit code 50 if the result doesn't exist.
     Get(GetArgs),
-    /// Get the path to the artifacts for a given test
+    /// Get the path to the artifacts for a given test. Returns exit code 50
+    /// if the result doesn't exist.
     Artifacts(DatabaseLookupArgs),
 }
 
@@ -539,11 +541,13 @@ async fn test(
     Ok(())
 }
 
+// Returns Ok(None) if nothing found and --run wasn't set.
+// Otherwise returns the database entry or an error.
 async fn lookup(
     env: Env,
     cancellation_token: CancellationToken,
     lookup_args: &DatabaseLookupArgs,
-) -> anyhow::Result<DatabaseEntry> {
+) -> anyhow::Result<Option<DatabaseEntry>> {
     let test_name = TestName::new(lookup_args.test.clone());
     let rev = env
         .repo
@@ -577,41 +581,57 @@ async fn lookup(
         .await
         .context("database lookup")?
     {
-        LookupResult::FoundResult(e) => Ok(e),
-        LookupResult::YouRunIt(_) => bail!(
-            "no database entry for test {:?} at revision {:?} ({})",
-            test_name.to_string(),
-            lookup_args.rev,
-            rev.hash
-        ),
+        LookupResult::FoundResult(e) => Ok(Some(e)),
+        LookupResult::YouRunIt(_) => {
+            if lookup_args.run {
+                bail!(
+                    "no database entry for test {:?} at revision {:?} after running ({})",
+                    test_name.to_string(),
+                    lookup_args.rev,
+                    rev.hash
+                )
+            } else {
+                Ok(None)
+            }
+        }
     }
 }
+
+const NO_RESULT_FOUND_EXIT_CODE: u8 = 50;
 
 async fn get(
     env: Env,
     cancellation_token: CancellationToken,
     get_args: GetArgs,
-) -> anyhow::Result<()> {
-    let db_entry = lookup(env, cancellation_token, &get_args.lookup_args).await?;
+) -> anyhow::Result<ExitCode> {
+    let db_entry = match lookup(env, cancellation_token, &get_args.lookup_args).await? {
+        None => return Ok(ExitCode::from(NO_RESULT_FOUND_EXIT_CODE)),
+        Some(e) => e,
+    };
     match get_args.output {
         GetOutput::Stdout => println!("{}", db_entry.stdout_path().display()),
         GetOutput::Stderr => println!("{}", db_entry.stderr_path().display()),
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn artifacts(
     env: Env,
     cancellation_token: CancellationToken,
     lookup_args: DatabaseLookupArgs,
-) -> anyhow::Result<()> {
-    let db_entry = lookup(env, cancellation_token, &lookup_args).await?;
+) -> anyhow::Result<ExitCode> {
+    let db_entry = match lookup(env, cancellation_token, &lookup_args).await? {
+        None => return Ok(ExitCode::from(NO_RESULT_FOUND_EXIT_CODE)),
+        Some(e) => e,
+    };
     println!("{}", db_entry.artifacts_dir().display());
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+// Hack so we can use anyhow::Result infrastructure for convenient coding but
+// also control the exit code directly in some cases: return a result - if it's
+// an error we just use the default error exit code.
+async fn do_main() -> anyhow::Result<ExitCode> {
     env_logger::init();
 
     // Set up shutdown first, to ensure we correctly handle early signals.
@@ -655,9 +675,26 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Watch(watch_args) => watch(env, cancellation_token, watch_args).await,
-        Command::Test(ref test_args) => test(env, cancellation_token, test_args).await,
         Command::Get(get_args) => get(env, cancellation_token, get_args).await,
         Command::Artifacts(lookup_args) => artifacts(env, cancellation_token, lookup_args).await,
+        c => {
+            match c {
+                Command::Watch(watch_args) => watch(env, cancellation_token, watch_args).await,
+                Command::Test(ref test_args) => test(env, cancellation_token, test_args).await,
+                _ => panic!("wtf"),
+            }?;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    match do_main().await {
+        Err(err) => {
+            eprintln!("{}", err);
+            ExitCode::FAILURE
+        }
+        Ok(code) => code,
     }
 }
