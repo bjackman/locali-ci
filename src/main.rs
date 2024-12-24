@@ -692,7 +692,7 @@ async fn do_main() -> anyhow::Result<ExitCode> {
 async fn main() -> ExitCode {
     match do_main().await {
         Err(err) => {
-            eprintln!("{}", err);
+            eprintln!("Fatal error: {:#}", err);
             ExitCode::FAILURE
         }
         Ok(code) => code,
