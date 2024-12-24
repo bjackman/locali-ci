@@ -152,7 +152,7 @@ impl Test {
                 .config_hash
                 .hash(&mut hasher);
         }
-        let config_hash = hasher.digest.finalize().to_vec();
+        let config_hash = hex::encode(hasher.digest.finalize());
         debug!("Config hash for {}: {:?}", self.name, config_hash);
 
         Ok(test::Test {

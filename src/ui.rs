@@ -379,7 +379,7 @@ mod tests {
             name: TestName::new(name),
             cache_policy,
             // Don't care abou any of the other fields in these tests
-            config_hash: vec![0],
+            config_hash: "0".to_string(),
             program: "".into(),
             args: vec![],
             needs_resources: [].into(),

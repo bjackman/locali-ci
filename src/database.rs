@@ -187,7 +187,7 @@ impl DatabaseEntry {
         Self {
             base_path: "".into(),
             result: TestResultEntry {
-                config_hash: b"FAKE CONFIG HASH".into(),
+                config_hash: "FAKE CONFIG HASH".into(),
                 result,
             },
             _json_flock: SharedFlock::new(tempfile.reopen().unwrap()).await.unwrap(),
@@ -264,7 +264,7 @@ impl DatabaseOutput {
             stderr_opened: false,
             provided_stderr: Some(stderr),
             status_written: false,
-            config_hash: vec![],
+            config_hash: "".to_string(),
             // Note the locking is unnecessary in the ephemeral case but it's
             // just easier to do it anyway.
             json_flock: ExclusiveFlock::new(json_file)
