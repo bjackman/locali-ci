@@ -3,6 +3,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, create_dir, create_dir_all, remove_file, File},
     io::{BufRead as _, BufReader},
+    os::unix::process::ExitStatusExt as _,
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     result,
@@ -268,10 +269,20 @@ impl<'a> LimmatChild<'a> {
     async fn result_exists(&self, test: &str, rev: &str) -> anyhow::Result<()> {
         loop {
             let mut child = self.builder.start(["get", test, rev]).await?;
-            // Hack: We can't tell much difference between the binary crashing
-            // randomly and just normal failure to find the result. Oh well.
-            if child.expect_success().await.is_ok() {
-                return Ok(());
+            let status = child
+                .child
+                .wait()
+                .await
+                .context("error waiting for child")?;
+            match status.code() {
+                None => bail!("get command terminated by signal {:?}", status.signal()),
+                Some(50) => continue, // Result not found.
+                Some(0) => return Ok(()),
+                Some(exit_code) => {
+                    eprintln!("Dumping failed 'get' command stderr...");
+                    child.dump_stderr();
+                    bail!("get command failed with code {exit_code}")
+                }
             }
         }
     }
