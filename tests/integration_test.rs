@@ -173,7 +173,7 @@ impl<'a> LimmatChildBuilder {
 
         stdin.write_all(self.config.as_bytes()).await.unwrap();
         Ok(LimmatChild {
-            temp_dir: &self.temp_dir,
+            builder: self,
             child,
             dump_output_on_panic: self.dump_output_on_panic,
         })
@@ -182,7 +182,7 @@ impl<'a> LimmatChildBuilder {
 
 // An instance of the binary, running as a child process.
 struct LimmatChild<'a> {
-    temp_dir: &'a TempDir,
+    builder: &'a LimmatChildBuilder,
     child: Child,
     dump_output_on_panic: bool,
 }
@@ -202,11 +202,12 @@ impl<'a> LimmatChild<'a> {
     }
 
     fn stdout(&self) -> anyhow::Result<String> {
-        fs::read_to_string(self.temp_dir.path().join("stdout.txt")).context("reading child stdout")
+        fs::read_to_string(self.builder.temp_dir.path().join("stdout.txt"))
+            .context("reading child stdout")
     }
 
     fn dump_stderr(&self) {
-        let file = match File::open(self.temp_dir.path().join("stderr.txt")) {
+        let file = match File::open(self.builder.temp_dir.path().join("stderr.txt")) {
             // Don't panic while panicking, it's messy
             Err(err) => {
                 eprintln!("Failed to open stderr file while panicking: {}", err);
@@ -255,11 +256,24 @@ impl ExitStatusExt for ExitStatus {
 impl<'a> LimmatChild<'a> {
     // Returns true if any worktree of this child currently exists.
     fn has_worktrees(&mut self) -> anyhow::Result<bool> {
-        let mut pattern = self.temp_dir.path().join("worktrees").to_owned();
+        let mut pattern = self.builder.temp_dir.path().join("worktrees").to_owned();
         pattern.push("test-worktree-*");
         Ok(!glob(pattern.to_string_lossy().as_ref())?
             .collect::<Vec<_>>()
             .is_empty())
+    }
+
+    // Blocks until a result for the given test and revision exists, by running
+    // the "get" command repeatedly.
+    async fn result_exists(&self, test: &str, rev: &str) -> anyhow::Result<()> {
+        loop {
+            let mut child = self.builder.start(["get", test, rev]).await?;
+            // Hack: We can't tell much difference between the binary crashing
+            // randomly and just normal failure to find the result. Oh well.
+            if child.expect_success().await.is_ok() {
+                return Ok(());
+            }
+        }
     }
 
     async fn terminate(&mut self) -> anyhow::Result<()> {
@@ -304,9 +318,13 @@ async fn test_worktree_teardown(test_command: &str) {
     .unwrap();
     let mut limmat = builder.start(["watch", "HEAD^"]).await.unwrap();
 
-    wait_for(|| limmat.has_worktrees(), Duration::from_secs(5))
-        .await
-        .expect("worktree not found after 5s");
+    timeout(
+        Duration::from_secs(5),
+        limmat.result_exists("my_test", "HEAD"),
+    )
+    .await
+    .expect("result not found after 5s")
+    .expect("failed to check for test result");
 
     limmat.terminate().await.expect("couldn't shut down child");
 
