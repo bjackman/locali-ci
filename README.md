@@ -76,7 +76,7 @@ name = "test"
 command = "cargo test"
 ```
 
-If the comand is a string, it's executed via the shell. If you want direct
+If the command is a string, it's executed via the shell. If you want direct
 control of the command then pass it as a list:
 
 ```toml
@@ -113,7 +113,7 @@ will be passed in the [environment](#job-environment) as `$LIMMAT_COMMIT`.
 > implementation.
 
 When the test is no longer needed (usually because the commit is no longer in
-the range being watched), the test comamnd's process group will receive
+the range being watched), the test command's process group will receive
 `SIGTERM`. It should try to shut down promptly so that the worktree can be
 reused for another test. If it doesn't shut down after a timeout then it will
 receive `SIGKILL` instead. You can configure the timeout by setting
@@ -156,7 +156,7 @@ hash changes then the database entry is invalidated.
 If you're still reading, you probably have a lot of tests to run, otherwise you
 wouldn't find Limmat useful. So the system needs a way to throttle the
 parallelism to avoid gobbling resources. The most obvious source of throttling is
-the worktrees. If your tests need one - i.e. if you haven't set `needs_worktee =
+the worktrees. If your tests need one - i.e. if you haven't set `needs_worktree =
 false` - then those tests can only be parallelised up to the `num_worktrees`
 value set in your config (default: 8). But there's also more flexible throttling
 available.
@@ -259,7 +259,7 @@ These environment variables are passed to your job.
 | `LIMMAT_ORIGIN`                       | Path of the main repository worktree (i.e. `--repo`).                                     |
 | `LIMMAT_COMMIT`                       | Hash of the commit to be tested.                                                          |
 | `LIMMAT_RESOURCE_<resource_name>_<n>` | Values for [resources](#resources) used by the test.                                      |
-| `LIMMAT_RESOURCE_<resource_name>`     | If the test only uses one of a resource, shortand for `LIMMAT_RESOURCE_<resource_name>_0` |
+| `LIMMAT_RESOURCE_<resource_name>`     | If the test only uses one of a resource, shorthand for `LIMMAT_RESOURCE_<resource_name>_0` |
 
 ### Advanced example
 
@@ -272,7 +272,7 @@ the configuration I use for my Linux kernel development at Google.
 name = "build_service"
 count = 8
 
-# Physical hosts to run tests on, with two different CPU microarchtectures.
+# Physical hosts to run tests on, with two different CPU microarchitectures.
 [[resources]]
 name = "milan_host"
 tokens = ["milan-a8", "milan-x3"]
