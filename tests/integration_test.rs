@@ -70,10 +70,11 @@ struct LimmatChildBuilder {
     db_dir: PathBuf,
     dump_output_on_panic: bool,
     env: HashMap<OsString, OsString>,
+    config: String,
 }
 
 impl<'a> LimmatChildBuilder {
-    async fn new() -> anyhow::Result<Self> {
+    async fn new(config: impl AsRef<str>) -> anyhow::Result<Self> {
         let temp_dir = TempDir::with_prefix("limmat-child")?;
 
         let db_dir = temp_dir.path().join("cache");
@@ -84,6 +85,7 @@ impl<'a> LimmatChildBuilder {
             db_dir,
             dump_output_on_panic: true,
             env: HashMap::from([("RUST_LOG".into(), "debug".into())]),
+            config: config.as_ref().to_string(),
         })
     }
 
@@ -131,11 +133,7 @@ impl<'a> LimmatChildBuilder {
         Ok(())
     }
 
-    async fn start(
-        &self,
-        config: impl AsRef<str>,
-        args: impl IntoIterator<Item = &str>,
-    ) -> anyhow::Result<LimmatChild> {
+    async fn start(&self, args: impl IntoIterator<Item = &str>) -> anyhow::Result<LimmatChild> {
         let worktree_dir = self.temp_dir.path().join("worktrees");
         create_dir_all(&worktree_dir).unwrap();
 
@@ -173,7 +171,7 @@ impl<'a> LimmatChildBuilder {
         let mut child = cmd.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
 
-        stdin.write_all(config.as_ref().as_bytes()).await.unwrap();
+        stdin.write_all(self.config.as_bytes()).await.unwrap();
         Ok(LimmatChild {
             temp_dir: &self.temp_dir,
             child,
@@ -294,21 +292,17 @@ impl<'a> LimmatChild<'a> {
 #[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
 #[tokio::test]
 async fn test_worktree_teardown(test_command: &str) {
-    let builder = LimmatChildBuilder::new().await.unwrap();
-    let mut limmat = builder
-        .start(
-            format!(
-                r##"
-                num_worktrees = 1
-                [[tests]]
-                name = "my_test"
-                command = {test_command:?}
-            "##
-            ),
-            ["watch", "HEAD^"],
-        )
-        .await
-        .unwrap();
+    let builder = LimmatChildBuilder::new(format!(
+        r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "my_test"
+            command = {test_command:?}
+        "##
+    ))
+    .await
+    .unwrap();
+    let mut limmat = builder.start(["watch", "HEAD^"]).await.unwrap();
 
     wait_for(|| limmat.has_worktrees(), Duration::from_secs(5))
         .await
@@ -332,22 +326,18 @@ async fn shouldnt_leak_jobs() {
 
     // This config has a test that does not respect SIGTERM. We should not leak
     // that job.
-    let builder = LimmatChildBuilder::new().await.unwrap();
-    let mut limmat = builder
-        .start(
-            format!(
-                r##"
-                num_worktrees = 1
-                [[tests]]
-                name = "my_test"
-                command = "echo $$ > {}/test_pid; while true; do sleep infinity; done"
-                shutdown_grace_period_s = 1"##,
-                temp_dir.path().to_string_lossy()
-            ),
-            ["watch", "HEAD^"],
-        )
-        .await
-        .unwrap();
+    let builder = LimmatChildBuilder::new(format!(
+        r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "my_test"
+            command = "echo $$ > {}/test_pid; while true; do sleep infinity; done"
+            shutdown_grace_period_s = 1"##,
+        temp_dir.path().to_string_lossy()
+    ))
+    .await
+    .unwrap();
+    let mut limmat = builder.start(["watch", "HEAD^"]).await.unwrap();
 
     // Wait for test to start up
     let test_pid_path = temp_dir.path().join("test_pid");
@@ -368,29 +358,23 @@ async fn should_invalidate_cache_when_dep_changes() {
 
     let test_ran_path = temp_dir.path().join("test_ran");
     {
-        let builder = LimmatChildBuilder::new()
-            .await
-            .unwrap()
-            .db_dir(db_dir.clone());
-        let _limmat = builder
-            .start(
-                format!(
-                    r##"
-                        num_worktrees = 1
-                        [[tests]]
-                        name = "my_dependency"
-                        command = "echo jello verld"
-                        [[tests]]
-                        name = "my_test"
-                        command = "echo bello burld > {}"
-                        depends_on = ["my_dependency"]
-                    "##,
-                    test_ran_path.as_os_str().to_string_lossy(),
-                ),
-                ["watch", "HEAD^"],
-            )
-            .await
-            .unwrap();
+        let builder = LimmatChildBuilder::new(format!(
+            r##"
+                    num_worktrees = 1
+                    [[tests]]
+                    name = "my_dependency"
+                    command = "echo jello verld"
+                    [[tests]]
+                    name = "my_test"
+                    command = "echo bello burld > {}"
+                    depends_on = ["my_dependency"]
+                "##,
+            test_ran_path.as_os_str().to_string_lossy(),
+        ))
+        .await
+        .unwrap()
+        .db_dir(db_dir.clone());
+        let _limmat = builder.start(["watch", "HEAD^"]).await.unwrap();
         wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
             .await
             .expect("test not ran");
@@ -404,26 +388,23 @@ async fn should_invalidate_cache_when_dep_changes() {
     // Now we'll run it again but with a different config for the dependency.
     // The dependee should get run again even though its config hasn't changed.
     remove_file(&test_ran_path).unwrap();
-    let builder = LimmatChildBuilder::new().await.unwrap().db_dir(db_dir);
-    let _limmat = builder
-        .start(
-            format!(
-                r##"
-                    num_worktrees = 1
-                    [[tests]]
-                    name = "my_dependency"
-                    command = "echo its all ogre now"
-                    [[tests]]
-                    name = "my_test"
-                    command = "echo bello burld > {}"
-                    depends_on = ["my_dependency"]
-                "##,
-                test_ran_path.as_os_str().to_string_lossy(),
-            ),
-            ["watch", "HEAD^"],
-        )
-        .await
-        .unwrap();
+    let builder = LimmatChildBuilder::new(format!(
+        r##"
+                num_worktrees = 1
+                [[tests]]
+                name = "my_dependency"
+                command = "echo its all ogre now"
+                [[tests]]
+                name = "my_test"
+                command = "echo bello burld > {}"
+                depends_on = ["my_dependency"]
+            "##,
+        test_ran_path.as_os_str().to_string_lossy(),
+    ))
+    .await
+    .unwrap()
+    .db_dir(db_dir);
+    let _limmat = builder.start(["watch", "HEAD^"]).await.unwrap();
     wait_for(|| Ok(test_ran_path.exists()), Duration::from_secs(5))
         .await
         .expect("test not re-ran when dependency config changed");
@@ -482,8 +463,8 @@ async fn should_invalidate_cache_when_dep_changes() {
 #[googletest::test]
 #[tokio::test]
 async fn should_run_test(config: &str) {
-    let builder = LimmatChildBuilder::new().await.unwrap();
-    let mut child = builder.start(config, ["test", "my_test"]).await.unwrap();
+    let builder = LimmatChildBuilder::new(config).await.unwrap();
+    let mut child = builder.start(["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -533,15 +514,12 @@ async fn should_run_test_with_stored_results() {
     // Awkward hack to get a result into the database: we we run my_dep (whose
     // result won't get cached) to get my_transitive_dep into the cache.
     let db_dir = TempDir::with_prefix("result-db").unwrap();
-    let builder = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new(&config)
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
         .existing_repo_dir(repo_dir.path().to_owned());
-    let mut child = builder
-        .start(&config, ["test", "my_other_dep"])
-        .await
-        .unwrap();
+    let mut child = builder.start(["test", "my_other_dep"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -553,8 +531,8 @@ async fn should_run_test_with_stored_results() {
         ok(eq("ill help you carry on\n"))
     );
 
-    // Now run the actual test, reusing the result DB.
-    let mut child = builder.start(config, ["test", "my_test"]).await.unwrap();
+    // Now run the actual test, reusing the result DB and the same builder
+    let mut child = builder.start(["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -591,13 +569,13 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
             shutdown_grace_period_s = 1
         "##;
     let db_dir = TempDir::with_prefix("result-db").unwrap();
-    let builder = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new(config)
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
         .existing_repo_dir(repo_dir.path().to_owned());
     let mut child = builder
-        .start(&config, ["get", "--run", "my_test", "HEAD^"])
+        .start(["get", "--run", "my_test", "HEAD^"])
         .await
         .unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
@@ -610,7 +588,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
     );
 
     let mut child = builder
-        .start(config, ["get", "my_test", "HEAD^", "stderr"])
+        .start(["get", "my_test", "HEAD^", "stderr"])
         .await
         .unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
@@ -623,7 +601,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
     );
 
     let mut child = builder
-        .start(config, ["artifacts", "my_test", "HEAD^"])
+        .start(["artifacts", "my_test", "HEAD^"])
         .await
         .unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
@@ -655,7 +633,7 @@ async fn should_find_not_race() {
         "##,
         tmp_dir.path().display()
     );
-    let builder = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new(config)
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
@@ -664,13 +642,13 @@ async fn should_find_not_race() {
         .existing_repo_dir(repo_dir.path().to_owned());
     let mut watch_children = Vec::new();
     for _ in 0..16 {
-        let child = builder.start(&config, ["watch", "HEAD^"]).await.unwrap();
+        let child = builder.start(["watch", "HEAD^"]).await.unwrap();
         watch_children.push(child);
     }
     let mut get_children: Vec<LimmatChild> = Vec::new();
     for _ in 0..16 {
         let child = builder
-            .start(&config, ["get", "--run", "my_test", "HEAD"])
+            .start(["get", "--run", "my_test", "HEAD"])
             .await
             .unwrap();
         get_children.push(child);
@@ -706,11 +684,11 @@ async fn limmat_artifacts_test_cmd() {
             command = "echo hwat >> $LIMMAT_ARTIFACTS/foo"
         "##
     .to_string();
-    let builder = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new(config)
         .await
         .unwrap()
         .env("TMPDIR", temp_dir.path().as_os_str());
-    let mut child = builder.start(&config, ["test", "my_test"]).await.unwrap();
+    let mut child = builder.start(["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -758,11 +736,11 @@ async fn artifacts_cmd() {
             command = "echo hwat >> $LIMMAT_ARTIFACTS/foo"
         "##
     .to_string();
-    let builder = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new(config)
         .await
         .unwrap()
         .env("TMPDIR", temp_dir.path().as_os_str());
-    let mut child = builder.start(&config, ["test", "my_test"]).await.unwrap();
+    let mut child = builder.start(["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -817,12 +795,11 @@ static DEP_CONFIG: &str = r##"
 #[googletest::test]
 #[tokio::test]
 async fn dependency_artifacts_get_cmd() {
-    let builder = LimmatChildBuilder::new().await.unwrap();
+    let builder = LimmatChildBuilder::new(DEP_CONFIG.to_string())
+        .await
+        .unwrap();
     let mut child = builder
-        .start(
-            DEP_CONFIG.to_string(),
-            ["get", "--run", "main", "HEAD^", "stdout"],
-        )
+        .start(["get", "--run", "main", "HEAD^", "stdout"])
         .await
         .unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
@@ -838,11 +815,10 @@ async fn dependency_artifacts_get_cmd() {
 #[googletest::test]
 #[tokio::test]
 async fn dependency_artifacts_test_cmd() {
-    let builder = LimmatChildBuilder::new().await.unwrap();
-    let mut child = builder
-        .start(DEP_CONFIG.to_string(), ["test", "main"])
+    let builder = LimmatChildBuilder::new(DEP_CONFIG.to_string())
         .await
         .unwrap();
+    let mut child = builder.start(["test", "main"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
