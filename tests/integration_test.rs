@@ -111,7 +111,7 @@ impl<'a> LimmatChildBuilder {
     }
 
     async fn init_test_repo(path: &Path) -> anyhow::Result<()> {
-        Command::new("git")
+        Command::new("/usr/bin/git")
             .stderr(Stdio::null())
             .stdout(Stdio::null())
             .arg("init")
@@ -121,7 +121,7 @@ impl<'a> LimmatChildBuilder {
             .check_exit_ok()
             .context("git init")?;
         for _ in 0..5 {
-            Command::new("git")
+            Command::new("/usr/bin/git")
                 .stderr(Stdio::null())
                 .stdout(Stdio::null())
                 .current_dir(path)
@@ -162,6 +162,8 @@ impl<'a> LimmatChildBuilder {
                 worktree_dir.to_str().unwrap(),
                 "--worktree-prefix",
                 "test-worktree-",
+                "--git-binary",
+                "/usr/bin/git",
             ])
             .args(args)
             .stdin(Stdio::piped())
