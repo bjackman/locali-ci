@@ -8,6 +8,12 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
  - It's pretty slow on my work computer. Git performance is crippled by security
    monitoring on that computer, and the single-thread performance is very poor.
    But it doesn't seem like Limmat has to be slow.
+
+   Could this be related to the fact that the integration tests are also
+   sometimes extremely slow on my personal (old & slow) laptop?
+   `test_worktree_teardown::clean_worktree` occasionally takes up to 15s. When
+   it times out though, the child doesn't even seem to have got started (its log
+   is empty) which feels like a different issue.
  - Sometimes when I've run this thing overnight, the next day I noticed that it
    was no longer updating the terminal UI. It still seems to actually be running
    the tests. I suspect some task somewhere is panicking, and I haven't done the

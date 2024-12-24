@@ -330,11 +330,11 @@ async fn test_worktree_teardown(test_command: &str) {
     let mut limmat = builder.start(["watch", "HEAD^"]).await.unwrap();
 
     timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         limmat.result_exists("my_test", "HEAD"),
     )
     .await
-    .expect("result not found after 5s")
+    .expect("result not found after 20s")
     .expect("failed to check for test result");
 
     limmat.terminate().await.expect("couldn't shut down child");
