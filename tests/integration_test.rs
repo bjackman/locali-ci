@@ -67,7 +67,7 @@ impl ChildExt for Child {
 
 struct LimmatChildBuilder {
     temp_dir: TempDir,
-    existing_repo_dir: Option<PathBuf>, // If None, create one right in temp_dir.
+    repo_dir: PathBuf,
     db_dir: PathBuf,
     dump_output_on_panic: bool,
     env: HashMap<OsString, OsString>,
@@ -78,11 +78,15 @@ impl<'a> LimmatChildBuilder {
     async fn new(config: impl AsRef<str>) -> anyhow::Result<Self> {
         let temp_dir = TempDir::with_prefix("limmat-child")?;
 
+        let repo_dir = temp_dir.path().join("repo");
+        create_dir(&repo_dir).unwrap();
+        Self::init_test_repo(&repo_dir).await.unwrap();
+
         let db_dir = temp_dir.path().join("cache");
         create_dir(&db_dir).unwrap();
         Ok(Self {
             temp_dir,
-            existing_repo_dir: None,
+            repo_dir,
             db_dir,
             dump_output_on_panic: true,
             env: HashMap::from([("RUST_LOG".into(), "debug".into())]),
@@ -92,11 +96,6 @@ impl<'a> LimmatChildBuilder {
 
     fn db_dir(mut self, dir: PathBuf) -> Self {
         self.db_dir = dir;
-        self
-    }
-
-    fn existing_repo_dir(mut self, dir: PathBuf) -> Self {
-        self.existing_repo_dir = Some(dir);
         self
     }
 
@@ -111,6 +110,7 @@ impl<'a> LimmatChildBuilder {
     }
 
     async fn init_test_repo(path: &Path) -> anyhow::Result<()> {
+        eprintln!("initializing test repo");
         Command::new("/usr/bin/git")
             .stderr(Stdio::null())
             .stdout(Stdio::null())
@@ -120,7 +120,8 @@ impl<'a> LimmatChildBuilder {
             .await?
             .check_exit_ok()
             .context("git init")?;
-        for _ in 0..5 {
+        for i in 0..5 {
+            eprintln!("  commit {i}");
             Command::new("/usr/bin/git")
                 .stderr(Stdio::null())
                 .stdout(Stdio::null())
@@ -141,21 +142,13 @@ impl<'a> LimmatChildBuilder {
         let stderr = File::create(self.temp_dir.path().join("stderr.txt"))?;
         let stdout = File::create(self.temp_dir.path().join("stdout.txt"))?;
 
-        let repo_dir = match self.existing_repo_dir {
-            Some(ref dir) => dir,
-            None => {
-                Self::init_test_repo(self.temp_dir.path()).await?;
-                self.temp_dir.path()
-            }
-        };
-
         let mut cmd: Command = get_test_bin("limmat").into();
         let cmd = cmd
             .args([
                 "--config",
                 "/dev/stdin",
                 "--repo",
-                repo_dir.to_str().unwrap(),
+                self.repo_dir.to_str().unwrap(),
                 "--result-db",
                 self.db_dir.to_str().unwrap(),
                 "--worktree-dir",
@@ -506,10 +499,6 @@ async fn should_run_test(config: &str) {
 #[googletest::test]
 #[tokio::test]
 async fn should_run_test_with_stored_results() {
-    let repo_dir = TempDir::with_prefix("repo").unwrap();
-    LimmatChildBuilder::init_test_repo(repo_dir.path())
-        .await
-        .unwrap();
     let temp_dir = TempDir::new().unwrap();
 
     let signalling_path = temp_dir.path().join("trans-output.txt");
@@ -548,8 +537,7 @@ async fn should_run_test_with_stored_results() {
     let builder = LimmatChildBuilder::new(&config)
         .await
         .unwrap()
-        .db_dir(db_dir.path().to_owned())
-        .existing_repo_dir(repo_dir.path().to_owned());
+        .db_dir(db_dir.path().to_owned());
     let mut child = builder.start(["test", "my_other_dep"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
@@ -582,11 +570,6 @@ async fn should_run_test_with_stored_results() {
 #[googletest::test]
 #[tokio::test]
 async fn should_find_output(want_stdout: &str, want_stderr: &str) {
-    let repo_dir = TempDir::with_prefix("repo").unwrap();
-    LimmatChildBuilder::init_test_repo(repo_dir.path())
-        .await
-        .unwrap();
-
     let db_dir = TempDir::with_prefix("result-db").unwrap();
     let builder = LimmatChildBuilder::new(
         r##"
@@ -604,8 +587,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
     )
     .await
     .unwrap()
-    .db_dir(db_dir.path().to_owned())
-    .existing_repo_dir(repo_dir.path().to_owned());
+    .db_dir(db_dir.path().to_owned());
     let mut child = builder
         .start(["get", "--run", "my_test", "HEAD^"])
         .await
@@ -648,11 +630,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
 #[googletest::test]
 #[tokio::test]
 async fn should_find_not_race() {
-    let repo_dir = TempDir::with_prefix("repo").unwrap();
     let tmp_dir = TempDir::new().unwrap();
-    LimmatChildBuilder::init_test_repo(repo_dir.path())
-        .await
-        .unwrap();
     let db_dir = TempDir::with_prefix("result-db").unwrap();
 
     let builder = LimmatChildBuilder::new(format!(
@@ -669,8 +647,7 @@ async fn should_find_not_race() {
     .unwrap()
     .db_dir(db_dir.path().to_owned())
     // Hack - this is making for annoying log spam when it fails at the moment.
-    .dump_output_on_panic(false)
-    .existing_repo_dir(repo_dir.path().to_owned());
+    .dump_output_on_panic(false);
     let mut watch_children = Vec::new();
     for _ in 0..16 {
         let child = builder.start(["watch", "HEAD^"]).await.unwrap();
