@@ -215,11 +215,11 @@ impl WorktreeBuilder {
 
 // This is the main loop of the program. Take notifications from the Git tree,
 // feed them to the test manager, feed the test manager's results to the status
-// tracker (basically the UI).
+// viewer (basically the UI).
 async fn watch_loop(
     cancellation_token: CancellationToken,
     test_manager: Arc<test::Manager<PersistentWorktree>>,
-    mut status_tracker: ui::StatusTracker<PersistentWorktree, Stdout>,
+    mut ui: ui::StatusViewer<PersistentWorktree, Stdout>,
     range_spec: OsString,
     repo: Arc<PersistentWorktree>,
 ) -> anyhow::Result<()> {
@@ -238,20 +238,20 @@ async fn watch_loop(
                 let revs = revs.expect("revset stream terminated")?;
                 // Paying for a pointless clone here so we can do set_revisions
                 // (mostly just kicks off background stuff) before awaiting the
-                // status tracker reset (does synchronhous work).
+                // UI reset (does synchronhous work).
                 test_manager.set_revisions(revs.clone()).await.context("setting revisions to test")?;
-                status_tracker.set_range(&range_spec).await.context("resetting status tracker")?;
-                status_tracker.repaint(&size_watcher.size()).context("error painting status to stdout")?;
+                ui.set_range(&range_spec).await.context("resetting status viewer")?;
+                ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
             notif = notifs.recv() => {
                 // https://github.com/rust-lang/futures-rs/issues/1857
                 // AFAICS there is no way to encode a stream that never terminates.
                 let notif = notif.expect("notification stream terminated");
-                status_tracker.update(notif);
-                status_tracker.repaint(&size_watcher.size()).context("error painting status to stdout")?;
+                ui.update(notif);
+                ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
             _ = resizes.next() => {
-                status_tracker.repaint(&size_watcher.size()).context("error painting status to stdout")?;
+                ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");
@@ -304,8 +304,8 @@ async fn watch(
         env.config.tests,
     ));
 
-    // Set up the status tracker, which shows the user what's going on in the terminal.
-    let status_tracker = ui::StatusTracker::new(
+    // Set up the UI, which shows the user what's going on in the terminal.
+    let ui = ui::StatusViewer::new(
         env.repo.clone(),
         stdout(),
         ui_state,
@@ -339,7 +339,7 @@ async fn watch(
     eg.spawn(watch_loop(
         cancellation_token.child_token(),
         test_manager.clone(),
-        status_tracker,
+        ui,
         format!("{}..HEAD", watch_args.base).into(),
         env.repo,
     ));

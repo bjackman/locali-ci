@@ -43,7 +43,7 @@ fn update_tracked_cases(tracked_cases: &mut TrackedCases, notif: Arc<Notificatio
 
 // Tracks the status of the tests being run by observing the notification
 // stream.
-pub struct StatusTracker<W: Worktree, O: Write> {
+pub struct StatusViewer<W: Worktree, O: Write> {
     repo: Arc<W>,
     tracked_cases: TrackedCases,
     output_buf: OutputBuffer,
@@ -53,14 +53,15 @@ pub struct StatusTracker<W: Worktree, O: Write> {
     home_url: String,
 }
 
-// This ought to be private to Tracker::reset, rust just doesn't seem to let you do that.
+// This ought to be private to StatusViewer::reset, rust just doesn't seem to
+// let you do that.
 lazy_static! {
     static ref COMMIT_HASH_REGEX: Regex = Regex::new("[0-9a-z]{40,}").unwrap();
     static ref GRAPH_COMPONENT_REGEX: Regex = Regex::new(r"[\\/\*]").unwrap();
 }
 
-impl<W: Worktree, O: Write> StatusTracker<W, O> {
-    // Construct a tracker that will write the UI to the given outut. The URL
+impl<W: Worktree, O: Write> StatusViewer<W, O> {
+    // Construct a UI that writes to to the given outut. The URL
     // base is used to generate hyperlinks to test results.
     pub fn new(
         repo: Arc<W>,
@@ -80,7 +81,7 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
         }
     }
 
-    // Informs the tracker of the range of tests that we expect to be testing.
+    // Informs the UI of the range of tests that we expect to be testing.
     pub async fn set_range(&mut self, range_spec: &OsStr) -> anyhow::Result<()> {
         // This should eventually be configurable.
         let log_format =
@@ -129,7 +130,7 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
     }
 }
 
-impl<W: Worktree, O: Write> Drop for StatusTracker<W, O> {
+impl<W: Worktree, O: Write> Drop for StatusViewer<W, O> {
     fn drop(&mut self) {
         writeln!(self.output, "\x1B[?1049l").or_log_error("Couldn't exit alternate screen");
     }
