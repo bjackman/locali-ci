@@ -109,7 +109,7 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
         // implementing what I really wanted turns out to be really fucking
         // fiddly and unsatisfying and boring, I just don't care enough.
         // This is idempotent so we just do it every time.
-        write!(self.output, "\x1B[?1049h")?;
+        writeln!(self.output, "\x1B[?1049h")?;
         // Move cursor to top left and erase the display.
         write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
         let truncated = Text::from_iter(
@@ -131,7 +131,7 @@ impl<W: Worktree, O: Write> StatusTracker<W, O> {
 
 impl<W: Worktree, O: Write> Drop for StatusTracker<W, O> {
     fn drop(&mut self) {
-        write!(self.output, "\x1B[?1049h").or_log_error("Couldn't exit alternate screen");
+        writeln!(self.output, "\x1B[?1049l").or_log_error("Couldn't exit alternate screen");
     }
 }
 
