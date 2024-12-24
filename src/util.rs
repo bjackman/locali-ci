@@ -31,6 +31,12 @@ impl From<PathBuf> for DisplayablePathBuf {
     }
 }
 
+impl From<DisplayablePathBuf> for PathBuf {
+    fn from(d: DisplayablePathBuf) -> PathBuf {
+        d.0
+    }
+}
+
 impl Display for DisplayablePathBuf {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         Display::fmt(&self.0.display(), f)

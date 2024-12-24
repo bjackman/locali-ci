@@ -70,6 +70,9 @@ struct Args {
     /// Directory (must exist) to create temporary worktrees in.
     #[arg(long, default_value_t = {env::temp_dir().to_string_lossy().into_owned()}, global = true)]
     worktree_dir: String,
+    /// Git binary - default will use $PATH.
+    #[arg(long, default_value_t = {DisplayablePathBuf("git".into())}, global = true)]
+    git_binary: DisplayablePathBuf,
     #[command(subcommand)]
     command: Command,
 }
@@ -663,6 +666,7 @@ async fn do_main() -> anyhow::Result<ExitCode> {
 
     let repo = git::PersistentWorktree {
         path: args.repo.to_owned().into(),
+        git_binary: args.git_binary.clone().into(),
     };
     // Check repo is valid.
     repo.git_common_dir()

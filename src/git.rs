@@ -152,11 +152,16 @@ impl Display for TreeHash {
 #[derive(Debug)]
 pub struct PersistentWorktree {
     pub path: PathBuf,
+    pub git_binary: PathBuf,
 }
 
 impl Worktree for PersistentWorktree {
     fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn git_binary(&self) -> &Path {
+        &self.git_binary
     }
 }
 
@@ -188,6 +193,8 @@ impl From<Commit> for CommitHash {
 pub trait Worktree: Debug {
     // Directory where git commands should be run.
     fn path(&self) -> &Path;
+    // Path to Git binary.
+    fn git_binary(&self) -> &Path;
 
     // Convenience function to create a git command with some pre-filled args.
     fn git<I, S>(&self, args: I) -> Command
@@ -441,6 +448,7 @@ pub struct TempWorktree {
     origin: PathBuf, // Path of repo this was created from.
     temp_dir: TempDir,
     cleaned_up: bool,
+    git_binary: PathBuf,
 }
 
 impl TempWorktree {
@@ -463,6 +471,7 @@ impl TempWorktree {
             origin: origin.path().to_owned(),
             temp_dir,
             cleaned_up: false,
+            git_binary: origin.git_binary().to_owned(),
         };
         // Dumb workaround for https://github.com/bjackman/limmat/issues/14
         let mut attempts = 1;
@@ -537,6 +546,10 @@ impl Worktree for TempWorktree {
     fn path(&self) -> &Path {
         self.temp_dir.path()
     }
+
+    fn git_binary(&self) -> &Path {
+        &self.git_binary
+    }
 }
 
 impl Drop for TempWorktree {
@@ -569,6 +582,7 @@ pub mod test_utils {
     #[derive(Debug)]
     pub struct TempRepo {
         temp_dir: TempDir,
+        git_binary: PathBuf,
     }
 
     // Empty repository in a temporary directory, torn down on drop.
@@ -577,6 +591,7 @@ pub mod test_utils {
             // https://www.youtube.com/watch?v=_MwboA5NIVA
             let zelf = Self {
                 temp_dir: TempDir::with_prefix("fixture-").expect("couldn't make tempdir"),
+                git_binary: PathBuf::from("/usr/bin/git"),
             };
             zelf.git(["init"]).execute().await?;
             Ok(zelf)
@@ -586,6 +601,10 @@ pub mod test_utils {
     impl Worktree for TempRepo {
         fn path(&self) -> &Path {
             self.temp_dir.path()
+        }
+
+        fn git_binary(&self) -> &Path {
+            &self.git_binary
         }
     }
 
@@ -639,6 +658,7 @@ mod tests {
         let tmp_dir = TempDir::new().expect("couldn't make tempdir");
         let wt = PersistentWorktree {
             path: tmp_dir.path().to_path_buf(),
+            git_binary: PathBuf::from("/usr/bin/git"),
         };
         assert!(
             wt.git_common_dir().await.is_err(),
@@ -656,6 +676,7 @@ mod tests {
         }
         let wt = PersistentWorktree {
             path: tmp_dir.path().to_path_buf(),
+            git_binary: PathBuf::from("/usr/bin/git"),
         };
         assert!(
             wt.git_common_dir().await.is_err(),
