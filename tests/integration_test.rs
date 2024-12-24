@@ -110,7 +110,6 @@ impl<'a> LimmatChildBuilder {
     }
 
     async fn init_test_repo(path: &Path) -> anyhow::Result<()> {
-        eprintln!("initializing test repo");
         Command::new("/usr/bin/git")
             .stderr(Stdio::null())
             .stdout(Stdio::null())
@@ -120,8 +119,7 @@ impl<'a> LimmatChildBuilder {
             .await?
             .check_exit_ok()
             .context("git init")?;
-        for i in 0..5 {
-            eprintln!("  commit {i}");
+        for _ in 0..5 {
             Command::new("/usr/bin/git")
                 .stderr(Stdio::null())
                 .stdout(Stdio::null())
