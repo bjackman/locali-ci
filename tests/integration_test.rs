@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
-    fs::{self, create_dir, remove_file, File},
+    fs::{self, create_dir, create_dir_all, remove_file, File},
     io::{BufRead as _, BufReader},
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
@@ -72,7 +72,7 @@ struct LimmatChildBuilder {
     env: HashMap<OsString, OsString>,
 }
 
-impl LimmatChildBuilder {
+impl<'a> LimmatChildBuilder {
     async fn new() -> anyhow::Result<Self> {
         let temp_dir = TempDir::with_prefix("limmat-child")?;
 
@@ -132,12 +132,12 @@ impl LimmatChildBuilder {
     }
 
     async fn start(
-        self,
+        &self,
         config: impl AsRef<str>,
         args: impl IntoIterator<Item = &str>,
     ) -> anyhow::Result<LimmatChild> {
         let worktree_dir = self.temp_dir.path().join("worktrees");
-        create_dir(&worktree_dir).unwrap();
+        create_dir_all(&worktree_dir).unwrap();
 
         let stderr = File::create(self.temp_dir.path().join("stderr.txt"))?;
         let stdout = File::create(self.temp_dir.path().join("stdout.txt"))?;
@@ -175,7 +175,7 @@ impl LimmatChildBuilder {
 
         stdin.write_all(config.as_ref().as_bytes()).await.unwrap();
         Ok(LimmatChild {
-            temp_dir: self.temp_dir,
+            temp_dir: &self.temp_dir,
             child,
             dump_output_on_panic: self.dump_output_on_panic,
         })
@@ -183,13 +183,13 @@ impl LimmatChildBuilder {
 }
 
 // An instance of the binary, running as a child process.
-struct LimmatChild {
-    temp_dir: TempDir,
+struct LimmatChild<'a> {
+    temp_dir: &'a TempDir,
     child: Child,
     dump_output_on_panic: bool,
 }
 
-impl LimmatChild {
+impl<'a> LimmatChild<'a> {
     // Block until the process has terminated and return an error if isn't successful.
     async fn expect_success(&mut self) -> anyhow::Result<()> {
         let status = self.child.wait().await.expect("error waiting for child");
@@ -227,7 +227,7 @@ impl LimmatChild {
     }
 }
 
-impl Drop for LimmatChild {
+impl Drop for LimmatChild<'_> {
     fn drop(&mut self) {
         // Hack: when running tests via cargo-stress, there's no convenient
         // way to get stderr of the test process, let alone of its
@@ -254,7 +254,7 @@ impl ExitStatusExt for ExitStatus {
     }
 }
 
-impl LimmatChild {
+impl<'a> LimmatChild<'a> {
     // Returns true if any worktree of this child currently exists.
     fn has_worktrees(&mut self) -> anyhow::Result<bool> {
         let mut pattern = self.temp_dir.path().join("worktrees").to_owned();
@@ -294,9 +294,8 @@ impl LimmatChild {
 #[test_case("echo hello world > file.txt && git add file.txt"; "really dirty worktree")]
 #[tokio::test]
 async fn test_worktree_teardown(test_command: &str) {
-    let mut limmat = LimmatChildBuilder::new()
-        .await
-        .unwrap()
+    let builder = LimmatChildBuilder::new().await.unwrap();
+    let mut limmat = builder
         .start(
             format!(
                 r##"
@@ -333,9 +332,8 @@ async fn shouldnt_leak_jobs() {
 
     // This config has a test that does not respect SIGTERM. We should not leak
     // that job.
-    let mut limmat = LimmatChildBuilder::new()
-        .await
-        .unwrap()
+    let builder = LimmatChildBuilder::new().await.unwrap();
+    let mut limmat = builder
         .start(
             format!(
                 r##"
@@ -370,10 +368,11 @@ async fn should_invalidate_cache_when_dep_changes() {
 
     let test_ran_path = temp_dir.path().join("test_ran");
     {
-        let _limmat = LimmatChildBuilder::new()
+        let builder = LimmatChildBuilder::new()
             .await
             .unwrap()
-            .db_dir(db_dir.clone())
+            .db_dir(db_dir.clone());
+        let _limmat = builder
             .start(
                 format!(
                     r##"
@@ -405,10 +404,8 @@ async fn should_invalidate_cache_when_dep_changes() {
     // Now we'll run it again but with a different config for the dependency.
     // The dependee should get run again even though its config hasn't changed.
     remove_file(&test_ran_path).unwrap();
-    let _limmat = LimmatChildBuilder::new()
-        .await
-        .unwrap()
-        .db_dir(db_dir)
+    let builder = LimmatChildBuilder::new().await.unwrap().db_dir(db_dir);
+    let _limmat = builder
         .start(
             format!(
                 r##"
@@ -485,12 +482,8 @@ async fn should_invalidate_cache_when_dep_changes() {
 #[googletest::test]
 #[tokio::test]
 async fn should_run_test(config: &str) {
-    let mut child = LimmatChildBuilder::new()
-        .await
-        .unwrap()
-        .start(config, ["test", "my_test"])
-        .await
-        .unwrap();
+    let builder = LimmatChildBuilder::new().await.unwrap();
+    let mut child = builder.start(config, ["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -540,11 +533,12 @@ async fn should_run_test_with_stored_results() {
     // Awkward hack to get a result into the database: we we run my_dep (whose
     // result won't get cached) to get my_transitive_dep into the cache.
     let db_dir = TempDir::with_prefix("result-db").unwrap();
-    let mut child = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new()
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
-        .existing_repo_dir(repo_dir.path().to_owned())
+        .existing_repo_dir(repo_dir.path().to_owned());
+    let mut child = builder
         .start(&config, ["test", "my_other_dep"])
         .await
         .unwrap();
@@ -560,14 +554,7 @@ async fn should_run_test_with_stored_results() {
     );
 
     // Now run the actual test, reusing the result DB.
-    let mut child = LimmatChildBuilder::new()
-        .await
-        .unwrap()
-        .db_dir(db_dir.path().to_owned())
-        .existing_repo_dir(repo_dir.path().to_owned())
-        .start(config, ["test", "my_test"])
-        .await
-        .unwrap();
+    let mut child = builder.start(config, ["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -604,11 +591,12 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
             shutdown_grace_period_s = 1
         "##;
     let db_dir = TempDir::with_prefix("result-db").unwrap();
-    let mut child = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new()
         .await
         .unwrap()
         .db_dir(db_dir.path().to_owned())
-        .existing_repo_dir(repo_dir.path().to_owned())
+        .existing_repo_dir(repo_dir.path().to_owned());
+    let mut child = builder
         .start(&config, ["get", "--run", "my_test", "HEAD^"])
         .await
         .unwrap();
@@ -621,11 +609,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         ok(eq(want_stdout))
     );
 
-    let mut child = LimmatChildBuilder::new()
-        .await
-        .unwrap()
-        .db_dir(db_dir.path().to_owned())
-        .existing_repo_dir(repo_dir.path().to_owned())
+    let mut child = builder
         .start(config, ["get", "my_test", "HEAD^", "stderr"])
         .await
         .unwrap();
@@ -638,11 +622,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         ok(eq(want_stderr))
     );
 
-    let mut child = LimmatChildBuilder::new()
-        .await
-        .unwrap()
-        .db_dir(db_dir.path().to_owned())
-        .existing_repo_dir(repo_dir.path().to_owned())
+    let mut child = builder
         .start(config, ["artifacts", "my_test", "HEAD^"])
         .await
         .unwrap();
@@ -675,29 +655,21 @@ async fn should_find_not_race() {
         "##,
         tmp_dir.path().display()
     );
+    let builder = LimmatChildBuilder::new()
+        .await
+        .unwrap()
+        .db_dir(db_dir.path().to_owned())
+        // Hack - this is making for annoying log spam when it fails at the moment.
+        .dump_output_on_panic(false)
+        .existing_repo_dir(repo_dir.path().to_owned());
     let mut watch_children = Vec::new();
     for _ in 0..16 {
-        let child = LimmatChildBuilder::new()
-            .await
-            .unwrap()
-            .db_dir(db_dir.path().to_owned())
-            // Hack - this is making for annoying log spam when it fails at the moment.
-            .dump_output_on_panic(false)
-            .existing_repo_dir(repo_dir.path().to_owned())
-            .start(&config, ["watch", "HEAD^"])
-            .await
-            .unwrap();
+        let child = builder.start(&config, ["watch", "HEAD^"]).await.unwrap();
         watch_children.push(child);
     }
     let mut get_children: Vec<LimmatChild> = Vec::new();
     for _ in 0..16 {
-        let child = LimmatChildBuilder::new()
-            .await
-            .unwrap()
-            .db_dir(db_dir.path().to_owned())
-            .existing_repo_dir(repo_dir.path().to_owned())
-            // Hack - this is making for annoying log spam when it fails at the moment.
-            .dump_output_on_panic(false)
+        let child = builder
             .start(&config, ["get", "--run", "my_test", "HEAD"])
             .await
             .unwrap();
@@ -734,13 +706,11 @@ async fn limmat_artifacts_test_cmd() {
             command = "echo hwat >> $LIMMAT_ARTIFACTS/foo"
         "##
     .to_string();
-    let mut child = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new()
         .await
         .unwrap()
-        .env("TMPDIR", temp_dir.path().as_os_str())
-        .start(&config, ["test", "my_test"])
-        .await
-        .unwrap();
+        .env("TMPDIR", temp_dir.path().as_os_str());
+    let mut child = builder.start(&config, ["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -788,13 +758,11 @@ async fn artifacts_cmd() {
             command = "echo hwat >> $LIMMAT_ARTIFACTS/foo"
         "##
     .to_string();
-    let mut child = LimmatChildBuilder::new()
+    let builder = LimmatChildBuilder::new()
         .await
         .unwrap()
-        .env("TMPDIR", temp_dir.path().as_os_str())
-        .start(&config, ["test", "my_test"])
-        .await
-        .unwrap();
+        .env("TMPDIR", temp_dir.path().as_os_str());
+    let mut child = builder.start(&config, ["test", "my_test"]).await.unwrap();
     timeout(Duration::from_secs(5), child.expect_success())
         .await
         .expect("child didn't shut down")
@@ -849,9 +817,8 @@ static DEP_CONFIG: &str = r##"
 #[googletest::test]
 #[tokio::test]
 async fn dependency_artifacts_get_cmd() {
-    let mut child = LimmatChildBuilder::new()
-        .await
-        .unwrap()
+    let builder = LimmatChildBuilder::new().await.unwrap();
+    let mut child = builder
         .start(
             DEP_CONFIG.to_string(),
             ["get", "--run", "main", "HEAD^", "stdout"],
@@ -871,9 +838,8 @@ async fn dependency_artifacts_get_cmd() {
 #[googletest::test]
 #[tokio::test]
 async fn dependency_artifacts_test_cmd() {
-    let mut child = LimmatChildBuilder::new()
-        .await
-        .unwrap()
+    let builder = LimmatChildBuilder::new().await.unwrap();
+    let mut child = builder
         .start(DEP_CONFIG.to_string(), ["test", "main"])
         .await
         .unwrap();
