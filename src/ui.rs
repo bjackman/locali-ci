@@ -3,7 +3,10 @@ use std::{collections::HashMap, ffi::OsStr, io::Write, mem, sync::Arc};
 use ansi_control_codes::control_sequences::{CUP, ED};
 use anyhow::{self, bail, Context as _};
 use colored::Colorize;
+use futures::future::try_join;
 use lazy_static::lazy_static;
+#[allow(unused_imports)]
+use log::debug;
 use regex::Regex;
 
 use crate::{
@@ -207,6 +210,60 @@ impl GraphBuffer {
     }
 }
 
+// Helper for OutputBuffer - a way to grab log info for a bunch of commits with
+// a single git command. It's important that we don't do N git commands, that
+// can really slow things down when the range is large.
+
+struct CommitInfoBuffer {
+    raw_buf: String, // Output straight from Git.
+}
+
+impl CommitInfoBuffer {
+    // log_format must not contain %x00 as that's used internally for splitting
+    // up the raw buffer.
+    pub async fn new(
+        repo: &Arc<impl Worktree>,
+        range_spec: impl AsRef<OsStr>,
+        log_format: &str,
+    ) -> anyhow::Result<Self> {
+        if log_format.contains("%x00") {
+            bail!("NUL bytes not allowed in log format");
+        }
+        let raw_buf = repo
+            .log(
+                range_spec.as_ref(),
+                format!("%H {log_format}%x00"),
+                LogStyle::NoGraph,
+            )
+            .await?;
+        // Hack: OsStr doesn't have a proper API, so just squash to utf-8, sorry
+        // users.
+        Ok(Self {
+            raw_buf: String::from_utf8_lossy(&raw_buf).to_string(),
+        })
+    }
+
+    pub fn info(&self) -> anyhow::Result<HashMap<CommitHash, &str>> {
+        let b = self.raw_buf.trim();
+        let b = b.strip_suffix('\0').unwrap_or(b);
+        if b.is_empty() {
+            return Ok(HashMap::new());
+        }
+        b.split('\0')
+            .map(|raw_chunk| {
+                let [hash, chunk] = raw_chunk
+                    .splitn(2, ' ')
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .map_err(|v: Vec<_>| {
+                        anyhow::anyhow!("expected chunk split len 2, got {}", v.len())
+                    })?;
+                Ok((CommitHash::new(hash.trim()), chunk))
+            })
+            .collect()
+    }
+}
+
 // Represents the buffer showing the current status of all the commits being tested.
 struct OutputBuffer {
     // Pre-rendered lines containing static information (graph, commit log info etc).
@@ -254,22 +311,24 @@ impl OutputBuffer {
         // buffer pairwise. If it has more lines then we will need to stretch
         // out the graph vertically to make space first.
 
+        let (graph_buf, info_buf) = try_join(
+            GraphBuffer::new(repo, range_spec.as_ref()),
+            CommitInfoBuffer::new(repo, range_spec.as_ref(), log_format),
+        )
+        .await?;
+
+        let commit_info = info_buf.info()?;
         let mut lines = Vec::new();
         let mut status_commits = HashMap::new();
-        let graph_buf = GraphBuffer::new(repo, range_spec).await?;
         for (hash, mut chunk) in graph_buf.chunks()? {
-            let log_n1_os = repo
-                .log_n1(&hash, log_format)
-                .await
-                .context(format!("couldn't get commit data for {:?}", hash))?;
-            // Hack: because OsStr doesn't have a proper API, luckily we can
-            // just squash to utf-8, sorry users.
-            let log_n1 = log_n1_os.to_string_lossy();
+            let log_info = commit_info
+                .get(&hash)
+                .with_context(|| format!("missing commit info for {:?}", hash))?;
 
             // We're gonna add our own newlines in so we don't need the one that
             // Git printed.
-            let log_n1 = log_n1.strip_suffix('\n').unwrap_or(&log_n1);
-            let mut info_lines: Vec<&str> = log_n1.split('\n').collect();
+            let log_info = log_info.strip_suffix('\n').unwrap_or(log_info);
+            let mut info_lines: Vec<&str> = log_info.split('\n').collect();
 
             // Here's where we'll inject the live status
             status_commits.insert(lines.len() + info_lines.len(), hash);

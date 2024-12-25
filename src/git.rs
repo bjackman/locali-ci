@@ -2,7 +2,7 @@ use core::fmt;
 use core::fmt::{Debug, Display};
 use std::ffi::{OsStr, OsString};
 use std::ops::Deref;
-use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::Command as SyncCommand;
@@ -189,7 +189,6 @@ impl From<Commit> for CommitHash {
 
 pub enum LogStyle {
     WithGraph,
-    #[expect(dead_code)]
     NoGraph,
 }
 
@@ -314,27 +313,6 @@ pub trait Worktree: Debug {
             ))?
             .stdout;
         Ok(stdout)
-    }
-
-    async fn log_n1<S, T>(&self, rev_spec: S, format_spec: T) -> anyhow::Result<OsString>
-    where
-        S: AsRef<OsStr>,
-        T: AsRef<OsStr>,
-    {
-        let mut format_arg = OsString::from("--format=");
-        format_arg.push(format_spec.as_ref());
-        let stdout = self
-            .git(["log", "-n1"])
-            .args([&format_arg, rev_spec.as_ref()])
-            .execute()
-            .await
-            .context(format!(
-                "getting -n1 log for {:?} with format {:?}",
-                rev_spec.as_ref(),
-                format_spec.as_ref(),
-            ))?
-            .stdout;
-        Ok(OsString::from_vec(stdout))
     }
 
     // Watch for events that could change the meaning of a revspec. When that happens, send an event
