@@ -187,6 +187,12 @@ impl From<Commit> for CommitHash {
     }
 }
 
+pub enum LogStyle {
+    WithGraph,
+    #[expect(dead_code)]
+    NoGraph,
+}
+
 // This is a weird kinda inheritance type thing to enable different types of worktree (with
 // different fields and drop behaviours) to share the functionality that users actually care about.
 // Not really sure if this is the Rust Way or not.
@@ -281,7 +287,12 @@ pub trait Worktree: Debug {
             ))
     }
 
-    async fn log_graph<S, T>(&self, range_spec: S, format_spec: T) -> anyhow::Result<OsString>
+    async fn log<S, T>(
+        &self,
+        range_spec: S,
+        format_spec: T,
+        style: LogStyle,
+    ) -> anyhow::Result<OsString>
     where
         S: AsRef<OsStr>,
         T: AsRef<OsStr>,
@@ -289,7 +300,10 @@ pub trait Worktree: Debug {
         let mut format_arg = OsString::from("--format=");
         format_arg.push(format_spec.as_ref());
         let stdout = self
-            .git(["log", "--graph"])
+            .git(match style {
+                LogStyle::WithGraph => vec!["log", "--graph"],
+                LogStyle::NoGraph => vec!["log"],
+            })
             .args([&format_arg, range_spec.as_ref()])
             .execute()
             .await

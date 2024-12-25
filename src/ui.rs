@@ -8,7 +8,7 @@ use regex::Regex;
 
 use crate::{
     database::Database,
-    git::{CommitHash, Worktree},
+    git::{CommitHash, LogStyle, Worktree},
     http::UiState,
     test::{Notification, TestCase, TestInconclusive, TestName, TestStatus},
     text::{Class, Line, Span, Text},
@@ -148,7 +148,7 @@ impl GraphBuffer {
     ) -> anyhow::Result<Self> {
         // Get the raw buffer.
         let raw_buf = repo
-            .log_graph(range_spec.as_ref(), "%H\n")
+            .log(range_spec.as_ref(), "%H\n", LogStyle::WithGraph)
             .await?
             // OsStr doesn't have a proper API, luckily we can expect utf-8.
             .into_string()
