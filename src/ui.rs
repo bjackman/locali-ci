@@ -136,6 +136,77 @@ impl<W: Worktree, O: Write> Drop for StatusViewer<W, O> {
     }
 }
 
+// Helper for OutputBuffer - just the graph bit of the git log --graph output.
+struct GraphBuffer {
+    raw_buf: String, // Output straight from Git.
+}
+
+impl GraphBuffer {
+    pub async fn new(
+        repo: &Arc<impl Worktree>,
+        range_spec: impl AsRef<OsStr>,
+    ) -> anyhow::Result<Self> {
+        // Get the raw buffer.
+        let raw_buf = repo
+            .log_graph(range_spec.as_ref(), "%H\n")
+            .await?
+            // OsStr doesn't have a proper API, luckily we can expect utf-8.
+            .into_string()
+            .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?;
+        Ok(Self { raw_buf })
+    }
+
+    // Parse pairs of commit hash and chunks from the buffer, split by line.
+    pub fn chunks(&self) -> anyhow::Result<Vec<(CommitHash, Vec<&str>)>> {
+        // Separate out chunks into separate vecs of lines.
+        let mut cur_chunk = Vec::<&str>::new();
+        let mut raw_chunks = Vec::<Vec<&str>>::new();
+        for line in self.raw_buf.trim().split('\n') {
+            // --graph uses * to represent a node in the DAG.
+            if line.contains('*') && !cur_chunk.is_empty() {
+                raw_chunks.push(mem::take(&mut cur_chunk));
+            }
+            if !line.is_empty() {
+                cur_chunk.push(line);
+            }
+        }
+        if !cur_chunk.is_empty() {
+            raw_chunks.push(cur_chunk);
+        }
+
+        // Now each chunk looks something like this:
+        //
+        // | * |   e96277a570cd32432fjklfef
+        // | |\ \
+        // | | |/
+        // | |/|
+
+        // Parse out and remove the commit hashes.
+        let mut chunks: Vec<(CommitHash, Vec<&str>)> = Vec::new();
+        for mut raw_chunk in raw_chunks {
+            // The commit hash should be the only alphanumeric sequence in
+            // the chunk and it should be in the first line.
+            let matches: Vec<_> = COMMIT_HASH_REGEX.find_iter(raw_chunk[0]).collect();
+            if matches.len() != 1 {
+                bail!(
+                    "matched {} commit hashes in graph chunk:\n{:?}",
+                    matches.len(),
+                    raw_chunk
+                );
+            }
+            let mattch = matches.first().unwrap();
+            let hash = CommitHash::new(mattch.as_str());
+
+            // We only want the graph bit, strip out the commit hash which we
+            // only put in there as an anchor for this parsing.
+            raw_chunk[0] = &raw_chunk[0][..mattch.range().start];
+
+            chunks.push((hash, raw_chunk));
+        }
+        Ok(chunks)
+    }
+}
+
 // Represents the buffer showing the current status of all the commits being tested.
 struct OutputBuffer {
     // Pre-rendered lines containing static information (graph, commit log info etc).
@@ -171,17 +242,10 @@ impl OutputBuffer {
         // the graph logic can still sometimes occupy more more lines when
         // history is very complex.
         //
-        // So here's the idea: we just git git to dump out the graph. We divide
-        // this graph buffer into chunks that begin at the start of a line that
-        // contains a commit hash. This will look something like:
-        /*
-
-         | * |   e96277a570cd32432fjklfef
-         | |\ \
-         | | |/
-         | |/|
-
-        */
+        // So here's the idea: we just get git to dump out the graph, we divide
+        // it into chunks that start with the '*' that identifies each commit.
+        // Then we insert the extra information to the graph chunks.
+        //
         // We want to display a) some more human-readable information about the
         // commit (i.e. what you get from logging with a more informative
         // --format) and b) our injected test status data. Overall this will
@@ -190,46 +254,10 @@ impl OutputBuffer {
         // buffer pairwise. If it has more lines then we will need to stretch
         // out the graph vertically to make space first.
 
-        let graph_buf = repo
-            .log_graph(range_spec.as_ref(), "%H\n")
-            .await?
-            // OsStr doesn't have a proper API, luckily we can expect utf-8.
-            .into_string()
-            .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?;
-        let graph_buf = graph_buf.trim();
-
-        // Each chunk is a Vec of lines.
-        let mut cur_chunk = Vec::<&str>::new();
-        let mut chunks = Vec::<Vec<&str>>::new();
-        for line in graph_buf.split('\n') {
-            // --graph uses * to represent a node in the DAG.
-            if line.contains('*') && !cur_chunk.is_empty() {
-                chunks.push(mem::take(&mut cur_chunk));
-            }
-            if !line.is_empty() {
-                cur_chunk.push(line);
-            }
-        }
-        if !cur_chunk.is_empty() {
-            chunks.push(cur_chunk);
-        }
-
         let mut lines = Vec::new();
         let mut status_commits = HashMap::new();
-        for mut chunk in chunks {
-            // The commit hash should be the only alphanumeric sequence in
-            // the chunk and it should be in the first line.
-            let matches: Vec<_> = COMMIT_HASH_REGEX.find_iter(chunk[0]).collect();
-            if matches.len() != 1 {
-                bail!(
-                    "matched {} commit hashes in graph chunk:\n{:?}",
-                    matches.len(),
-                    chunk
-                );
-            }
-            let mattch = matches.first().unwrap();
-            let hash = CommitHash::new(mattch.as_str());
-
+        let graph_buf = GraphBuffer::new(repo, range_spec).await?;
+        for (hash, mut chunk) in graph_buf.chunks()? {
             let log_n1_os = repo
                 .log_n1(&hash, log_format)
                 .await
@@ -241,11 +269,6 @@ impl OutputBuffer {
             // We're gonna add our own newlines in so we don't need the one that
             // Git printed.
             let log_n1 = log_n1.strip_suffix('\n').unwrap_or(&log_n1);
-
-            // We only want the graph bit, strip out the commit hash which we
-            // only put in there as an anchor for this algorithm.
-            chunk[0] = &chunk[0][..mattch.range().start];
-
             let mut info_lines: Vec<&str> = log_n1.split('\n').collect();
 
             // Here's where we'll inject the live status
