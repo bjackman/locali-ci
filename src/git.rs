@@ -292,7 +292,7 @@ pub trait Worktree: Debug {
         range_spec: S,
         format_spec: T,
         style: LogStyle,
-    ) -> anyhow::Result<OsString>
+    ) -> anyhow::Result<Vec<u8>>
     where
         S: AsRef<OsStr>,
         T: AsRef<OsStr>,
@@ -313,7 +313,7 @@ pub trait Worktree: Debug {
                 format_spec.as_ref(),
             ))?
             .stdout;
-        Ok(OsString::from_vec(stdout))
+        Ok(stdout)
     }
 
     async fn log_n1<S, T>(&self, rev_spec: S, format_spec: T) -> anyhow::Result<OsString>

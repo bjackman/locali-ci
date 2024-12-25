@@ -149,9 +149,9 @@ impl GraphBuffer {
         // Get the raw buffer.
         let raw_buf = repo
             .log(range_spec.as_ref(), "%H\n", LogStyle::WithGraph)
-            .await?
-            // OsStr doesn't have a proper API, luckily we can expect utf-8.
-            .into_string()
+            .await?;
+        // OsStr doesn't have a proper API, luckily we can expect utf-8.
+        let raw_buf = String::from_utf8(raw_buf)
             .map_err(|_err| anyhow::anyhow!("got non-utf8 output from git log"))?;
         Ok(Self { raw_buf })
     }
