@@ -5,51 +5,17 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 ## Bugs (high to low priority):
 
  - `--http-sockaddr=localhost:8080` still gives you a hostname-based URL.
- - It's pretty slow on my work computer. Git performance is crippled by security
-   monitoring on that computer, and the single-thread performance is very poor.
-   But it doesn't seem like Limmat has to be slow.
- - Sometimes when I've run this thing overnight, the next day I noticed that it
-   was no longer updating the terminal UI. It still seems to actually be running
-   the tests. I suspect some task somewhere is panicking, and I haven't done the
-   error handling properly to cause this to feed back to crashing the main
-   thread. I didn't think of this possibility before overwriting the logs that
-   would have had the panic details in there, so I'll just have to wait and see
-   until it happens again.
- - `should_not_cache` test is flaky; occasionally the detector triggers that
-   suggests two tests were sharing the same worktree. _Probably_ a bug in the
-   test.
-
-   I added some hacks to try and debug this. With
-
-   ```
-   RUST_LOG=info TMPDIR=/tmp/mytmp/ LIMMAT_TESTS_LEAK_RESULT_DB=1 while cargo test -- --nocapture; continue ; end`
-   ```
-
-   I'm able to reproduce it and see the `-x` output of the test scripts but they
-   don't make any sense to me, I got stuck and decided to work on something
-   else.
-
-   OK update, I can't reproduce it like that now that I fixed a bunch of related
-   bugs, but I still sometimes can with `cargo stress`. I don't fukken know this
-   is driving me mad.
  - No integration tests for `test` subcommand.
  - No integration tests for the UI.
  - No tests for checking config cache...
  - No tests for actual contents of config cache. (E.g: Nothing to catch bug
    where we deleted stdouts and stderrs).
- - Result database entries are stored with a hash of the test configuration. If
-   the hash changes, the test needs to be re-run i.e. the cached is invalidated.
-   But, this hash is not strong, this will break if there are collisions. We
-   should store the whole config.
  - Has like a billion dependencies, they can't all be necessary.
  - Unimportant bug: some tests get run twice by `cargo test`, because of
    `test_log`/`test_case` interaction.
 
 ## Needed features (high to low priority):
 
- - Store output artifacts.
-   - Provide a way to limit the size of the result cache.
-   - Location of this should be configurable.
  - Need a way to install it without `cargo`.
  - Need a way to view stderr from web UI.
  - Need a way for test command to report "error" as distinguished from failure.
