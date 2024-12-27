@@ -347,7 +347,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::{git::Commit, test::Test};
+    use crate::{git::Commit, test::test_utils::TestBuilder};
 
     use super::*;
 
@@ -360,7 +360,10 @@ mod tests {
         // getting killed in the middle of writing.
         // Best way to make sure we are corrupting data that the database will
         // really is to have the database write it in the first place.
-        let test_case = TestCase::new(Commit::arbitrary(), Arc::new(Test::arbitrary()));
+        let test_case = TestCase::new(
+            Commit::arbitrary(),
+            Arc::new(TestBuilder::new("my_test", "", [""]).build()),
+        );
         let json_path = {
             let mut output = match db.lookup(&test_case).await.unwrap() {
                 LookupResult::FoundResult(_) => panic!("Found result in empty database"),

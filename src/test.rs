@@ -70,6 +70,12 @@ impl TestName {
     }
 }
 
+impl<S: Into<String>> From<S> for TestName {
+    fn from(s: S) -> TestName {
+        TestName::new(s.into())
+    }
+}
+
 impl AsRef<Path> for TestName {
     fn as_ref(&self) -> &Path {
         Path::new(OsStr::new(&self.0))
@@ -139,20 +145,6 @@ impl Test {
             .get(&ResourceKey::Worktree)
             .unwrap_or(&0)
             != &0
-    }
-
-    #[cfg(test)]
-    pub fn arbitrary() -> Self {
-        Test {
-            name: TestName::new("my_test"),
-            program: OsString::from("bash"),
-            args: vec!["yer".into()],
-            needs_resources: [].into(),
-            shutdown_grace_period: Duration::from_secs(5),
-            cache_policy: CachePolicy::ByCommit,
-            config_hash: "123".to_string(),
-            depends_on: vec![],
-        }
     }
 }
 
@@ -962,6 +954,73 @@ pub struct Notification {
 }
 
 #[cfg(test)]
+pub mod test_utils {
+    use super::*;
+
+    // For tests that want to directly build Tests.
+    pub struct TestBuilder {
+        name: TestName,
+        program: OsString,
+        args: Vec<OsString>,
+        needs_resources: HashMap<ResourceKey, usize>,
+        cache_policy: CachePolicy,
+        depends_on: Vec<TestName>,
+    }
+
+    impl TestBuilder {
+        pub fn new(
+            name: impl Into<TestName>,
+            program: impl Into<OsString>,
+            args: impl IntoIterator<Item = impl Into<OsString>>,
+        ) -> Self {
+            Self {
+                name: name.into(),
+                program: program.into(),
+                args: args.into_iter().map(|a| a.into()).collect(),
+                needs_resources: HashMap::new(),
+                cache_policy: CachePolicy::ByCommit,
+                depends_on: vec![],
+            }
+        }
+
+        pub fn needs_resources(
+            mut self,
+            resources: impl IntoIterator<Item = (ResourceKey, usize)>,
+        ) -> Self {
+            for (key, count) in resources.into_iter() {
+                self.needs_resources.insert(key, count);
+            }
+            self
+        }
+
+        pub fn depends_on(mut self, deps: impl IntoIterator<Item = impl Into<TestName>>) -> Self {
+            for dep in deps.into_iter() {
+                self.depends_on.push(dep.into());
+            }
+            self
+        }
+
+        pub fn cache_policy(mut self, cache_policy: CachePolicy) -> Self {
+            self.cache_policy = cache_policy;
+            self
+        }
+
+        pub fn build(self) -> Test {
+            Test {
+                name: self.name,
+                program: self.program,
+                args: self.args,
+                needs_resources: self.needs_resources,
+                shutdown_grace_period: Duration::from_secs(5),
+                cache_policy: self.cache_policy,
+                depends_on: self.depends_on,
+                config_hash: "fake_config_hash".into(),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::{
         cmp::max,
@@ -987,6 +1046,7 @@ mod tests {
     use itertools::izip;
     use tempfile::TempDir;
     use test_case::test_case;
+    use test_utils::TestBuilder;
     use tokio::{
         select,
         time::{sleep, sleep_until, Instant},
@@ -1181,20 +1241,13 @@ mod tests {
             needs_worktree: bool,
             depends_on: impl IntoIterator<Item = TestName>,
         ) -> Test {
-            Test {
-                name: self.test_name.clone(),
-                program: self.program(),
-                args: self.args(),
-                needs_resources: if needs_worktree {
-                    [(ResourceKey::Worktree, 1)].into()
-                } else {
-                    [].into()
-                },
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy,
-                config_hash: "0".to_string(),
-                depends_on: depends_on.into_iter().collect(),
+            let mut builder = TestBuilder::new(self.test_name.clone(), self.program(), self.args())
+                .cache_policy(cache_policy)
+                .depends_on(depends_on);
+            if needs_worktree {
+                builder = builder.needs_resources([(ResourceKey::Worktree, 1)]);
             }
+            builder.build()
         }
     }
 
@@ -1783,19 +1836,12 @@ mod tests {
             ],
         )]);
         // And a test that requires one of those tokens.
-        let tests = [Test {
-            name: TestName::new("my_test"),
-            program: script.program(),
-            args: script.args(),
-            needs_resources: HashMap::from([
+        let tests = [TestBuilder::new("my_test", script.program(), script.args())
+            .needs_resources([
                 (ResourceKey::Worktree, 1),
                 (ResourceKey::UserToken("foo".into()), 1),
-            ]),
-            shutdown_grace_period: Duration::from_secs(5),
-            cache_policy: CachePolicy::ByCommit,
-            config_hash: "0".to_string(),
-            depends_on: vec![],
-        }];
+            ])
+            .build()];
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let m = Manager::new(
             repo.clone(),
@@ -1845,54 +1891,41 @@ mod tests {
         // there to be _not_ depended on.
         // The third dumps its environment into a file keyed by the test commit.
         let tests = Dag::new([
-            Arc::new(Test {
-                name: TestName::new("dep"),
-                program: OsString::from("bash"),
-                args: vec!["-c".into(), OsString::from("true")],
-                needs_resources: [
+            Arc::new(
+                TestBuilder::new("dep", "bash", ["-c".into(), OsString::from("true")])
+                    .needs_resources([
+                        (ResourceKey::Worktree, 1),
+                        (ResourceKey::UserToken("my_resource".into()), 2),
+                    ])
+                    .build(),
+            ),
+            Arc::new(
+                TestBuilder::new("not_dep", "bash", ["-c".into(), OsString::from("true")])
+                    .needs_resources([
+                        (ResourceKey::Worktree, 1),
+                        (ResourceKey::UserToken("my_resource".into()), 2),
+                    ])
+                    .build(),
+            ),
+            Arc::new(
+                TestBuilder::new(
+                    "my_test",
+                    "bash",
+                    [
+                        "-c".into(),
+                        OsString::from(format!(
+                            "env >> {0:?}/${{LIMMAT_COMMIT}}_env.txt",
+                            temp_dir.path()
+                        )),
+                    ],
+                )
+                .needs_resources([
                     (ResourceKey::Worktree, 1),
                     (ResourceKey::UserToken("my_resource".into()), 2),
-                ]
-                .into(),
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy: CachePolicy::ByCommit,
-                config_hash: "0".to_string(),
-                depends_on: vec![],
-            }),
-            Arc::new(Test {
-                name: TestName::new("not_dep"),
-                program: OsString::from("bash"),
-                args: vec!["-c".into(), OsString::from("true")],
-                needs_resources: [
-                    (ResourceKey::Worktree, 1),
-                    (ResourceKey::UserToken("my_resource".into()), 2),
-                ]
-                .into(),
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy: CachePolicy::ByCommit,
-                config_hash: "0".to_string(),
-                depends_on: vec![],
-            }),
-            Arc::new(Test {
-                name: TestName::new("my_test"),
-                program: OsString::from("bash"),
-                args: vec![
-                    "-c".into(),
-                    OsString::from(format!(
-                        "env >> {0:?}/${{LIMMAT_COMMIT}}_env.txt",
-                        temp_dir.path()
-                    )),
-                ],
-                needs_resources: [
-                    (ResourceKey::Worktree, 1),
-                    (ResourceKey::UserToken("my_resource".into()), 2),
-                ]
-                .into(),
-                shutdown_grace_period: Duration::from_secs(5),
-                cache_policy: CachePolicy::ByCommit,
-                config_hash: "0".to_string(),
-                depends_on: vec![TestName("dep".into())],
-            }),
+                ])
+                .depends_on(["dep"])
+                .build(),
+            ),
         ])
         .expect("couldn't build test DAG");
         let resource_pools = Pools::new(

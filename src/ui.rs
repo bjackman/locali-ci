@@ -442,7 +442,7 @@ impl OutputBuffer {
 #[cfg(test)]
 mod tests {
     use core::str;
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use googletest::{expect_that, prelude::eq};
 
@@ -452,23 +452,17 @@ mod tests {
             test_utils::{TempRepo, WorktreeExt},
             Commit,
         },
-        test::{CachePolicy, ExitCode, Test, TestName, TestResult},
+        test::{test_utils::TestBuilder, CachePolicy, ExitCode, Test, TestResult},
     };
 
     use super::*;
 
     fn fake_test(name: &str, cache_policy: CachePolicy) -> Arc<Test> {
-        Arc::new(Test {
-            name: TestName::new(name),
-            cache_policy,
-            // Don't care abou any of the other fields in these tests
-            config_hash: "0".to_string(),
-            program: "".into(),
-            args: vec![],
-            needs_resources: [].into(),
-            shutdown_grace_period: Duration::from_secs(1),
-            depends_on: vec![],
-        })
+        Arc::new(
+            TestBuilder::new(name, "", [""])
+                .cache_policy(cache_policy)
+                .build(),
+        )
     }
 
     fn fake_notif(commit_hash: &CommitHash, test: &Arc<Test>, status: TestStatus) -> Notification {
