@@ -191,14 +191,18 @@ struct LimmatChild<'a> {
 
 impl<'a> LimmatChild<'a> {
     // Block until the process has terminated and return an error if isn't successful.
-    async fn expect_success(&mut self) -> anyhow::Result<()> {
+    async fn expect_exit_code(&mut self, want: i32) -> anyhow::Result<()> {
         let status = self.child.wait().await.expect("error waiting for child");
-        if !status.success() {
+        let got = match status.code() {
+            None => bail!("child terminated by signal {}", status.signal().unwrap()),
+            Some(got) => got,
+        };
+        if got != want {
             if !self.dump_output_on_panic {
                 eprintln!("Child Limmat process failed, dumping log");
                 self.dump_log();
             }
-            bail!("Child process didn't succed: {:?}", status);
+            bail!("child exited with {}, want {}", got, want);
         }
         Ok(())
     }
@@ -508,7 +512,7 @@ async fn should_invalidate_cache_when_dep_changes() {
 async fn should_run_test(config: &str) {
     let builder = LimmatChildBuilder::new(config).await.unwrap();
     let mut child = builder.start(["test", "my_test"]).await.unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -558,7 +562,7 @@ async fn should_run_test_with_stored_results() {
         .unwrap()
         .db_dir(db_dir.path().to_owned());
     let mut child = builder.start(["test", "my_other_dep"]).await.unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -571,7 +575,7 @@ async fn should_run_test_with_stored_results() {
 
     // Now run the actual test, reusing the result DB and the same builder
     let mut child = builder.start(["test", "my_test"]).await.unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -611,7 +615,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         .start(["get", "--run", "my_test", "HEAD^"])
         .await
         .unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -624,7 +628,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         .start(["get", "my_test", "HEAD^", "stderr"])
         .await
         .unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -637,7 +641,7 @@ async fn should_find_output(want_stdout: &str, want_stderr: &str) {
         .start(["artifacts", "my_test", "HEAD^"])
         .await
         .unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -682,7 +686,7 @@ async fn should_find_not_race() {
     }
 
     for mut child in get_children.into_iter() {
-        timeout(Duration::from_secs(5), child.expect_success())
+        timeout(Duration::from_secs(5), child.expect_exit_code(0))
             .await
             .unwrap()
             .unwrap();
@@ -716,7 +720,7 @@ async fn limmat_artifacts_test_cmd() {
     .unwrap()
     .env("TMPDIR", temp_dir.path().as_os_str());
     let mut child = builder.start(["test", "my_test"]).await.unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -768,7 +772,7 @@ async fn artifacts_cmd() {
     .unwrap()
     .env("TMPDIR", temp_dir.path().as_os_str());
     let mut child = builder.start(["test", "my_test"]).await.unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -829,7 +833,7 @@ async fn dependency_artifacts_get_cmd() {
         .start(["get", "--run", "main", "HEAD^", "stdout"])
         .await
         .unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
@@ -846,7 +850,7 @@ async fn dependency_artifacts_test_cmd() {
         .await
         .unwrap();
     let mut child = builder.start(["test", "main"]).await.unwrap();
-    timeout(Duration::from_secs(5), child.expect_success())
+    timeout(Duration::from_secs(5), child.expect_exit_code(0))
         .await
         .expect("child didn't shut down")
         .unwrap();
