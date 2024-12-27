@@ -208,6 +208,11 @@ impl<'a> LimmatChild<'a> {
             .context("reading child stdout")
     }
 
+    fn stderr(&self) -> anyhow::Result<String> {
+        fs::read_to_string(self.builder.temp_dir.path().join("stderr.txt"))
+            .context("reading child stderr")
+    }
+
     fn dump_log(&self) {
         let file = match File::open(&self.log_path) {
             // Don't panic while panicking, it's messy
@@ -225,6 +230,14 @@ impl<'a> LimmatChild<'a> {
                 line.unwrap_or_else(|e| format!("<read error: {}>", e))
             );
         }
+        eprintln!(
+            "\nlimmat stdout:\n{}",
+            self.stdout().unwrap_or("<error reading stdout>".into())
+        );
+        eprintln!(
+            "\nlimmat stderr:\n{}",
+            self.stderr().unwrap_or("<error reading stderr>".into())
+        );
     }
 }
 
