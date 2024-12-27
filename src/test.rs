@@ -1,7 +1,7 @@
 use core::{error::Error, fmt, fmt::Display};
 use std::{
     borrow::Borrow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
     fmt::{Debug, Formatter},
     path::Path,
@@ -113,6 +113,7 @@ pub struct Test {
     // Manager setup will fail if there are cycles in this graph or named tests
     // do not exist.
     pub depends_on: Vec<TestName>,
+    pub error_exit_codes: HashSet<ExitCode>,
 }
 
 impl Test {
@@ -756,6 +757,9 @@ impl<'a> TestJob {
             // write this block as a single chain of methods? But it seems ridiculous to me.
             {
                 let exit_code = wait_result.context("awaiting child")?.code_not_killed()?;
+                if self.test_case.test.error_exit_codes.contains(&exit_code) {
+                    return Err(TestInconclusive::ErrorExitCode(exit_code));
+                }
                 Ok(Arc::new(
                     output.set_result(&TestResult { exit_code }).await?,
                 ))
@@ -913,7 +917,8 @@ pub type TestOutcome = Result<Arc<DatabaseEntry>, TestInconclusive>;
 pub enum TestInconclusive {
     Canceled,
     // anyhow::Error doesn't implement Clone.
-    Error(String), // This includes the test getting terminated by a signal.
+    Error(String),           // This includes the test getting terminated by a signal.
+    ErrorExitCode(ExitCode), // The test exited with one of its configured error_exit_codes.
 }
 
 impl Display for TestInconclusive {
@@ -921,6 +926,9 @@ impl Display for TestInconclusive {
         match self {
             Self::Canceled => write!(f, "Canceled"),
             Self::Error(msg) => write!(f, "Error while testing - {:?}", msg),
+            Self::ErrorExitCode(code) => {
+                write!(f, "Exited with {}, which is in error_exit_codes", code)
+            }
         }
     }
 }
@@ -1015,6 +1023,7 @@ pub mod test_utils {
                 cache_policy: self.cache_policy,
                 depends_on: self.depends_on,
                 config_hash: "fake_config_hash".into(),
+                error_exit_codes: HashSet::new(),
             }
         }
     }

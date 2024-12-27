@@ -135,12 +135,21 @@ results.
 If the test is terminated by a signal, it isn't considered to have produced a
 result: instead of "success" or "failure" it's an "error". Errors aren't cached.
 
-> [!TIP]
-> You can use this as a hack to prevent environmental failures from
-> being stored as test failures. For example, in my own scripts I use `kill
-> -SIGUSR1 $$` if no devices are available in my company's test lab. In a later
-> version I'd like to formalize this hack as a feature, using designated exit
-> codes instead of signal-termination.
+You you can trigger un-cached "error" results yourself, by setting
+`error_exit_codes` and then returning one of those codes from your command. For
+example:
+
+```toml
+[[tests]]
+name = "container_build"
+error_exit_codes = [123]
+command = """
+# Don't pollute the database we if we run on a machine without Podman installed.
+which -s podman || exit 123
+podman build .
+"""
+```
+
 
 The configuration for each test and its dependencies are hashed, and if this
 hash changes then the database entry is invalidated.

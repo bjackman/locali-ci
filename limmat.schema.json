@@ -120,6 +120,15 @@
             "type": "string"
           }
         },
+        "error_exit_codes": {
+          "description": "If the command exits with an error code listed in this field, instead of being considered a \"failure\", it's considered an \"error\". Errors are not cached - the erroring test will be re-run when Limmat restarts. You can use this to report environmental failures such as dependencies missing fom the host system. 0 is not allowed.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
         "name": {
           "type": "string"
         },

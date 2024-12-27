@@ -856,3 +856,44 @@ async fn dependency_artifacts_test_cmd() {
         .unwrap();
     expect_that!(child.stdout().unwrap(), eq("ye mighty\nand dispair\n"));
 }
+
+#[googletest::test]
+#[tokio::test]
+async fn error_exit_code_tests() {
+    let temp_dir = TempDir::new().unwrap();
+    let builder = LimmatChildBuilder::new(format!(
+        r##"
+            num_worktrees = 1
+            [[tests]]
+            name = "test"
+            error_exit_codes = [2]
+            command = "echo >> {}/ran; exit 2"
+        "##,
+        temp_dir.path().display(),
+    ))
+    .await
+    .unwrap();
+
+    let mut child = builder.start(["test", "test"]).await.unwrap();
+    // `limmat test` exits with 1 for any error.
+    timeout(Duration::from_secs(5), child.expect_exit_code(1))
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    assert_that!(
+        fs::read_to_string(temp_dir.path().join("ran")),
+        ok(eq("\n"))
+    );
+
+    // Run it a second time, it should get run again.
+    let mut child = builder.start(["test", "test"]).await.unwrap();
+    timeout(Duration::from_secs(5), child.expect_exit_code(1))
+        .await
+        .expect("child didn't shut down")
+        .unwrap();
+    expect_that!(
+        fs::read_to_string(temp_dir.path().join("ran")),
+        ok(eq("\n\n")),
+        "Erroring test not re-ran?"
+    );
+}

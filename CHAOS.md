@@ -30,7 +30,6 @@ Stuff that would let me clean up examples and the README:
       when the relevant test failed. Should it just repeat the exit code of the
       test? I think so,  but arguably it's kinda confusing because you can't
       tell if that's the exit code produced by limmat or by the test.
- - Need a way for test command to report "error" as distinguished from failure.
  - Support configuring a shell, with the default based on the user's
    system-level configuration (`getent`).
  - Need a way to garbage-collect old database entries.

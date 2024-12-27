@@ -17,7 +17,7 @@ use sha3::{Digest, Sha3_256};
 use crate::{
     dag::{Dag, GraphNode},
     resource::{self, Pools, ResourceKey},
-    test::{self, CachePolicy, TestDag, TestName},
+    test::{self, CachePolicy, ExitCode, TestDag, TestName},
     util::DigestHasher,
 };
 
@@ -96,6 +96,13 @@ pub struct Test {
     cache: CachePolicy,
     #[serde(default)]
     depends_on: Vec<String>,
+    #[serde(default)]
+    /// If the command exits with an error code listed in this field, instead of
+    /// being considered a "failure", it's considered an "error". Errors are not
+    /// cached - the erroring test will be re-run when Limmat restarts. You can
+    /// use this to report environmental failures such as dependencies missing
+    /// fom the host system. 0 is not allowed.
+    error_exit_codes: Vec<ExitCode>,
 }
 
 fn default_requires_worktree() -> bool {
@@ -155,6 +162,11 @@ impl Test {
         let config_hash = hex::encode(hasher.digest.finalize());
         debug!("Config hash for {}: {:?}", self.name, config_hash);
 
+        let error_exit_codes: HashSet<_> = self.error_exit_codes.iter().cloned().collect();
+        if error_exit_codes.contains(&0) {
+            bail!("error_exit_codes must not contain 0");
+        }
+
         Ok(test::Test {
             name: TestName::new(self.name.clone()),
             program: self.command.program(),
@@ -164,6 +176,7 @@ impl Test {
             cache_policy: self.cache,
             config_hash,
             depends_on: self.depends_on.iter().map(TestName::new).collect(),
+            error_exit_codes,
         })
     }
 }
