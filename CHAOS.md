@@ -16,10 +16,47 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
 
 ## Needed features (high to low priority):
 
+Stuff that would let me clean up examples and the README:
+
+ - Probably want a (default?) option to merge stderr and stdout.
+   I started implementing this as a `get` command but there's a few things to
+   think through carefully.
+    - What should the CLI be? I think `get` was a bit weird. Usecases are:
+      - Testing Limmat
+      - Grabbing cached artifacts.
+      - Checking the result of tests in scripts
+      The artifacts one is the most "real" I think. But, we don't even support
+      saving artifacts yet. Next question is - I think this command should fail
+      when the relevant test failed. Should it just repeat the exit code of the
+      test? I think so,  but arguably it's kinda confusing because you can't
+      tell if that's the exit code produced by limmat or by the test.
+ - Need a way for test command to report "error" as distinguished from failure.
+ - Support configuring a shell, with the default based on the user's
+   system-level configuration (`getent`).
+ - Need a way to garbage-collect old database entries.
+ - Probably need to have the system handle cleaning the worktree for you. If
+   your build system etc can't be trusted to avoid polluting the workspace/being
+   resilient against a polluted workspace, you'll wanna put `git clean -fdx` in
+   your test script. However, once we have the `test` subcommand we'll also be
+   running in the "main" worktree where the user probably doesn't wanna do that.
+   So we probably need a higher-level notion of "cleaning the worktree" that's
+   aware of this.
+
+Stuff that seems fun and useful:
+
+ - Provide a
+   [jobserver](https://www.gnu.org/software/make/manual/html_node/Job-Slots.html).
+   Issue with this will be when test commands crash and leak job slots. I think
+   a reasonable workaround for that would just be to reset the slot count when
+   the test manager becomes `settled` (this assumes that all test scripts can
+   make progress on a single thread when the job server starves them, as is the
+   case for Make, since all jobs have one implicit job slot).
+
+Other stuff that is either less important (towards the bottom) or just seems
+annoying to figure out (near the top):
+
  - Need a way to install it without `cargo`.
  - Need a way to view stderr from web UI.
- - Need a way for test command to report "error" as distinguished from failure.
- - Maybe a "skipped" status that doesn't show up in the UI would be useful.
  - Need a way to delete stored results.
 
    (Or do we? If we had an error reporting
@@ -47,34 +84,7 @@ EYE CONTACT WITH THE UNPUNCTUATED ALLCAPS INTRODUCTION
    ```
    In this case, does the test get an exclusive copy of the config repo? Should
    that be configurable?
- - Probably want a (default?) option to merge stderr and stdout.
-   I started implementing this as a `get` command but there's a few things to
-   think through carefully.
-    - What should the CLI be? I think `get` was a bit weird. Usecases are:
-      - Testing Limmat
-      - Grabbing cached artifacts.
-      - Checking the result of tests in scripts
-      The artifacts one is the most "real" I think. But, we don't even support
-      saving artifacts yet. Next question is - I think this command should fail
-      when the relevant test failed. Should it just repeat the exit code of the
-      test? I think so,  but arguably it's kinda confusing because you can't
-      tell if that's the exit code produced by limmat or by the test.
- - Support configuring a shell, with the default based on the user's
-   system-level configuration (`getent`).
- - Probably need to have the system handle cleaning the worktree for you. If
-   your build system etc can't be trusted to avoid polluting the workspace/being
-   resilient against a polluted workspace, you'll wanna put `git clean -fdx` in
-   your test script. However, once we have the `test` subcommand we'll also be
-   running in the "main" worktree where the user probably doesn't wanna do that.
-   So we probably need a higher-level notion of "cleaning the worktree" that's
-   aware of this.
- - Provide a
-   [jobserver](https://www.gnu.org/software/make/manual/html_node/Job-Slots.html).
-   Issue with this will be when test commands crash and leak job slots. I think
-   a reasonable workaround for that would just be to reset the slot count when
-   the test manager becomes `settled` (this assumes that all test scripts can
-   make progress on a single thread when the job server starves them, as is the
-   case for Make, since all jobs have one implicit job slot).
+ - Maybe a "skipped" status that doesn't show up in the UI would be useful.
  - Sometimes you have a test that needs access to the worktree but not
    exclusive. In that case we could run multiple jobs in parallel in the same
    worktree.
