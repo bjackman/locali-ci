@@ -158,3 +158,44 @@ impl<D: digest::Digest> std::hash::Hasher for DigestHasher<D> {
         panic!("don't call this");
     }
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct ByteSize(usize);
+
+impl FromStr for ByteSize {
+    type Err = String;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let upper = input.to_ascii_uppercase();
+        let multiplier = if upper.ends_with('K') {
+            1024
+        } else if upper.ends_with('M') {
+            1024 * 1024
+        } else if upper.ends_with('G') {
+            1024 * 1024 * 1024
+        } else {
+            1
+        };
+
+        let number_part = if multiplier > 1 {
+            &input[..input.len() - 1] // Remove the suffix.
+        } else {
+            input
+        };
+
+        number_part
+            .parse::<usize>()
+            .map(|n| ByteSize(n * multiplier))
+            .map_err(|e| format!("invalid size format {input:?}: {e}"))
+    }
+}
+
+impl ByteSize {
+    pub fn from_mib(mib: usize) -> Self {
+        Self(mib.saturating_mul(1024 * 1024))
+    }
+
+    pub fn to_bytes(self) -> usize {
+        self.0
+    }
+}

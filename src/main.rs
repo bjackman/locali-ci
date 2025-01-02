@@ -29,7 +29,7 @@ use test::{DepDatabaseEntries, Test};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
-use util::{DisplayablePathBuf, ErrGroup};
+use util::{ByteSize, DisplayablePathBuf, ErrGroup};
 
 use crate::git::Worktree;
 use crate::terminal::TerminalSizeWatcher;
@@ -636,8 +636,6 @@ async fn artifacts(
     Ok(ExitCode::SUCCESS)
 }
 
-const MEGABYTE: u64 = 1024 * 1024;
-
 // Hack so we can use anyhow::Result infrastructure for convenient coding but
 // also control the exit code directly in some cases: return a result - if it's
 // an error we just use the default error exit code.
@@ -656,7 +654,7 @@ async fn do_main() -> anyhow::Result<ExitCode> {
                 .log_to_file(FileSpec::default().directory(log_dir))
                 .create_symlink(log_dir.join("latest.log"))
                 .rotate(
-                    Criterion::Size(64 * MEGABYTE),
+                    Criterion::Size(ByteSize::from_mib(64).to_bytes() as u64),
                     Naming::TimestampsDirect,
                     Cleanup::KeepLogFiles(10),
                 )
