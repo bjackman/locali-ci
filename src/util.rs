@@ -248,3 +248,18 @@ impl Sum for ByteSize {
         sum
     }
 }
+
+impl fmt::Display for ByteSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let size = self.0 as f64;
+        if size >= 1024.0 * 1024.0 * 1024.0 {
+            write!(f, "{:.2}GiB", size / (1024.0 * 1024.0 * 1024.0))
+        } else if size >= 1024.0 * 1024.0 {
+            write!(f, "{:.2}MiB", size / (1024.0 * 1024.0))
+        } else if size >= 1024.0 {
+            write!(f, "{:.2}KiB", size / 1024.0)
+        } else {
+            write!(f, "{}B", size as usize)
+        }
+    }
+}

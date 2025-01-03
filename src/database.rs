@@ -2,12 +2,14 @@ use std::{
     fs::{create_dir, create_dir_all, File, OpenOptions},
     io::ErrorKind::AlreadyExists,
     path::{Path, PathBuf},
+    pin::pin,
     process::Stdio,
     time::SystemTime,
 };
 
 use anyhow::{bail, Context, Result};
-use futures::future::join_all;
+use async_stream::try_stream;
+use futures::{future::join_all, Stream, StreamExt as _};
 #[allow(unused_imports)]
 use log::debug;
 use log::info;
@@ -162,14 +164,40 @@ impl Database {
         bail!("too much database contention, something fishy going on")
     }
 
+    // Stream of paths where we expect to find result.json files. They might not
+    // be there or they might be invalid.
+    async fn json_paths(&self) -> impl Stream<Item = anyhow::Result<PathBuf>> + use<'_> {
+        try_stream! {
+            // Loop over revisions.
+            let mut rev_dirents = read_dir(&self.base_dir)
+                .await
+                .context("reading DB base directory")?;
+            while let Some(rev_dirent) = rev_dirents
+                .next_entry()
+                .await
+                .context("reading entry from DB base directory")?
+            {
+                let rev_path = self.base_dir.join(rev_dirent.file_name());
+
+                // Loop over tests for this revision
+                let mut test_dirents = read_dir(&rev_path).await.context("reading rev directory")?;
+                while let Some(test_dirent) = test_dirents
+                    .next_entry()
+                    .await
+                    .context("reading entry from rev directory")?
+                {
+                    let test_path = rev_path.join(test_dirent.file_name());
+                    yield test_path.join("result.json");
+                }
+            }
+        }
+    }
+
     // Delete old entries until the overall disk usage of of the database,
     // without being very robust against concurrency. This can fail if
     // the target size is small and there are tests in progress (as well as
     // failing if the platform gives us any errors).
     pub async fn gc(&self, target_size: ByteSize) -> anyhow::Result<()> {
-        let mut dirents = read_dir(&self.base_dir)
-            .await
-            .context("reading directory")?;
         // Loop over consistent database entries - if there are directories in
         // the DB that don't have a result.json in them we can't do much in
         // theory since it could have just been created by someone who's about
@@ -177,11 +205,12 @@ impl Database {
         // something like delete them if we're sure significant time passed
         // since the dir was created when the computer was awake.
         let mut entries = Vec::new();
-        while let Some(dirent) = dirents.next_entry().await.context("reading directory")? {
-            let path = self.base_dir.join(dirent.file_name());
+        let mut json_paths = pin!(self.json_paths().await);
+        while let Some(path) = json_paths.next().await {
+            let path = path.context("finding JSON path")?;
             match DatabaseEntry::open_stable(&path).await {
                 Err(err) => info!(
-                    "Couldn't open {}, not garbage-collecting: {err}",
+                    "Couldn't open {}, not garbage-collecting: {err:#}",
                     path.display()
                 ),
                 Ok(entry) => entries.push(entry),
@@ -190,6 +219,7 @@ impl Database {
 
         // How much disk are we currently using?
         let mut disk_usage: ByteSize = entries.iter().map(|e| e.disk_usage()).sum();
+        info!("Database disk usage: {disk_usage}");
         if disk_usage <= target_size {
             return Ok(()); // Skip sorting.
         }
