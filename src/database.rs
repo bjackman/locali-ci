@@ -3,6 +3,7 @@ use std::{
     io::ErrorKind::AlreadyExists,
     path::{Path, PathBuf},
     process::Stdio,
+    time::SystemTime,
 };
 
 use anyhow::{bail, Context, Result};
@@ -35,6 +36,7 @@ struct TestResultEntry {
     config_hash: ConfigHash,
     result: TestResult,
     disk_usage: ByteSize,
+    written: SystemTime,
 }
 
 pub enum LookupResult {
@@ -247,6 +249,7 @@ impl DatabaseEntry {
                 config_hash: "FAKE CONFIG HASH".into(),
                 result,
                 disk_usage: ByteSize::from_mib(1),
+                written: SystemTime::now(),
             },
             _json_flock: SharedFlock::new(tempfile.reopen().unwrap()).await.unwrap(),
             _tempfile: Some(tempfile),
@@ -413,6 +416,7 @@ impl DatabaseOutput {
             disk_usage: dir_disk_usage(&self.base_dir)
                 .await
                 .context("calculating disk usage")?,
+            written: SystemTime::now(),
         };
         self.json_flock
             .set_content(&serde_json::to_vec(&entry).expect("failed to serialize TestStatus"))
