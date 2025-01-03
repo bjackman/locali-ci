@@ -8,15 +8,17 @@ use std::{
 use anyhow::{bail, Context, Result};
 #[allow(unused_imports)]
 use log::debug;
+use log::info;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use tempfile::NamedTempFile;
+use tokio::fs::read_dir;
 
 use crate::{
     flock::{ExclusiveFlock, SharedFlock},
     git::Hash,
     test::{ConfigHash, ExitCode, TestCase, TestName, TestResult},
-    util::IoResultExt as _,
+    util::{ByteSize, IoResultExt as _},
 };
 
 // Result database similar to the design described in
@@ -150,6 +152,33 @@ impl Database {
         }
         bail!("too much database contention, something fishy going on")
     }
+
+    // Delete old entries until the overall disk usage of of the database,
+    // without being very robust against concurrency.
+    pub async fn gc(&self, _target_size: ByteSize) -> anyhow::Result<()> {
+        let mut dirents = read_dir(&self.base_dir)
+            .await
+            .context("reading directory")?;
+        // Loop over consistent database entries - if there are directories in
+        // the DB that don't have a result.json in them we can't do much in
+        // theory since it could have just been created by someone who's about
+        // to run a test job in there. In practice if it's a problem we could do
+        // something like delete them if we're sure significant time passed
+        // since the dir was created when the computer was awake.
+        let mut entries = Vec::new();
+        while let Some(dirent) = dirents.next_entry().await.context("reading directory")? {
+            let path = self.base_dir.join(dirent.file_name());
+            match DatabaseEntry::open_stable(&path).await {
+                Err(err) => info!(
+                    "Couldn't open {}, not garbage-collecting: {err}",
+                    path.display()
+                ),
+                Ok(entry) => entries.push(entry),
+            }
+        }
+        // let size = entries.iter().map(|entry| entry.size()).sum();
+        Ok(())
+    }
 }
 
 // Existing entry in the database. Until you drop this object, the entry is read-locked, meaning
@@ -164,6 +193,28 @@ pub struct DatabaseEntry {
 }
 
 impl DatabaseEntry {
+    // Open an entry for read, failing if it's currently being run or isn't
+    // currently valid.
+    pub async fn open_stable(base_path: impl Into<PathBuf>) -> anyhow::Result<Self> {
+        let base_path = base_path.into();
+        let file = OpenOptions::new()
+            .read(true)
+            .create(false)
+            .open(base_path.join("result.json"))
+            .context("opening result JSON")?;
+        let flock = SharedFlock::try_new(file)
+            .await?
+            .context("entry opened for write")?;
+        Ok(Self {
+            base_path,
+            result: serde_json::from_str::<TestResultEntry>(flock.content())
+                .context("parsing JSON")?,
+            _json_flock: flock,
+            #[cfg(test)]
+            _tempfile: None,
+        })
+    }
+
     pub fn result(&self) -> &TestResult {
         &self.result.result
     }

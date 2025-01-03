@@ -10,6 +10,8 @@
 // rather specific needs of using small files kinda like "database entries".
 
 use std::{
+    error::Error,
+    fmt::{self, Display, Formatter},
     fs::File,
     io::{Read as _, Seek as _, Write as _},
     os::fd::{AsRawFd as _, RawFd},
@@ -19,12 +21,13 @@ use anyhow::{anyhow, Context as _};
 
 use nix::{
     errno::Errno,
-    libc::{self, LOCK_EX, LOCK_SH},
+    libc::{self, EWOULDBLOCK, LOCK_EX, LOCK_NB, LOCK_SH},
 };
 use tokio::task::{self};
 
 #[derive(Debug)]
 enum LockKind {
+    TryShared,
     Shared,
     Exclusive,
 }
@@ -32,17 +35,38 @@ enum LockKind {
 impl LockKind {
     fn flock_arg(&self) -> i32 {
         match self {
+            Self::TryShared => LOCK_NB | LOCK_SH,
             Self::Shared => LOCK_SH,
             Self::Exclusive => LOCK_EX,
         }
     }
 }
 
-fn flock(fd: RawFd, kind: LockKind) -> anyhow::Result<()> {
+#[derive(Debug)]
+enum FlockError {
+    WouldBlock,
+    Other(anyhow::Error),
+}
+
+impl Display for FlockError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        match self {
+            Self::WouldBlock => write!(f, "would block"),
+            Self::Other(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl Error for FlockError {}
+
+fn flock(fd: RawFd, kind: LockKind) -> Result<(), FlockError> {
     let res = unsafe { libc::flock(fd, kind.flock_arg()) };
-    Errno::result(res)
-        .map(drop)
-        .map_err(|errno| anyhow!("flock({kind:?} failed: {errno}"))
+    match res {
+        EWOULDBLOCK => Err(FlockError::WouldBlock),
+        errno => Errno::result(errno)
+            .map(drop)
+            .map_err(|errno| FlockError::Other(anyhow!("flock({kind:?} failed: {errno}"))),
+    }
 }
 
 // It's key that this takes a RawFd and not an OwnedFd or File or whatever: we
@@ -50,7 +74,7 @@ fn flock(fd: RawFd, kind: LockKind) -> anyhow::Result<()> {
 // future using this function gets dropped. This is also why we are forced to
 // use the raw libc flock, since the nix Flock API expects to take ownership of
 // the file.
-async fn flock_async(fd: RawFd, kind: LockKind) -> anyhow::Result<()> {
+async fn flock_async(fd: RawFd, kind: LockKind) -> Result<(), FlockError> {
     task::spawn_blocking(move || flock(fd, kind)).await.unwrap()
 }
 
@@ -61,14 +85,30 @@ pub struct SharedFlock {
 }
 
 impl SharedFlock {
-    // Lock an open file, this also immediately reads the whole content which
-    // can access via `content`. The file should be freshly-opened.
-    pub async fn new(mut file: File) -> anyhow::Result<Self> {
-        flock_async(file.as_raw_fd(), LockKind::Shared).await?;
+    fn new_inner(mut file: File) -> anyhow::Result<Self> {
         let mut content = String::new();
         file.read_to_string(&mut content)
             .context("reading locked file")?;
         Ok(Self { file, content })
+    }
+
+    // Lock an open file, this also immediately reads the whole content which
+    // can access via `content`. The file should be freshly-opened.
+    pub async fn new(file: File) -> anyhow::Result<Self> {
+        flock_async(file.as_raw_fd(), LockKind::Shared)
+            .await
+            .context("calling flock")?;
+        Self::new_inner(file)
+    }
+
+    // Like new, but returns None if the file is exclusive-locked.
+    pub async fn try_new(file: File) -> anyhow::Result<Option<Self>> {
+        match flock_async(file.as_raw_fd(), LockKind::TryShared).await {
+            Err(FlockError::WouldBlock) => return Ok(None),
+            Err(FlockError::Other(err)) => return Err(err),
+            Ok(_) => (),
+        };
+        Ok(Some(Self::new_inner(file)?))
     }
 
     // The content of the file.

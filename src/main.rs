@@ -178,6 +178,14 @@ impl Display for GetOutput {
     }
 }
 
+#[derive(clap::Args, Clone, Debug)]
+struct GcArgs {
+    /// Disk usage to reduce the database to. Byte count or use suffixes K, M,
+    /// G.
+    #[arg(long, short)]
+    size: ByteSize,
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
     /// The main command. Watch a repository and run tests whenever the revision
@@ -191,6 +199,11 @@ enum Command {
     /// Get the path to the artifacts for a given test. Returns exit code 50
     /// if the result doesn't exist.
     Artifacts(DatabaseLookupArgs),
+    /// Delete old database entries until the database uses less than the given
+    /// amount of storage. Doesn't make much effort to hit this target size
+    /// accurately in the presence of other concurrent modifications of the
+    /// database.
+    Gc(GcArgs),
 }
 
 // Kitchen-sink object for global shit.
@@ -636,6 +649,17 @@ async fn artifacts(
     Ok(ExitCode::SUCCESS)
 }
 
+async fn gc(
+    env: Env,
+    cancellation_token: CancellationToken,
+    gc_args: GcArgs,
+) -> anyhow::Result<()> {
+    select! {
+        _ = cancellation_token.cancelled() => Ok(()),
+        res = env.database.gc(gc_args.size) => res,
+    }
+}
+
 // Hack so we can use anyhow::Result infrastructure for convenient coding but
 // also control the exit code directly in some cases: return a result - if it's
 // an error we just use the default error exit code.
@@ -710,6 +734,7 @@ async fn do_main() -> anyhow::Result<ExitCode> {
             match c {
                 Command::Watch(watch_args) => watch(env, cancellation_token, watch_args).await,
                 Command::Test(ref test_args) => test(env, cancellation_token, test_args).await,
+                Command::Gc(gc_args) => gc(env, cancellation_token, gc_args).await,
                 _ => panic!("wtf"),
             }?;
             Ok(ExitCode::SUCCESS)
