@@ -130,13 +130,16 @@ impl Database {
             // But, that upgrade wasn't atomic, someone else might have jumped
             // in and run the test. Check if that's the case...
             if parse_result(flock.content()).is_some() {
-                // OK great someone ran the test, so we just wanna return the result. But for that
-                // we need to downgrade the lock to a shared lock, which is also not atomic. At the
-                // time of writing, this is harmless: we know the test case is cacheable (otherwise
-                // parse_result never returns Some) so if someone else gets the lock during the
-                // downgrade, they aren't gonna re-run the test. But, we want the flexibility to
-                // later implement at-will re-runs of tests, and more importantly deletion of test
-                // results. So we downgrade the lock by just going back around this loop.
+                // OK great someone ran the test, so we just wanna return the
+                // result. But for that we need to downgrade the lock to a
+                // shared lock, which is also not atomic. At the time of
+                // writing, this is harmless: we know the test case is cacheable
+                // (otherwise parse_result never returns Some) so if someone
+                // else gets the lock during the downgrade, they aren't gonna
+                // re-run the test. But, we want the flexibility to later
+                // implement at-will re-runs of tests, and more importantly
+                // deletion of test results. So we downgrade the lock by just
+                // going back around this loop.
                 continue;
             }
 
