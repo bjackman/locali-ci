@@ -9,10 +9,12 @@ use anyhow::{bail, Context, Result};
 #[allow(unused_imports)]
 use log::debug;
 use log::info;
+use nix::sys::stat::stat;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use tempfile::NamedTempFile;
-use tokio::fs::read_dir;
+use tokio::{fs::read_dir, task::spawn_blocking};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     flock::{ExclusiveFlock, SharedFlock},
@@ -32,6 +34,7 @@ pub struct Database {
 struct TestResultEntry {
     config_hash: ConfigHash,
     result: TestResult,
+    disk_usage: ByteSize,
 }
 
 pub enum LookupResult {
@@ -243,11 +246,47 @@ impl DatabaseEntry {
             result: TestResultEntry {
                 config_hash: "FAKE CONFIG HASH".into(),
                 result,
+                disk_usage: ByteSize::from_mib(1),
             },
             _json_flock: SharedFlock::new(tempfile.reopen().unwrap()).await.unwrap(),
             _tempfile: Some(tempfile),
         }
     }
+}
+
+// Returns arbitrary value if cancelled.
+fn dir_disk_usage_blocking(ct: &CancellationToken, path: &Path) -> anyhow::Result<ByteSize> {
+    let mut sum = ByteSize::from_bytes(0);
+    for dirent in std::fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
+        if ct.is_cancelled() {
+            return Ok(sum);
+        }
+        let dirent = dirent.with_context(|| format!("reading {}", path.display()))?;
+        let child_path = path.join(dirent.file_name());
+        sum += if dirent
+            .file_type()
+            .with_context(|| format!("getting file type for {}", child_path.display()))?
+            .is_dir()
+        {
+            dir_disk_usage_blocking(ct, &child_path)?
+        } else {
+            let blocks = stat(&child_path)
+                .with_context(|| format!("stat {}", child_path.display()))?
+                .st_blocks;
+            ByteSize::from_bytes(blocks as usize * 512)
+        }
+    }
+    Ok(sum)
+}
+
+async fn dir_disk_usage(path: impl Into<PathBuf>) -> anyhow::Result<ByteSize> {
+    let ct = CancellationToken::new();
+    // Shut down the blocking task if this future gets dropped.
+    let _ct_drop = ct.clone().drop_guard();
+    let path = path.into();
+    spawn_blocking(move || dir_disk_usage_blocking(&ct, &path))
+        .await
+        .unwrap()
 }
 
 // Output for an individual test job, which may or may not be stored into the
@@ -367,19 +406,20 @@ impl DatabaseOutput {
     pub async fn set_result(mut self, result: &TestResult) -> anyhow::Result<DatabaseEntry> {
         assert!(!self.status_written);
         self.status_written = true;
+
         let entry = TestResultEntry {
             config_hash: self.config_hash.clone(),
             result: result.clone(),
+            disk_usage: dir_disk_usage(&self.base_dir)
+                .await
+                .context("calculating disk usage")?,
         };
         self.json_flock
             .set_content(&serde_json::to_vec(&entry).expect("failed to serialize TestStatus"))
             .context("writing JSON result")?;
         Ok(DatabaseEntry {
             base_path: self.base_dir,
-            result: TestResultEntry {
-                config_hash: self.config_hash,
-                result: result.clone(),
-            },
+            result: entry,
             _json_flock: self
                 .json_flock
                 .downgrade()

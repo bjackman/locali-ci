@@ -3,13 +3,14 @@ use std::{
     fmt::{Display, Formatter},
     future::Future,
     io,
-    ops::Deref,
+    ops::{Add, AddAssign, Deref},
     path::PathBuf,
     str::FromStr,
 };
 
 #[allow(unused_imports)]
 use log::{debug, error};
+use serde::{Deserialize, Serialize};
 use sha3::digest;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -159,7 +160,7 @@ impl<D: digest::Digest> std::hash::Hasher for DigestHasher<D> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ByteSize(usize);
 
 impl FromStr for ByteSize {
@@ -190,12 +191,31 @@ impl FromStr for ByteSize {
     }
 }
 
+// Byte size with saturating operations.
 impl ByteSize {
     pub fn from_mib(mib: usize) -> Self {
         Self(mib.saturating_mul(1024 * 1024))
     }
 
+    pub fn from_bytes(b: usize) -> Self {
+        Self(b)
+    }
+
     pub fn to_bytes(self) -> usize {
         self.0
+    }
+}
+
+impl Add<ByteSize> for ByteSize {
+    type Output = ByteSize;
+
+    fn add(self, rhs: ByteSize) -> ByteSize {
+        Self(self.0.saturating_add(rhs.0))
+    }
+}
+
+impl AddAssign for ByteSize {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
     }
 }
