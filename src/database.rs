@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use futures::future::join_all;
 #[allow(unused_imports)]
 use log::debug;
 use log::info;
@@ -14,7 +15,10 @@ use nix::sys::stat::stat;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use tempfile::NamedTempFile;
-use tokio::{fs::read_dir, task::spawn_blocking};
+use tokio::{
+    fs::{read_dir, remove_dir_all},
+    task::spawn_blocking,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -159,8 +163,10 @@ impl Database {
     }
 
     // Delete old entries until the overall disk usage of of the database,
-    // without being very robust against concurrency.
-    pub async fn gc(&self, _target_size: ByteSize) -> anyhow::Result<()> {
+    // without being very robust against concurrency. This can fail if
+    // the target size is small and there are tests in progress (as well as
+    // failing if the platform gives us any errors).
+    pub async fn gc(&self, target_size: ByteSize) -> anyhow::Result<()> {
         let mut dirents = read_dir(&self.base_dir)
             .await
             .context("reading directory")?;
@@ -181,7 +187,34 @@ impl Database {
                 Ok(entry) => entries.push(entry),
             }
         }
-        // let size = entries.iter().map(|entry| entry.size()).sum();
+
+        // How much disk are we currently using?
+        let mut disk_usage: ByteSize = entries.iter().map(|e| e.disk_usage()).sum();
+        if disk_usage <= target_size {
+            return Ok(()); // Skip sorting.
+        }
+
+        // Need to delete some stuff. Delete the oldest entry until we have
+        // reduced the size sufficiently.
+        entries.sort_unstable_by_key(|e| e.last_written());
+        let mut to_delete_size = ByteSize::from_bytes(0);
+        let to_delete = entries.into_iter().take_while(|e| {
+            to_delete_size += e.disk_usage();
+            disk_usage - to_delete_size > target_size
+        });
+        join_all(to_delete.map(|e| e.delete()))
+            .await
+            // collect a vec of Results instead of try_join_all because we don't
+            // want to cancel the others if any fails.
+            .into_iter()
+            .collect::<anyhow::Result<()>>()
+            .context("deleteing database entries")?;
+
+        disk_usage -= to_delete_size;
+        if disk_usage > target_size {
+            bail!("ran out of entries to delete");
+        }
+
         Ok(())
     }
 }
@@ -238,6 +271,21 @@ impl DatabaseEntry {
 
     pub fn artifacts_dir(&self) -> PathBuf {
         self.base_path.join("artifacts")
+    }
+
+    pub fn disk_usage(&self) -> ByteSize {
+        self.result.disk_usage
+    }
+
+    pub fn last_written(&self) -> SystemTime {
+        self.result.written
+    }
+
+    // Delete this entry from the database on disk.
+    pub async fn delete(self) -> anyhow::Result<()> {
+        remove_dir_all(self.base_path)
+            .await
+            .context("recursively deleting directory")
     }
 
     #[cfg(test)]

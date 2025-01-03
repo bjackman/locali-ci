@@ -3,7 +3,8 @@ use std::{
     fmt::{Display, Formatter},
     future::Future,
     io,
-    ops::{Add, AddAssign, Deref},
+    iter::Sum,
+    ops::{Add, AddAssign, Deref, Sub, SubAssign},
     path::PathBuf,
     str::FromStr,
 };
@@ -191,7 +192,7 @@ impl FromStr for ByteSize {
     }
 }
 
-// Byte size with saturating operations.
+// Byte size with saturating operations. Unsigned.
 impl ByteSize {
     pub fn from_mib(mib: usize) -> Self {
         Self(mib.saturating_mul(1024 * 1024))
@@ -217,5 +218,33 @@ impl Add<ByteSize> for ByteSize {
 impl AddAssign for ByteSize {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
+    }
+}
+
+impl Sub<ByteSize> for ByteSize {
+    type Output = ByteSize;
+
+    fn sub(self, rhs: ByteSize) -> ByteSize {
+        Self(self.0.saturating_sub(rhs.0))
+    }
+}
+
+impl SubAssign for ByteSize {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl Sum for ByteSize {
+    // Required method
+    fn sum<I>(iter: I) -> Self
+    where
+        I: Iterator<Item = Self>,
+    {
+        let mut sum = Self::from_bytes(0);
+        for i in iter {
+            sum += i
+        }
+        sum
     }
 }
