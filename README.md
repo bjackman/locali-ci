@@ -135,7 +135,7 @@ results.
 If the test is terminated by a signal, it isn't considered to have produced a
 result: instead of "success" or "failure" it's an "error". Errors aren't cached.
 
-You you can trigger un-cached "error" results yourself, by setting
+You can also trigger un-cached "error" results yourself, by setting
 `error_exit_codes` and then returning one of those codes from your command. For
 example:
 
@@ -179,7 +179,7 @@ name = "pokemon"
 tokens = ["moltres", "articuno", "zapdos"]
 ```
 
-Now a can refer to this resource, and it won't be run until Limmat can
+Now a test can refer to this resource, and it won't be run until Limmat can
 allocate a Pokemon for it:
 
 ```toml
