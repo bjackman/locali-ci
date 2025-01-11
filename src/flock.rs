@@ -61,7 +61,8 @@ async fn flock_async(fd: RawFd, kind: LockKind) -> anyhow::Result<()> {
 
 #[derive(Debug)]
 pub struct SharedFlock {
-    file: File,
+    file: Option<File>,
+    ino: u64,
     content: String,
 }
 
@@ -74,7 +75,11 @@ impl SharedFlock {
         let mut content = String::new();
         file.read_to_string(&mut content)
             .context("reading locked file")?;
-        Ok(Self { file, content })
+        Ok(Self {
+            ino: file.metadata().unwrap().st_ino(),
+            file: Some(file),
+            content,
+        })
     }
 
     // The content of the file.
@@ -89,20 +94,25 @@ impl SharedFlock {
     // that the reference returned by `content` is invalid now, so you should
     // check the `content` of the result again.
     pub async fn upgrade(mut self) -> anyhow::Result<ExclusiveFlock> {
-        self.file.rewind().context("rewinding locked file")?;
-        ExclusiveFlock::new(self.file.try_clone().unwrap()).await
+        self.file
+            .as_ref()
+            .unwrap()
+            .rewind()
+            .context("rewinding locked file")?;
+        ExclusiveFlock::new(self.file.take().unwrap()).await
     }
 }
 
 impl Drop for SharedFlock {
     fn drop(&mut self) {
-        debug!("dropping lock {:?}", self.file.metadata().unwrap().st_ino());
+        debug!("dropping lock {:?}", self.ino);
     }
 }
 
 // A simple "write" lock on a file.
 pub struct ExclusiveFlock {
-    file: File,
+    file: Option<File>,
+    ino: u64,
     content: String,
 }
 
@@ -111,12 +121,17 @@ impl ExclusiveFlock {
     pub async fn new(mut file: File) -> anyhow::Result<Self> {
         debug_assert_eq!(file.stream_position().unwrap(), 0);
         flock_async(file.as_raw_fd(), LockKind::Exclusive).await?;
-        debug!("locked {:?} exclusive", file.metadata().unwrap().st_ino());
+        let ino = file.metadata().unwrap().st_ino();
+        debug!("locked {:?} exclusive", ino);
         let mut content = String::new();
         file.read_to_string(&mut content)
             .context("reading locked")?;
         file.rewind().context("rewinding locked file")?;
-        Ok(Self { file, content })
+        Ok(Self {
+            file: Some(file),
+            ino,
+            content,
+        })
     }
 
     pub fn content(&self) -> &str {
@@ -125,24 +140,38 @@ impl ExclusiveFlock {
 
     // Replace the content of the file.
     pub fn set_content(&mut self, content: &[u8]) -> anyhow::Result<()> {
-        debug_assert_eq!(self.file.stream_position().unwrap(), 0);
-        self.file.set_len(0).context("truncating locked file")?;
+        debug_assert_eq!(self.file.as_ref().unwrap().stream_position().unwrap(), 0);
         self.file
+            .as_ref()
+            .unwrap()
+            .set_len(0)
+            .context("truncating locked file")?;
+        self.file
+            .as_ref()
+            .unwrap()
             .write_all(content)
             .context("writing locked file")?;
         // TODO: it would be nicer if this method consumed self, then we wouldn't have to rewind.
-        self.file.rewind().context("rewinding locked file")
+        self.file
+            .as_ref()
+            .unwrap()
+            .rewind()
+            .context("rewinding locked file")
     }
 
     // See SharedFlock::upgrade - same limiations apply.
     pub async fn downgrade(mut self) -> anyhow::Result<SharedFlock> {
-        self.file.rewind().context("rewinding locked file")?;
-        SharedFlock::new(self.file.try_clone().unwrap()).await
+        self.file
+            .as_ref()
+            .unwrap()
+            .rewind()
+            .context("rewinding locked file")?;
+        SharedFlock::new(self.file.take().unwrap()).await
     }
 }
 
 impl Drop for ExclusiveFlock {
     fn drop(&mut self) {
-        debug!("dropping lock {:?}", self.file.metadata().unwrap().st_ino());
+        debug!("dropping lock {:?}", self.ino);
     }
 }
