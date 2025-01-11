@@ -8,6 +8,7 @@ use std::{
     process::{ExitStatus, Stdio},
     result,
     str::FromStr,
+    sync::Arc,
     thread::panicking,
     time::Duration,
 };
@@ -77,18 +78,21 @@ impl ChildExt for Child {
     }
 }
 
+#[derive(Clone)]
 struct LimmatChildBuilder {
-    temp_dir: TempDir,
+    temp_dir: Arc<TempDir>,
     repo_dir: PathBuf,
     db_dir: PathBuf,
     dump_output_on_panic: bool,
+    #[allow(dead_code)]
+    dump_output_on_drop: bool,
     env: HashMap<OsString, OsString>,
     config: String,
 }
 
 impl<'a> LimmatChildBuilder {
     async fn new(config: impl AsRef<str>) -> anyhow::Result<Self> {
-        let temp_dir = TempDir::with_prefix("limmat-child")?;
+        let temp_dir = Arc::new(TempDir::with_prefix("limmat-child")?);
 
         let repo_dir = temp_dir.path().join("repo");
         create_dir(&repo_dir).unwrap();
@@ -100,6 +104,7 @@ impl<'a> LimmatChildBuilder {
             repo_dir,
             db_dir,
             dump_output_on_panic: true,
+            dump_output_on_drop: false,
             env: HashMap::new(),
             temp_dir,
             config: config.as_ref().to_string(),
@@ -113,6 +118,12 @@ impl<'a> LimmatChildBuilder {
 
     fn dump_output_on_panic(mut self, dump: bool) -> Self {
         self.dump_output_on_panic = dump;
+        self
+    }
+
+    #[allow(dead_code)]
+    fn dump_output_on_drop(mut self, dump: bool) -> Self {
+        self.dump_output_on_drop = dump;
         self
     }
 
@@ -188,6 +199,7 @@ impl<'a> LimmatChildBuilder {
             builder: self,
             child,
             dump_output_on_panic: self.dump_output_on_panic,
+            dump_output_on_drop: self.dump_output_on_drop,
             log_path,
         })
     }
@@ -198,6 +210,8 @@ struct LimmatChild<'a> {
     builder: &'a LimmatChildBuilder,
     child: Child,
     dump_output_on_panic: bool,
+    #[allow(dead_code)]
+    dump_output_on_drop: bool,
     log_path: PathBuf,
 }
 
