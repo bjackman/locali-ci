@@ -110,10 +110,12 @@ impl Database {
                 .truncate(false)
                 .open(result_dir.join("result.json"))
                 .context("opening result JSON")?;
+            debug!("locking JSON");
             let flock = SharedFlock::new(json_file)
                 .await
                 .context("locking JSON file for reading")?;
 
+            debug!("parsem");
             if let Some(test_result) = parse_result(flock.content()) {
                 return Ok(LookupResult::FoundResult(DatabaseEntry {
                     base_path: result_dir.clone(),
@@ -125,6 +127,7 @@ impl Database {
             }
 
             // Seems we have to run the test. For that we'll need an exclusive lock.
+            debug!("upgrade");
             let flock = flock.upgrade().await.context("upgrading JSON file lock")?;
 
             // But, that upgrade wasn't atomic, someone else might have jumped

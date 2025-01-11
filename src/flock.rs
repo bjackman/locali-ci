@@ -12,11 +12,16 @@
 use std::{
     fs::File,
     io::{Read as _, Seek as _, Write as _},
-    os::fd::{AsRawFd as _, RawFd},
+    os::{
+        fd::{AsRawFd as _, RawFd},
+        linux::fs::MetadataExt as _,
+    },
 };
 
 use anyhow::{anyhow, Context as _};
 
+#[allow(unused_imports)]
+use log::debug;
 use nix::{
     errno::Errno,
     libc::{self, LOCK_EX, LOCK_SH},
@@ -65,6 +70,7 @@ impl SharedFlock {
     // can access via `content`. The file should be freshly-opened.
     pub async fn new(mut file: File) -> anyhow::Result<Self> {
         flock_async(file.as_raw_fd(), LockKind::Shared).await?;
+        debug!("locked {:?} shared", file.metadata().unwrap().st_ino());
         let mut content = String::new();
         file.read_to_string(&mut content)
             .context("reading locked file")?;
@@ -84,7 +90,13 @@ impl SharedFlock {
     // check the `content` of the result again.
     pub async fn upgrade(mut self) -> anyhow::Result<ExclusiveFlock> {
         self.file.rewind().context("rewinding locked file")?;
-        ExclusiveFlock::new(self.file).await
+        ExclusiveFlock::new(self.file.try_clone().unwrap()).await
+    }
+}
+
+impl Drop for SharedFlock {
+    fn drop(&mut self) {
+        debug!("dropping lock {:?}", self.file.metadata().unwrap().st_ino());
     }
 }
 
@@ -99,6 +111,7 @@ impl ExclusiveFlock {
     pub async fn new(mut file: File) -> anyhow::Result<Self> {
         debug_assert_eq!(file.stream_position().unwrap(), 0);
         flock_async(file.as_raw_fd(), LockKind::Exclusive).await?;
+        debug!("locked {:?} exclusive", file.metadata().unwrap().st_ino());
         let mut content = String::new();
         file.read_to_string(&mut content)
             .context("reading locked")?;
@@ -124,6 +137,12 @@ impl ExclusiveFlock {
     // See SharedFlock::upgrade - same limiations apply.
     pub async fn downgrade(mut self) -> anyhow::Result<SharedFlock> {
         self.file.rewind().context("rewinding locked file")?;
-        SharedFlock::new(self.file).await
+        SharedFlock::new(self.file.try_clone().unwrap()).await
+    }
+}
+
+impl Drop for ExclusiveFlock {
+    fn drop(&mut self) {
+        debug!("dropping lock {:?}", self.file.metadata().unwrap().st_ino());
     }
 }

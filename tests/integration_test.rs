@@ -282,6 +282,9 @@ impl Drop for LimmatChild<'_> {
         if self.dump_output_on_panic && panicking() {
             eprintln!("Panic happening, assuming its a test failure, dumping child log.");
             self.dump_log();
+        } else if self.dump_output_on_drop {
+            eprintln!("Dumping child output due to dump_output_on_drop");
+            self.dump_log();
         }
     }
 }
@@ -313,17 +316,25 @@ impl<'a> LimmatChild<'a> {
     // Blocks until a result for the given test and revision exists, by running
     // the "get" command repeatedly.
     async fn result_exists(&self, test: &str, rev: &str) -> anyhow::Result<()> {
+        let builder = self.builder.clone().dump_output_on_drop(true);
         loop {
-            let mut child = self.builder.start(["get", test, rev]).await?;
+            eprintln_ts!("getting");
+            let mut child = builder.start(["get", test, rev]).await?;
             let status = child
                 .child
                 .wait()
                 .await
                 .context("error waiting for child")?;
+            eprintln_ts!("gotting");
             match status.code() {
                 None => bail!("get command terminated by signal {:?}", status.signal()),
-                Some(50) => continue, // Result not found.
-                Some(0) => return Ok(()),
+                Some(50) => {
+                    eprintln_ts!("50");
+                    continue; // Result not found.
+                }
+                Some(0) => {
+                    return Ok(());
+                }
                 Some(exit_code) => {
                     eprintln!("Dumping failed 'get' command stderr...");
                     child.dump_log();

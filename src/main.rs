@@ -583,13 +583,17 @@ async fn lookup(
         .tests
         .node(&test_name)
         .ok_or(anyhow!("no such test {:?}", test_name.to_string()))?;
+    debug!("lookup inner");
     match env
         .database
         .lookup(&TestCase::new(rev.clone(), test.clone()))
         .await
         .context("database lookup")?
     {
-        LookupResult::FoundResult(e) => Ok(Some(e)),
+        LookupResult::FoundResult(e) => {
+            debug!("gottem inner");
+            Ok(Some(e))
+        }
         LookupResult::YouRunIt(_) => {
             if lookup_args.run {
                 bail!(
@@ -612,10 +616,12 @@ async fn get(
     cancellation_token: CancellationToken,
     get_args: GetArgs,
 ) -> anyhow::Result<ExitCode> {
+    debug!("lookup entry");
     let db_entry = match lookup(env, cancellation_token, &get_args.lookup_args).await? {
         None => return Ok(ExitCode::from(NO_RESULT_FOUND_EXIT_CODE)),
         Some(e) => e,
     };
+    debug!("lookup entry -> gottem");
     match get_args.output {
         GetOutput::Stdout => println!("{}", db_entry.stdout_path().display()),
         GetOutput::Stderr => println!("{}", db_entry.stderr_path().display()),
