@@ -234,9 +234,11 @@ impl<'a> LimmatChild<'a> {
                 line.unwrap_or_else(|e| format!("<read error: {}>", e))
             );
         }
+        // Stdout might contain annoying ANSI codes that hide the output, strip them.
+        let stdout = self.stdout().unwrap_or("<error reading stdout>".into());
         eprintln!(
             "\nlimmat stdout:\n{}",
-            self.stdout().unwrap_or("<error reading stdout>".into())
+            strip_ansi_escapes::strip_str(stdout)
         );
         eprintln!(
             "\nlimmat stderr:\n{}",
