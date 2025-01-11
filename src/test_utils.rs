@@ -27,3 +27,15 @@ where
         interval.tick().await;
     }
 }
+
+// Sick of shitty test harness and shitty logging framework, just use this macro
+// to log to stderr with a timestamp. And because of the shitty inability to
+// share code between integration test and unit tests, this is duplicated.
+#[allow(unused_macros)]
+macro_rules! eprintln_ts {
+    ($($arg:tt)*) => {
+        {
+            eprintln!("[{}] {}", Local::now().to_rfc3339(), format!($($arg)*));
+        }
+    }
+}

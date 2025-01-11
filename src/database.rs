@@ -351,7 +351,7 @@ mod tests {
 
     use super::*;
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_corrupted_result() {
         let db_dir = TempDir::new().unwrap();
         let db = Database::create_or_open(db_dir.path()).unwrap();

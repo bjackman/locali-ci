@@ -13,10 +13,10 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _};
+#[allow(unused_imports)] // If eprintln_ts is unused then so is this import.
+use chrono::Local;
 use glob::{glob, GlobError};
 use googletest::{expect_that, prelude::*};
-#[allow(unused_imports)]
-use log::{debug, info};
 use nix::{
     libc::pid_t,
     sys::signal::{kill, Signal},
@@ -30,6 +30,18 @@ use tokio::{
     process::{Child, Command},
     time::{sleep, timeout},
 };
+
+// Sick of shitty test harness and shitty logging framework, just use this macro
+// to log to stderr with a timestamp. And because of the shitty inability to
+// share code between integration test and unit tests, this is duplicated.
+#[allow(unused_macros)]
+macro_rules! eprintln_ts {
+    ($($arg:tt)*) => {
+        {
+            eprintln!("[{}] {}", Local::now().to_rfc3339(), format!($($arg)*));
+        }
+    }
+}
 
 async fn wait_for<F>(mut predicate: F, timeout_dur: Duration) -> anyhow::Result<()>
 where
@@ -369,7 +381,7 @@ fn pid_running(pid: pid_t) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
 
-#[test_log::test(tokio::test)]
+#[tokio::test]
 async fn shouldnt_leak_jobs() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -399,7 +411,7 @@ async fn shouldnt_leak_jobs() {
     assert!(!pid_running(pid));
 }
 
-#[test_log::test(tokio::test)]
+#[tokio::test]
 async fn should_invalidate_cache_when_dep_changes() {
     let temp_dir = TempDir::new().unwrap();
     let db_dir = temp_dir.path().join("results");

@@ -220,7 +220,6 @@ mod tests {
     // #[test_case(vec![4], 1, vec![6] ; "too many")]
     // #[test_case(vec![0], 1, vec![1] ; "one empty")]
     // #[test_case(vec![4], 0, vec![1] ; "no objs")]
-    #[test_log::test]
     fn test_pools_one_empty_blocks(
         resources: Vec<(String, Vec<String>)>,
         wants: Vec<(String, usize)>,
@@ -241,7 +240,7 @@ mod tests {
         .unwrap()
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_pools_get_some() {
         let pools = Pools::new([
             (

@@ -645,7 +645,7 @@ mod tests {
 
     use super::*;
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_new_gitdir_notgit() {
         let tmp_dir = TempDir::new().expect("couldn't make tempdir");
         let wt = PersistentWorktree {
@@ -658,7 +658,7 @@ mod tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_new_gitdir_file_notgit() {
         let tmp_dir = TempDir::new().expect("couldn't make tempdir");
         {

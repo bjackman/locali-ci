@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[googletest::test]
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn output_buffer_smoke() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         repo.commit("1").await.unwrap();
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[googletest::test]
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn output_buffer_octopus() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         let base_commit = repo.commit("base").await.unwrap();
@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[googletest::test]
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn output_buffer_empty() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         let base_commit = repo.commit("base").await.unwrap();

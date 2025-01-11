@@ -1579,7 +1579,7 @@ mod tests {
         }
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_run_single() {
         let f = TestScriptFixture::builder().num_tests(1).build().await;
         let mut results = f.manager.results();
@@ -1609,7 +1609,7 @@ mod tests {
             .unwrap()
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_cancel_running() {
         let f = TestScriptFixture::builder().num_tests(2).build().await;
         // First commit's test will block forever.
@@ -1700,7 +1700,7 @@ mod tests {
 
     // This is not actually testing functionality, this is a meta-test, yikes this is
     // over-engineered.
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_not_settle() {
         let f = TestScriptFixture::builder().num_tests(1).build().await;
         // First commit's test will block forever.
@@ -1719,7 +1719,7 @@ mod tests {
         }
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_cache_results() {
         let f = TestScriptFixture::builder()
             .cache_policies([
@@ -1789,7 +1789,7 @@ mod tests {
     #[test_case(1, 1 ; "single worktree, one test")]
     #[test_case(4, 1 ; "multiple worktrees, one test")]
     #[test_case(4, 4 ; "multiple worktrees, multiple tests")]
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_handle_many(num_worktrees: usize, num_tests: usize) {
         let f = TestScriptFixture::builder()
             .num_tests(num_tests)
@@ -1824,7 +1824,7 @@ mod tests {
             .expect("bad results");
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_respect_resource_limits() {
         let repo = Arc::new(TempRepo::new().await.unwrap());
         let mut hashes = Vec::new();
@@ -1882,7 +1882,7 @@ mod tests {
         }
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_job_env() {
         let temp_dir = TempDir::new().unwrap();
         let repo = Arc::new(TempRepo::new().await.unwrap());
@@ -2039,7 +2039,7 @@ mod tests {
         assert_eq!(env.get("LIMMAT_ARTIFACTS_notdep"), None);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_not_start_canceled() {
         let f = TestScriptFixture::builder()
             .num_tests(1)
@@ -2118,7 +2118,7 @@ mod tests {
         assert!(!f.scripts[0].was_started(&commits[1].hash));
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_not_cache() {
         let f = TestScriptFixture::builder()
             .num_tests(2)
@@ -2238,7 +2238,7 @@ mod tests {
         };
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_not_require_worktree() {
         let f = TestScriptFixture::builder()
             .needs_worktree([false, false, false])
@@ -2277,7 +2277,7 @@ mod tests {
     #[test_case(OsStr::new(TestScript::BLOCK_COMMIT_MSG_TAG), false ; "blocked¸ shouldn't start")]
     #[test_case(&TestScript::exit_code_tag(1), false ; "failed¸ shouldn't start")]
     #[test_case(&TestScript::exit_code_tag(0), true ; "succeeded¸ should start")]
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn should_wait_for_dependencies(commit_msg: &OsStr, should_start: bool) {
         let f = TestScriptFixture::builder()
             .dependencies([(1, 0)])
