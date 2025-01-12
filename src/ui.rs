@@ -396,6 +396,40 @@ impl OutputBuffer {
             .collect::<anyhow::Result<Text>>()
     }
 
+    fn render_case<'a>(
+        test_case: &'a TestCase,
+        status: &'a TestStatus,
+        result_url_base: &str,
+    ) -> Vec<Span<'a>> {
+        let status_part = match status {
+            // Note - cancellation is an "error" in the type system but we
+            // don't treat it as an error in the UI.
+            TestStatus::Finished(Err(TestInconclusive::Error(msg))) => {
+                Span::new(msg).with_class(Class::Error)
+            }
+            TestStatus::Finished(Ok(db_entry)) => {
+                if db_entry.exit_code() == 0 {
+                    Span::new("success").with_class(Class::Success)
+                } else {
+                    Span::new(format!("failed (status {})", db_entry.exit_code()))
+                        .with_class(Class::Failure)
+                }
+            }
+            _ => Span::new(status.to_string()),
+        }
+        .with_url(format!(
+            "{}/{}/stdout.txt",
+            result_url_base,
+            Database::result_relpath(test_case).to_string_lossy()
+        ));
+        vec![
+            Span::new(test_case.test.name.to_string()).with_class(Class::TestName),
+            Span::new(": "),
+            status_part,
+            Span::new(" "),
+        ]
+    }
+
     fn render_cases<'a>(
         &self,
         tracked_cases: &'a HashMap<TestName, TrackedTestCase>,
@@ -406,34 +440,12 @@ impl OutputBuffer {
         // there's lifetime pain.
         tracked_cases.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
         let mut spans = Vec::new();
-        for (name, tracked_case) in tracked_cases {
-            let status_part = match &tracked_case.status {
-                // Note - cancellation is an "error" in the type system but we
-                // don't treat it as an error in the UI.
-                TestStatus::Finished(Err(TestInconclusive::Error(msg))) => {
-                    Span::new(msg).with_class(Class::Error)
-                }
-                TestStatus::Finished(Ok(db_entry)) => {
-                    if db_entry.exit_code() == 0 {
-                        Span::new("success").with_class(Class::Success)
-                    } else {
-                        Span::new(format!("failed (status {})", db_entry.exit_code()))
-                            .with_class(Class::Failure)
-                    }
-                }
-                _ => Span::new(tracked_case.status.to_string()),
-            }
-            .with_url(format!(
-                "{}/{}/stdout.txt",
+        for (_, tracked_case) in tracked_cases {
+            spans.extend(Self::render_case(
+                &tracked_case.test_case,
+                &tracked_case.status,
                 result_url_base,
-                Database::result_relpath(&tracked_case.test_case).to_string_lossy()
             ));
-            spans.extend([
-                Span::new(name.to_string()).with_class(Class::TestName),
-                Span::new(": "),
-                status_part,
-                Span::new(" "),
-            ])
         }
         Ok(spans)
     }
