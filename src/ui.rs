@@ -115,7 +115,7 @@ impl<W: Worktree, O: Write> StatusViewer<W, O> {
     // Update the UI by writing it to the output with fancy terminal escape
     // codes to overwrite what was previously written.
     pub fn repaint(&mut self, term_size: &Rect) -> anyhow::Result<()> {
-        let render = self.output_buf.render(&self.rendered_cases)?;
+        let render = self.output_buf.render(&self.rendered_cases);
 
         self.web_ui.set_log_buf(render.html_pre());
 
@@ -384,14 +384,14 @@ impl OutputBuffer {
         })
     }
 
-    fn render<'a>(&'a self, rendered_cases: &'a RenderedCases) -> anyhow::Result<Text<'a>> {
+    fn render<'a>(&'a self, rendered_cases: &'a RenderedCases) -> Text<'a> {
         if self.lines.is_empty() {
-            return Ok("[range empty]".into());
+            return "[range empty]".into();
         }
         self.lines
             .iter()
             .enumerate()
-            .map(|(i, log_line)| -> anyhow::Result<Line> {
+            .map(|(i, log_line)| -> Line {
                 let mut spans = vec![Span::from(log_line)];
                 if let Some(hash) = self.status_commits.get(&i) {
                     if let Some(rendered_cases) = rendered_cases.get(hash) {
@@ -402,9 +402,9 @@ impl OutputBuffer {
                         }
                     }
                 }
-                Ok(Line::from_iter(spans))
+                Line::from_iter(spans)
             })
-            .collect::<anyhow::Result<Text>>()
+            .collect::<Text>()
     }
 
     fn render_case<'a>(
@@ -519,7 +519,7 @@ mod tests {
             update_rendered_cases(&mut rendered_cases, Arc::new(notif), "myhost");
         }
 
-        let buf = format!("{}", ob.render(&rendered_cases).unwrap().ansi());
+        let buf = format!("{}", ob.render(&rendered_cases).ansi());
         expect_that!(
             // The colored crate does not have any useful way to disable it from
             // this test code, only globally. This clashes with parallel testing.
@@ -579,7 +579,7 @@ mod tests {
             update_rendered_cases(&mut rendered_cases, Arc::new(notif), "myhost");
         }
 
-        let buf = format!("{}", ob.render(&rendered_cases).unwrap().ansi());
+        let buf = format!("{}", ob.render(&rendered_cases).ansi());
 
         // Note this is a kinda weird log. We excluded the common ancestor of all the commits.
         // Also note it's a kinda weird input because we haven't provided any
@@ -641,7 +641,7 @@ mod tests {
             update_rendered_cases(&mut rendered_cases, Arc::new(notif), "myhost");
         }
 
-        let buf = format!("{}", ob.render(&rendered_cases).unwrap().ansi());
+        let buf = format!("{}", ob.render(&rendered_cases).ansi());
         expect_that!(
             *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
             eq("[range empty]\n".to_owned())
