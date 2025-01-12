@@ -305,6 +305,7 @@ async fn watch(
     // orchestrates test jobs.
     let test_manager = Arc::new(Manager::new(
         env.repo.clone(),
+        &env.config.source_path,
         env.database,
         env.config.resource_pools.clone(),
         env.config.tests,
@@ -401,7 +402,7 @@ async fn ensure_tests_run(
         tests.clone().filter(|t| t.needs_worktree()).count(),
     );
 
-    let job_env = Arc::new(base_job_env(env.repo.path()));
+    let job_env = Arc::new(base_job_env(env.repo.path(), &env.config.source_path));
 
     // Get the graph of tests we need to run as dependencies.
     // This is kinda inefficient: we're building a new Dag based on a subset of
@@ -529,7 +530,7 @@ async fn test(
     let job = TestJobBuilder::new(
         cancellation_token.clone(),
         test_case,
-        Arc::new(base_job_env(env.repo.path())),
+        Arc::new(base_job_env(env.repo.path(), &env.config.source_path)),
         Vec::new(), // wait_for
     )
     .build();
@@ -680,11 +681,11 @@ async fn do_main() -> anyhow::Result<ExitCode> {
 
     let args = Args::parse();
     debug!("args: {:?}", &args);
-    let config_content =
-        fs::read_to_string(&find_config(&args.config)?).context("couldn't read config")?;
+    let config_path = find_config(&args.config)?;
+    let config_content = fs::read_to_string(&config_path).context("couldn't read config")?;
     debug!("config:\n{}", &config_content);
     let config: Config = toml::from_str(&config_content).context("couldn't parse config")?;
-    let config = ParsedConfig::from(config)?;
+    let config = ParsedConfig::new(config, config_path)?;
 
     let repo = git::PersistentWorktree {
         path: args.repo.to_owned().into(),

@@ -303,6 +303,7 @@ These environment variables are passed to your job.
 | ------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `LIMMAT_ORIGIN`                       | Path of the main repository worktree (i.e. `--repo`).                                     |
 | `LIMMAT_COMMIT`                       | Hash of the commit to be tested.                                                          |
+| `LIMMAT_CONFIG`                       | Path of the config file.                                                          |
 | `LIMMAT_RESOURCE_<resource_name>_<n>` | Values for [resources](#resources) used by the test.                                      |
 | `LIMMAT_RESOURCE_<resource_name>`     | If the test only uses one of a resource, shorthand for `LIMMAT_RESOURCE_<resource_name>_0` |
 | `LIMMAT_ARTIFACTS_<job_name>`         | If the test depends on `job_name`, this directory contains that job's [artifacts](#artifacts). |

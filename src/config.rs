@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     hash::Hash as _,
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
@@ -282,13 +283,14 @@ impl Config {
 // things unnecessarily complicated.
 #[derive(Debug)]
 pub struct ParsedConfig {
+    pub source_path: PathBuf,
     pub num_worktrees: usize,
     pub resource_pools: Arc<Pools>,
     pub tests: TestDag,
 }
 
 impl ParsedConfig {
-    pub fn from(config: Config) -> anyhow::Result<Self> {
+    pub fn new(config: Config, source_path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let resource_tokens = config.parse_resource_tokens();
         let tests = config.parse_tests(&resource_tokens)?;
         let resources: HashMap<ResourceKey, Vec<resource::Resource>> = resource_tokens
@@ -306,6 +308,7 @@ impl ParsedConfig {
         Ok(Self {
             num_worktrees: config.num_worktrees,
             resource_pools: Arc::new(Pools::new(resources)),
+            source_path: source_path.into(),
             tests,
         })
     }
@@ -359,7 +362,10 @@ mod tests {
             "No TOML found in README - test bug?"
         );
         for toml in toml_blocks {
-            expect_that!(toml::from_str(toml).map(ParsedConfig::from), ok(anything()));
+            expect_that!(
+                toml::from_str(toml).map(|config| ParsedConfig::new(config, "/fake/path")),
+                ok(anything())
+            );
         }
     }
 }

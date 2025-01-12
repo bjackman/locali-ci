@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
     fmt::{Debug, Formatter},
-    path::Path,
+    path::{Path, PathBuf},
     pin::pin,
     process::Stdio,
     sync::Arc,
@@ -181,11 +181,17 @@ pub type TestDag = Dag<Arc<Test>>;
 type JobEnv = Vec<(String, String)>;
 
 // Common elements that should be in a job environment with the given conditions.
-pub fn base_job_env(repo_origin: &Path) -> JobEnv {
-    vec![(
-        "LIMMAT_ORIGIN".into(),
-        repo_origin.to_string_lossy().into_owned(),
-    )]
+pub fn base_job_env(repo_origin: impl Into<PathBuf>, config_path: impl Into<PathBuf>) -> JobEnv {
+    vec![
+        (
+            "LIMMAT_ORIGIN".into(),
+            repo_origin.into().to_string_lossy().into_owned(),
+        ),
+        (
+            "LIMMAT_CONFIG".into(),
+            config_path.into().to_string_lossy().into_owned(),
+        ),
+    ]
 }
 
 // Manages a bunch of worker threads that run tests for the current set of revisions.
@@ -216,6 +222,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // This needs to be an Arc because we hold onto a reference to it for a
         // while, and create temporary worktrees from it in the background.
         repo: Arc<W>,
+        config_path: impl Into<PathBuf>,
         // This is mandatory instead of defaulting to the user's main database,
         // because we want it to be hard to accidentally refer to global
         // resources like that.
@@ -227,7 +234,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         // probably doesn't handle very gracefully. We should instead just block the sender.
         let (result_tx, _) = broadcast::channel(4096);
         Self {
-            job_env: Arc::new(base_job_env(repo.path())),
+            job_env: Arc::new(base_job_env(repo.path(), config_path)),
             repo,
             notif_tx: result_tx,
             job_cts: Mutex::new(HashMap::new()),
@@ -1524,6 +1531,7 @@ mod tests {
             });
             let manager = Manager::new(
                 repo.clone(),
+                "/fake/config/path",
                 Arc::new(
                     Database::create_or_open(db_dir.path()).expect("couldn't setup result DB"),
                 ),
@@ -1854,6 +1862,7 @@ mod tests {
         let db_dir = TempDir::new().expect("couldn't make temp dir for result DB");
         let m = Manager::new(
             repo.clone(),
+            "/fake/config/path",
             Arc::new(Database::create_or_open(db_dir.path()).expect("couldn't setup result DB")),
             Arc::new(Pools::new(
                 [(ResourceKey::Worktree, worktree_resources(&repo, 4).await)]
@@ -1964,6 +1973,7 @@ mod tests {
         );
         let m = Manager::new(
             repo.clone(),
+            "/fake/config/path",
             Arc::new(Database::create_or_open(db_dir.path()).expect("couldn't setup result DB")),
             Arc::new(resource_pools),
             tests,
@@ -2037,6 +2047,7 @@ mod tests {
                 .join("dep/artifacts")
         );
         assert_eq!(env.get("LIMMAT_ARTIFACTS_notdep"), None);
+        assert_eq!(env.get("LIMMAT_CONFIG"), Some("/fake/config/path").as_ref());
     }
 
     #[tokio::test]
