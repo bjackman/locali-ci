@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4](https://github.com/bjackman/limmat/compare/v0.2.3...v0.2.4) - 2025-01-12
+
+### Added
+
+- Add LIMMAT_CONFIG to job env
+
+### Fixed
+
+- Don't hold database locks from UI code
+
+### Other
+
+- Remove false fallibility
+- Remove unnecessary data from OutputBuffer::render_cases
+- Factor out OutputBuffer::render_case
+- Support dumping child output on drop
+- Shitty bullshit hacks for printf debugging in shitty tests
+- cargo add --dev chrono
+- Strip ansi codes when dumping stdout
+- *(dev)* Document build release artifacts
+
 ## [0.2.3](https://github.com/bjackman/limmat/compare/v0.2.2...v0.2.3) - 2025-01-08
 
 ### Added
