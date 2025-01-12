@@ -184,11 +184,9 @@ impl<'a, T: Into<Span<'a>>> From<T> for Line<'a> {
         }
     }
 }
-
+#[derive(Clone)]
 pub struct Span<'a> {
     pub class: Option<Class>,
-    // The cow is copied from Ratatui. My understanding is that this is there to
-    // be generic across ownership or reference.
     pub content: Cow<'a, str>,
     pub url: Option<Cow<'a, str>>,
 }
@@ -200,6 +198,22 @@ impl<'a, T: Into<Cow<'a, str>>> From<T> for Span<'a> {
 }
 
 impl<'a> Span<'a> {
+    // Recursilvey creates an owned version of all the contents.
+    // I think this function makes good semantic sense but the fact that I
+    // actually needed it is a symptom of lazy bullshit. Also, I think the
+    // implementation is lazy bullshit. The fact that I eneded up taking this
+    // lazy approach of "clone everything" suggests that trying to make this
+    // type generic over ownership was pointless, so this code is now a weird
+    // mixture of over- and under- engineering.
+    pub fn into_owned(self) -> Span<'static> {
+        // Note this probably does pointless work if everything was already owned.
+        Span {
+            class: self.class,
+            content: Cow::Owned(self.content.into_owned()),
+            url: self.url.map(|u| Cow::Owned(u.into_owned())),
+        }
+    }
+
     pub fn new(content: impl Into<Cow<'a, str>>) -> Self {
         Self {
             content: content.into(),
@@ -294,6 +308,7 @@ impl Display for RenderHtmlSpan<'_> {
 // This is like a CSS class. For ANSI output this will produce a hard-coded
 // style. For HTML it outputs a CSS class name, some CSS is provided  to
 // make use of these classes.
+#[derive(Clone)]
 pub enum Class {
     Error,
     Success,
