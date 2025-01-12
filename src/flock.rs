@@ -13,7 +13,7 @@ use std::{
     fs::File,
     io::{Read as _, Seek as _, Write as _},
     os::{
-        fd::{AsRawFd as _, RawFd},
+        fd::{AsRawFd as _, OwnedFd, RawFd},
         linux::fs::MetadataExt as _,
     },
 };
@@ -105,7 +105,13 @@ impl SharedFlock {
 
 impl Drop for SharedFlock {
     fn drop(&mut self) {
-        debug!("dropping lock {:?}", self.ino);
+        // If None, it must have been upgraded.
+        if let Some(file) = self.file.take() {
+            debug!("dropping lock {:?}", self.ino);
+            // File docs are kinda vague, but OwnedFd explicitly says close on drop.
+            let fd: OwnedFd = file.into();
+            drop(fd);
+        }
     }
 }
 
@@ -166,12 +172,19 @@ impl ExclusiveFlock {
             .unwrap()
             .rewind()
             .context("rewinding locked file")?;
+        debug!("downgrade {:?}", self.ino);
         SharedFlock::new(self.file.take().unwrap()).await
     }
 }
 
 impl Drop for ExclusiveFlock {
     fn drop(&mut self) {
-        debug!("dropping lock {:?}", self.ino);
+        // If None, it must have been downgraded.
+        if let Some(file) = self.file.take() {
+            debug!("dropping lock {:?}", self.ino);
+            // File docs are kinda vague, but OwnedFd explicitly says close on drop.
+            let fd: OwnedFd = file.into();
+            drop(fd);
+        }
     }
 }
