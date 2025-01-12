@@ -388,7 +388,7 @@ impl OutputBuffer {
                 let mut spans = vec![Span::from(log_line)];
                 if let Some(hash) = self.status_commits.get(&i) {
                     if let Some(tracked_cases) = statuses.get(hash) {
-                        spans.extend(self.render_cases(tracked_cases, result_url_base)?);
+                        spans.extend(self.render_cases(tracked_cases.values(), result_url_base)?);
                     }
                 }
                 Ok(Line::from_iter(spans))
@@ -432,15 +432,13 @@ impl OutputBuffer {
 
     fn render_cases<'a>(
         &self,
-        tracked_cases: &'a HashMap<TestName, TrackedTestCase>,
+        tracked_cases: impl IntoIterator<Item = &'a TrackedTestCase>,
         result_url_base: &str,
     ) -> anyhow::Result<Vec<Span<'a>>> {
-        let mut tracked_cases: Vec<(&TestName, &TrackedTestCase)> = tracked_cases.iter().collect();
-        // Sort by test case name. Would like sort_by_key here but
-        // there's lifetime pain.
-        tracked_cases.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+        let mut tracked_cases: Vec<_> = tracked_cases.into_iter().collect();
+        tracked_cases.sort_by_key(|tc| &tc.test_case.test.name);
         let mut spans = Vec::new();
-        for (_, tracked_case) in tracked_cases {
+        for tracked_case in tracked_cases {
             spans.extend(Self::render_case(
                 &tracked_case.test_case,
                 &tracked_case.status,
