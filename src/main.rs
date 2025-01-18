@@ -8,7 +8,7 @@ use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
 use http::Ui;
-use log::{debug, info};
+use log::{debug, error, info};
 use nix::sys::utsname::uname;
 use resource::Pools;
 use resource::{Resource, ResourceKey};
@@ -28,6 +28,7 @@ use test::{base_job_env, Manager, TestCase, TestCaseId, TestJob, TestJobBuilder,
 use test::{DepDatabaseEntries, Test};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 use util::{DisplayablePathBuf, ErrGroup};
 
@@ -247,9 +248,16 @@ async fn watch_loop(
                 ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
             notif = notifs.recv() => {
-                // https://github.com/rust-lang/futures-rs/issues/1857
-                // AFAICS there is no way to encode a stream that never terminates.
-                let notif = notif.expect("notification stream terminated");
+                let notif = match notif {
+                    Ok(n) => n,
+                    Err(RecvError::Lagged(num_dropped)) => {
+                        error!("Dropped {num_dropped} notifications.");
+                        continue;
+                    },
+                    // https://github.com/rust-lang/futures-rs/issues/1857
+                    // AFAICS there is no way to encode a stream that never terminates.
+                    Err(RecvError::Closed) => { panic!("notification stream terminated"); },
+                };
                 ui.update(notif);
                 ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
