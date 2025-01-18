@@ -30,8 +30,8 @@ cargo install limmat
 
 ### From GitHub Releases
 
-There are pre-built Linux x86 binaries in the [GitHub
-Releases](https://github.com/bjackman/limmat/releases/tag/v0.2.1).
+There are pre-built Linux x86 binaries in the [latest GitHub
+Release](https://github.com/bjackman/limmat/releases/latest).
 
 If you prefer to have the tool tracked by your package manager, you can download
 a `.deb` from there and install it with `dpkg -i $pkg.deb`. Or you can just
