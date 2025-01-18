@@ -193,15 +193,11 @@ pub enum LogStyle {
     NoGraph,
 }
 
-// This is a weird kinda inheritance type thing to enable different types of worktree (with
-// different fields and drop behaviours) to share the functionality that users actually care about.
-// Not really sure if this is the Rust Way or not.
-pub trait Worktree: Debug + Sync {
-    // Directory where git commands should be run.
-    fn path(&self) -> &Path;
-    // Path to Git binary.
-    fn git_binary(&self) -> &Path;
-
+// Trait's can't have private methods, this is one reason why my
+// inheritance-brained idea to use this Worktree kinda like a superclass was not
+// a very good one.  This trait is a workaround for that, to avoid linter
+// warnings from having a public method return a private type.
+trait WorktreePriv: Worktree {
     // Convenience function to create a git command with some pre-filled args.
     // Returns a BoxFuture as an utterly mysterious workaround for what I
     // believe is a compiler bug:
@@ -228,6 +224,18 @@ pub trait Worktree: Debug + Sync {
         })
         .boxed()
     }
+}
+
+impl<W: Worktree + ?Sized> WorktreePriv for W {}
+
+// This is a weird kinda inheritance type thing to enable different types of worktree (with
+// different fields and drop behaviours) to share the functionality that users actually care about.
+// Not really sure if this is the Rust Way or not.
+pub trait Worktree: Debug + Sync {
+    // Directory where git commands should be run.
+    fn path(&self) -> &Path;
+    // Path to Git binary.
+    fn git_binary(&self) -> &Path;
 
     async fn lookup_git_dir(&self, rev_parse_arg: &str) -> anyhow::Result<PathBuf> {
         let output = self
