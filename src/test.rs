@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     process::{Child, Command},
     select,
-    sync::{broadcast, watch},
+    sync::{broadcast, watch, Semaphore},
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
@@ -210,6 +210,8 @@ pub struct Manager<W: Worktree> {
     resource_pools: Arc<Pools>,
     result_db: Arc<Database>,
     job_env: Arc<Vec<(String, String)>>,
+    // To avoid spinning up zillions of jobs at once, that can lead to fd exhaustion.
+    job_sem: Arc<Semaphore>,
 }
 
 // We need to specify 'static here. Just because we have an Arc over the
@@ -242,6 +244,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
             tests,
             resource_pools,
             result_db,
+            job_sem: Arc::new(Semaphore::new(64)), // Ough to be enough concurrency for anyone.
         }
     }
 
@@ -342,6 +345,7 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
                     self.job_env.clone(),
                     wait_for,
                 )
+                .with_sem(self.job_sem.clone())
                 .with_token(self.job_counter.get())
                 .with_global_notif(self.notif_tx.clone())
                 .build();
@@ -518,6 +522,7 @@ pub struct TestJobBuilder {
     env: Arc<Vec<(String, String)>>,
     wait_for: Vec<(TestName, broadcast::Receiver<TestOutcome>)>,
     global_tx: Option<broadcast::Sender<Arc<Notification>>>,
+    sem: Option<Arc<Semaphore>>,
 }
 
 impl TestJobBuilder {
@@ -536,7 +541,15 @@ impl TestJobBuilder {
             wait_for,
             token: None,
             global_tx: None,
+            sem: None,
         }
+    }
+
+    // Have this job acquire a permit from this token before doing any "real work".
+    // This can be used as a crude mechanism to avoid resource exhaustion.
+    fn with_sem(mut self, sem: Arc<Semaphore>) -> Self {
+        self.sem = Some(sem);
+        self
     }
 
     // Have this job also report when it's done back to this weird token counter
@@ -560,6 +573,7 @@ impl TestJobBuilder {
             base_env: self.env,
             wait_for: self.wait_for,
             notifier: TestStatusNotifier::new(self.test_case, self.global_tx),
+            sem: self.sem,
         }
     }
 }
@@ -579,6 +593,8 @@ pub struct TestJob {
     // is unsuccessful it should abort.
     wait_for: Vec<(TestName, broadcast::Receiver<TestOutcome>)>,
     notifier: TestStatusNotifier,
+    // Take a permit from this semaphore before doing any real work.
+    sem: Option<Arc<Semaphore>>,
 }
 
 pub type DepDatabaseEntries = HashMap<TestName, Arc<DatabaseEntry>>;
@@ -620,6 +636,17 @@ impl<'a> TestJob {
             .await_dep_success()
             .await
             .map_err(|test_name| anyhow!("dependency job {test_name} failed"))?;
+
+        // Throttle to avoid opening zillions of database entries (probably
+        // generally to avoid other resource exhaustions too).
+        // Note we mustn't do this before waiting for dependencies, otherwise we
+        // might grab the last permit before dependencies get a chance, causing
+        // a deadlock.
+        let sem = self.sem.as_ref().map(|sem| sem.clone());
+        let _permit = match &sem {
+            Some(sem) => Some(sem.acquire().await),
+            None => None,
+        };
 
         let output = match database
             .lookup(&self.test_case)
