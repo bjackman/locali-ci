@@ -13,6 +13,7 @@ use anyhow::anyhow;
 use anyhow::{bail, Context};
 use async_stream::try_stream;
 use colored::control::SHOULD_COLORIZE;
+use futures::future::BoxFuture;
 use futures::{future::Fuse, select, FutureExt, SinkExt as _, StreamExt as _};
 use futures_core::{stream::Stream, FusedFuture};
 #[allow(unused_imports)]
@@ -195,36 +196,43 @@ pub enum LogStyle {
 // This is a weird kinda inheritance type thing to enable different types of worktree (with
 // different fields and drop behaviours) to share the functionality that users actually care about.
 // Not really sure if this is the Rust Way or not.
-pub trait Worktree: Debug {
+pub trait Worktree: Debug + Sync {
     // Directory where git commands should be run.
     fn path(&self) -> &Path;
     // Path to Git binary.
     fn git_binary(&self) -> &Path;
 
     // Convenience function to create a git command with some pre-filled args.
-    fn git<I, S>(&self, args: I) -> Command
+    // Returns a BoxFuture as an utterly mysterious workaround for what I
+    // believe is a compiler bug:
+    // https://stackoverflow.com/questions/79350718/one-type-is-more-general-than-the-other-for-osstr-and-tokiospawn?noredirect=1#comment139931420_79350718
+    fn git<'a, I, S>(&'a self, args: I) -> BoxFuture<'a, Command>
     where
-        I: IntoIterator<Item = S>,
+        I: IntoIterator<Item = S> + Send + 'a,
         S: AsRef<OsStr>,
     {
-        let mut cmd = Command::new("git");
-        cmd.current_dir(self.path());
-        cmd.args([
-            "-c",
-            &format!("color.ui={}", SHOULD_COLORIZE.should_colorize()),
-        ]);
-        cmd.args(args);
-        // Separate process group means the child doesn't get SIGINT if the user
-        // Ctrl-C's the terminal. We are trusting that git won't get stuck and
-        // prevent us from shutting down. The benefit is that we don't get
-        // annoying confusing errors on shut down.
-        cmd.process_group(0);
-        cmd
+        (async {
+            let mut cmd = Command::new("git");
+            cmd.current_dir(self.path());
+            cmd.args([
+                "-c",
+                &format!("color.ui={}", SHOULD_COLORIZE.should_colorize()),
+            ]);
+            cmd.args(args);
+            // Separate process group means the child doesn't get SIGINT if the user
+            // Ctrl-C's the terminal. We are trusting that git won't get stuck and
+            // prevent us from shutting down. The benefit is that we don't get
+            // annoying confusing errors on shut down.
+            cmd.process_group(0);
+            cmd
+        })
+        .boxed()
     }
 
     async fn lookup_git_dir(&self, rev_parse_arg: &str) -> anyhow::Result<PathBuf> {
         let output = self
             .git(["rev-parse", rev_parse_arg])
+            .await
             .execute()
             .await
             .map_err(|e| anyhow!("'git rev-parse {rev_parse_arg}' failed: {e}"))?;
@@ -252,6 +260,7 @@ pub trait Worktree: Debug {
     {
         let output = self
             .git(["rev-list"])
+            .await
             .arg(range_spec)
             .execute()
             .await
@@ -275,6 +284,7 @@ pub trait Worktree: Debug {
 
     async fn checkout(&self, commit: &CommitHash) -> anyhow::Result<()> {
         self.git(["checkout"])
+            .await
             .arg(commit)
             .output()
             .await?
@@ -303,6 +313,7 @@ pub trait Worktree: Debug {
                 LogStyle::WithGraph => vec!["log", "--graph"],
                 LogStyle::NoGraph => vec!["log"],
             })
+            .await
             .args([&format_arg, range_spec.as_ref()])
             .execute()
             .await
@@ -406,7 +417,7 @@ pub trait Worktree: Debug {
     {
         // We don't use log_n1 here because we want to check the exit code,
         // that API is designed for users who assume the revision exists.
-        let mut cmd = self.git(["log", "-n1", "--format=%H %T"]);
+        let mut cmd = self.git(["log", "-n1", "--format=%H %T"]).await;
         let cmd = cmd.arg(rev_spec);
         let output = cmd.output().await.context("failed to run 'git log -n1'")?;
         // Hack: empirically, git returns 128 when the range is invalid, it's not documented
@@ -468,7 +479,7 @@ impl TempWorktree {
         // Dumb workaround for https://github.com/bjackman/limmat/issues/14
         let mut attempts = 1;
         loop {
-            let mut cmd = origin.git(["worktree", "add"]);
+            let mut cmd = origin.git(["worktree", "add"]).await;
             let cmd = cmd.arg(zelf.temp_dir.path()).arg("HEAD");
             select! {
                 _ = ct.cancelled().fuse() => {
@@ -585,7 +596,7 @@ pub mod test_utils {
                 temp_dir: TempDir::with_prefix("fixture-").expect("couldn't make tempdir"),
                 git_binary: PathBuf::from("/usr/bin/git"),
             };
-            zelf.git(["init"]).execute().await?;
+            zelf.git(["init"]).await.execute().await?;
             Ok(zelf)
         }
     }
@@ -608,6 +619,7 @@ pub mod test_utils {
             S: AsRef<OsStr>,
         {
             self.git(["commit", "-m"])
+                .await
                 .arg(message)
                 .arg("--allow-empty")
                 .execute()
@@ -622,6 +634,7 @@ pub mod test_utils {
 
         async fn merge(&self, parents: &[CommitHash]) -> anyhow::Result<Commit> {
             self.git(["merge", "-m", "merge commit"])
+                .await
                 .args(parents)
                 .execute()
                 .await
