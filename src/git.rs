@@ -5,9 +5,10 @@ use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
-use std::process::Command as SyncCommand;
-use std::str;
+use std::process::{self, Command as SyncCommand};
+use std::sync::LazyLock;
 use std::time::Duration;
+use std::{io, str};
 
 use anyhow::anyhow;
 use anyhow::{bail, Context};
@@ -21,6 +22,7 @@ use log::{debug, error, info, warn};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tempfile::TempDir;
 use tokio::process::Command;
+use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -193,6 +195,40 @@ pub enum LogStyle {
     NoGraph,
 }
 
+static COMMAND_SEM: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(64));
+
+// Wrapper for a Command, that holds a semaphore for as long as the process
+// exists. Just delegates enough methods to allow you to use it without
+// letting you drop the semaphore until the process has terminated (which
+// hopefully implies the stdio pipes have been closed...).
+// This exists to try and avoid running into file descriptor exhaustion, without
+// needing any retry logic that would risk creating livelocks.
+#[derive(Debug)]
+struct GitCommand {
+    _permit: SemaphorePermit<'static>,
+    command: Command,
+}
+
+impl GitCommand {
+    fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut GitCommand {
+        self.command.arg(arg);
+        self
+    }
+
+    fn args(&mut self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> &mut GitCommand {
+        self.command.args(args);
+        self
+    }
+
+    async fn execute(&mut self) -> anyhow::Result<process::Output> {
+        self.command.execute().await
+    }
+
+    pub async fn output(&mut self) -> io::Result<process::Output> {
+        self.command.output().await
+    }
+}
+
 // Trait's can't have private methods, this is one reason why my
 // inheritance-brained idea to use this Worktree kinda like a superclass was not
 // a very good one.  This trait is a workaround for that, to avoid linter
@@ -202,7 +238,7 @@ trait WorktreePriv: Worktree {
     // Returns a BoxFuture as an utterly mysterious workaround for what I
     // believe is a compiler bug:
     // https://stackoverflow.com/questions/79350718/one-type-is-more-general-than-the-other-for-osstr-and-tokiospawn?noredirect=1#comment139931420_79350718
-    fn git<'a, I, S>(&'a self, args: I) -> BoxFuture<'a, Command>
+    fn git<'a, I, S>(&'a self, args: I) -> BoxFuture<'a, GitCommand>
     where
         I: IntoIterator<Item = S> + Send + 'a,
         S: AsRef<OsStr>,
@@ -220,7 +256,10 @@ trait WorktreePriv: Worktree {
             // prevent us from shutting down. The benefit is that we don't get
             // annoying confusing errors on shut down.
             cmd.process_group(0);
-            cmd
+            GitCommand {
+                _permit: COMMAND_SEM.acquire().await.unwrap(),
+                command: cmd,
+            }
         })
         .boxed()
     }
