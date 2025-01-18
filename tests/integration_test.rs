@@ -90,7 +90,7 @@ struct LimmatChildBuilder {
     config: String,
 }
 
-impl<'a> LimmatChildBuilder {
+impl LimmatChildBuilder {
     async fn new(config: impl AsRef<str>) -> anyhow::Result<Self> {
         let temp_dir = Arc::new(TempDir::with_prefix("limmat-child")?);
 
@@ -215,7 +215,7 @@ struct LimmatChild<'a> {
     log_path: PathBuf,
 }
 
-impl<'a> LimmatChild<'a> {
+impl LimmatChild<'_> {
     // Block until the process has terminated and return an error if isn't successful.
     async fn expect_exit_code(&mut self, want: i32) -> anyhow::Result<()> {
         let status = self.child.wait().await.expect("error waiting for child");
@@ -300,7 +300,7 @@ impl ExitStatusExt for ExitStatus {
     }
 }
 
-impl<'a> LimmatChild<'a> {
+impl LimmatChild<'_> {
     // Returns true if any worktree of this child currently exists.
     fn has_worktrees(&mut self) -> anyhow::Result<bool> {
         let mut pattern = self.builder.temp_dir.path().join("worktrees").to_owned();
