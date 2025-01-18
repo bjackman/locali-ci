@@ -266,10 +266,10 @@ impl<W: Worktree + Sync + Send + 'static> Manager<W> {
         R: Into<CommitHash> + Debug,
     {
         // Build the set test cases we need to kick off.
-        // TODO: this is kinda silly, TestCase::new looks up the tree from the
-        // hash for every indiviual test, we only need to do that at most once
-        // per revision. But doing this efficiently makes for code that's
-        // probably more complex than necessary.
+        // TODO: this is kinda silly, it looks up the tree from the hash for
+        // every indiviual test, we only need to do that at most once per
+        // revision. But doing this efficiently makes for code that's probably
+        // more complex than necessary.
         let commits = try_join_all(revs.into_iter().map(|rev| {
             let commit_hash = rev.into();
             self.repo
