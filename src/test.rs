@@ -642,6 +642,11 @@ impl<'a> TestJob {
         // Note we mustn't do this before waiting for dependencies, otherwise we
         // might grab the last permit before dependencies get a chance, causing
         // a deadlock.
+        // Note also that the count of this semaphore is not actually limit on
+        // the number of open database entries. That is influenced by the test
+        // dependency structure since entries get passed via notifications. This
+        // just ensures that (as long as there's no leaks on the receiver of the
+        // global_tx) there is some uppper bound on the number.
         let sem = self.sem.as_ref().map(|sem| sem.clone());
         let _permit = match &sem {
             Some(sem) => Some(sem.acquire().await),
