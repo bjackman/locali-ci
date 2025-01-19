@@ -481,7 +481,10 @@ pub trait Worktree: Debug + Sync {
             String::from_utf8(output.stdout).context("reading git rev-parse output")?;
         let parts: Vec<&str> = out_string.trim().splitn(2, " ").collect();
         if parts.len() != 2 {
-            bail!("Failed to parse result of {cmd:?} - {out_string:?}",);
+            bail!(
+                "Failed to parse result of {cmd:?} - {out_string:?}\nstderr: {:?}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         Ok(Some(Commit {
             hash: CommitHash::new(parts[0]),
