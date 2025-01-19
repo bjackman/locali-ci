@@ -1,18 +1,21 @@
-use std::{collections::HashMap, ffi::OsStr, io::Write, mem, sync::Arc};
+use std::{collections::HashMap, ffi::OsStr, io::Write, mem, ops::Deref, pin::pin, sync::Arc};
 
 use ansi_control_codes::control_sequences::{CUP, ED};
 use anyhow::{self, bail, Context as _};
-use colored::Colorize;
-use futures::future::try_join;
+use colored::{ColoredString, Colorize};
+use futures::{future::try_join, StreamExt as _};
 use lazy_static::lazy_static;
 #[allow(unused_imports)]
 use log::debug;
 use regex::Regex;
+use tokio::{runtime::Handle, select, sync::watch};
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::{
     database::Database,
     git::{CommitHash, LogStyle, Worktree},
     http::UiState,
+    terminal::TerminalSizeWatcher,
     test::{Notification, TestCase, TestInconclusive, TestName, TestStatus},
     text::{Class, Line, Span, Text},
     util::{Rect, ResultExt as _},
@@ -59,14 +62,14 @@ fn update_rendered_cases(
 
 // Tracks the status of the tests being run by observing the notification
 // stream.
-pub struct StatusViewer<W: Worktree, O: Write> {
+pub struct StatusViewer<W: Worktree> {
     repo: Arc<W>,
     rendered_cases: RenderedCases,
     output_buf: OutputBuffer,
-    output: O,
     web_ui: Arc<UiState>,
     result_url_base: String,
-    home_url: String,
+    render_tx: watch::Sender<Text<'static>>,
+    _cancel_guard: DropGuard,
 }
 
 // This ought to be private to StatusViewer::reset, rust just doesn't seem to
@@ -76,25 +79,94 @@ lazy_static! {
     static ref GRAPH_COMPONENT_REGEX: Regex = Regex::new(r"[\\/\*]").unwrap();
 }
 
-impl<W: Worktree, O: Write> StatusViewer<W, O> {
+impl<W: Worktree> StatusViewer<W> {
     // Construct a UI that writes to to the given outut. The URL
     // base is used to generate hyperlinks to test results.
-    pub fn new(
+    pub fn new<O: Write + Sync + Send + 'static>(
         repo: Arc<W>,
-        output: O,
+        mut output: O,
         web_ui: Arc<UiState>,
         result_url_base: impl Into<String>,
         home_url: impl Into<String>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        // In case the terminal is very slow, we spin up a separate thread to
+        // write to it. As I start writing this comment, I realise this is super
+        // fucking stupid, Tokio obviously could have handled this for us.
+        let handle = Handle::current();
+        let (tx, mut rx) = watch::channel(Text::empty());
+        let cancellation_token = CancellationToken::new();
+        let ct = cancellation_token.child_token();
+
+        let size_watcher = TerminalSizeWatcher::new()?;
+        let home_url = home_url.into().bold().on_blue();
+        tokio::task::spawn_blocking(move || {
+            handle.block_on(async {
+                let mut resizes = pin!(size_watcher.resizes());
+                loop {
+                    select! {
+                        _ = resizes.next() => (),
+                        _ = rx.changed()  => (),
+                        _ = ct.cancelled() => {
+                            writeln!(&mut output, "\x1B[?1049l")
+                                .or_log_error("Couldn't exit alternate screen");
+                            break;
+                        }
+                    };
+
+                    Self::write(
+                        &size_watcher.size(),
+                        rx.borrow_and_update(),
+                        &mut output,
+                        &home_url,
+                    );
+                }
+            })
+        });
+
+        Ok(Self {
             repo,
             rendered_cases: HashMap::new(),
             output_buf: OutputBuffer::empty(),
-            output,
             web_ui,
             result_url_base: result_url_base.into(),
-            home_url: home_url.into(),
-        }
+            render_tx: tx,
+            _cancel_guard: cancellation_token.drop_guard(),
+        })
+    }
+
+    fn write<'a, O: Write>(
+        term_size: &Rect,
+        render: impl Deref<Target = Text<'a>>,
+        mut output: O,
+        home_url: &ColoredString,
+    ) {
+        // Enter alternate screen. Dunno why ansi-control-codes doesn't have
+        // this. This isn't really how I wanted this UI to work. But
+        // implementing what I really wanted turns out to be really fucking
+        // fiddly and unsatisfying and boring, I just don't care enough.
+        // This is idempotent so we just do it every time.
+        writeln!(output, "\x1B[?1049h").or_log_error("Couldn't write UI output");
+        // Move cursor to top left and erase the display.
+        write!(&mut output, "{}{}", CUP(Some(0), Some(0)), ED(None))
+            .or_log_error("Couldn't write UI output");
+        let truncated = Text::from_iter(
+            render
+                .lines
+                .iter()
+                // I'm not sure why we need to subtract 3 here instead of 1 (for
+                // the line we print below). Something causes the cursor to
+                // bounce around and leave two empty lines at the bottom. Don't
+                // care, it's too boring to figure this stuff out, lmao.
+                .take(term_size.rows - 3)
+                // TODO: this clone is another area where, although
+                // I originally wanted to make the text module super
+                // sexy Rust that's generic over ownership or whatever,
+                // I then later got bored and decided I didn't care
+                // and started just yolo-cloning.
+                .map(|l| l.clone().truncate_graphemes(term_size.cols)),
+        );
+        write!(&mut output, "{}", truncated.ansi()).or_log_error("Couldn't write UI output");
+        writeln!(&mut output, "Web UI: {}", home_url).or_log_error("Couldn't write UI output");
     }
 
     // Informs the UI of the range of tests that we expect to be testing.
@@ -110,47 +182,11 @@ impl<W: Worktree, O: Write> StatusViewer<W, O> {
     // Absorb a notification.
     pub fn update(&mut self, notif: Arc<Notification>) {
         update_rendered_cases(&mut self.rendered_cases, notif, &self.result_url_base);
-    }
-
-    // Update the UI by writing it to the output with fancy terminal escape
-    // codes to overwrite what was previously written.
-    pub fn repaint(&mut self, term_size: &Rect) -> anyhow::Result<()> {
-        let render = self.output_buf.render(&self.rendered_cases);
-
+        let render = self.output_buf.render(&self.rendered_cases).into_owned();
         self.web_ui.set_log_buf(render.html_pre());
-
-        // Enter alternate screen. Dunno why ansi-control-codes doesn't have
-        // this. This isn't really how I wanted this UI to work. But
-        // implementing what I really wanted turns out to be really fucking
-        // fiddly and unsatisfying and boring, I just don't care enough.
-        // This is idempotent so we just do it every time.
-        writeln!(self.output, "\x1B[?1049h")?;
-        // Move cursor to top left and erase the display.
-        write!(&mut self.output, "{}{}", CUP(Some(0), Some(0)), ED(None))?;
-        let truncated = Text::from_iter(
-            render
-                .into_lines()
-                // I'm not sure why we need to subtract 3 here instead of 1 (for
-                // the line we print below). Something causes the cursor to
-                // bounce around and leave two empty lines at the bottom. Don't
-                // care, it's too boring to figure this stuff out, lmao.
-                .take(term_size.rows - 3)
-                .map(|l| l.truncate_graphemes(term_size.cols)),
-        );
-        write!(&mut self.output, "{}", truncated.ansi())?;
-        writeln!(
-            &mut self.output,
-            "Web UI: {}",
-            self.home_url.bold().on_blue()
-        )?;
-
-        Ok(())
-    }
-}
-
-impl<W: Worktree, O: Write> Drop for StatusViewer<W, O> {
-    fn drop(&mut self) {
-        writeln!(self.output, "\x1B[?1049l").or_log_error("Couldn't exit alternate screen");
+        self.render_tx
+            .send(render)
+            .or_log_error("Couldn't send UI render to painter thread");
     }
 }
 

@@ -45,7 +45,18 @@ impl<'a, T: Into<Line<'a>>> From<T> for Text<'a> {
         }
     }
 }
-impl<'a> Text<'a> {
+impl Text<'_> {
+    pub fn empty() -> Self {
+        Self { lines: vec![] }
+    }
+
+    // See Span::into_owned.
+    pub fn into_owned(self) -> Text<'static> {
+        Text {
+            lines: self.lines.into_iter().map(|l| l.into_owned()).collect(),
+        }
+    }
+
     // Render the text with style applied using ANSI commands. Use Display on the returned value
     // to write it out.
     pub fn ansi(&self) -> RenderAnsi {
@@ -55,10 +66,6 @@ impl<'a> Text<'a> {
     // Render to an HTML <pre> element.
     pub fn html_pre(&self) -> RenderHtmlPre {
         RenderHtmlPre { text: self }
-    }
-
-    pub fn into_lines(self) -> impl Iterator<Item = Line<'a>> {
-        self.lines.into_iter()
     }
 }
 
@@ -113,6 +120,7 @@ impl Display for RenderHtmlPre<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct Line<'a> {
     pub spans: Vec<Span<'a>>,
 }
@@ -129,6 +137,13 @@ where
 }
 
 impl Line<'_> {
+    // See Span::into_owned.
+    pub fn into_owned(self) -> Line<'static> {
+        Line {
+            spans: self.spans.into_iter().map(|l| l.into_owned()).collect(),
+        }
+    }
+
     // Truncate to the given number of unicode graphemej clusters, disregarding styling.
     pub fn truncate_graphemes(mut self, length: usize) -> Self {
         let mut remaining_length = length;

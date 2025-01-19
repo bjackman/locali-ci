@@ -17,7 +17,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Display;
-use std::io::{stdout, Stdout};
+use std::io::stdout;
 use std::path::{absolute, PathBuf};
 use std::pin::pin;
 use std::process::{ExitCode, Stdio};
@@ -33,7 +33,6 @@ use tokio_util::sync::CancellationToken;
 use util::{DisplayablePathBuf, ErrGroup};
 
 use crate::git::Worktree;
-use crate::terminal::TerminalSizeWatcher;
 
 mod config;
 mod dag;
@@ -223,15 +222,12 @@ impl WorktreeBuilder {
 async fn watch_loop(
     cancellation_token: CancellationToken,
     test_manager: Arc<test::Manager<PersistentWorktree>>,
-    mut ui: ui::StatusViewer<PersistentWorktree, Stdout>,
+    mut ui: ui::StatusViewer<PersistentWorktree>,
     range_spec: OsString,
     repo: Arc<PersistentWorktree>,
 ) -> anyhow::Result<()> {
     let mut revs_stream = pin!(repo.watch_refs(&range_spec)?);
     let mut notifs = test_manager.results();
-
-    let size_watcher = TerminalSizeWatcher::new()?;
-    let mut resizes = pin!(size_watcher.resizes());
 
     loop {
         select! {
@@ -245,7 +241,6 @@ async fn watch_loop(
                 // UI reset (does synchronhous work).
                 test_manager.set_revisions(revs.clone()).await.context("setting revisions to test")?;
                 ui.set_range(&range_spec).await.context("resetting status viewer")?;
-                ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
             notif = notifs.recv() => {
                 let notif = match notif {
@@ -259,10 +254,6 @@ async fn watch_loop(
                     Err(RecvError::Closed) => { panic!("notification stream terminated"); },
                 };
                 ui.update(notif);
-                ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
-            },
-            _ = resizes.next() => {
-                ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
             _ =  cancellation_token.cancelled() => {
                 info!("Got shutdown signal, terminating jobs and waiting");
@@ -326,7 +317,8 @@ async fn watch(
         ui_state,
         result_url_base,
         home_url,
-    );
+    )
+    .context("setting up UI")?;
 
     // Kick off creation of the worktrees that the test manager will run jobs in.
     //
