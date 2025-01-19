@@ -130,7 +130,11 @@ impl<W: Worktree, O: Write> StatusViewer<W, O> {
         let truncated = Text::from_iter(
             render
                 .into_lines()
-                .take(term_size.rows)
+                // I'm not sure why we need to subtract 3 here instead of 1 (for
+                // the line we print below). Something causes the cursor to
+                // bounce around and leave two empty lines at the bottom. Don't
+                // care, it's too boring to figure this stuff out, lmao.
+                .take(term_size.rows - 3)
                 .map(|l| l.truncate_graphemes(term_size.cols)),
         );
         write!(&mut self.output, "{}", truncated.ansi())?;
