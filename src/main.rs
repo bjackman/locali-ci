@@ -8,7 +8,7 @@ use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
 use http::Ui;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use nix::sys::utsname::uname;
 use resource::Pools;
 use resource::{Resource, ResourceKey};
@@ -240,8 +240,6 @@ async fn watch_loop(
             biased;
 
             _ =  cancellation_token.cancelled() => {
-                info!("Got shutdown signal, terminating jobs and waiting");
-                test_manager.cancel_running().await.context("cancelling tests")?;
                 break;
             }
             // TODO: It's dumb that we have two different types of communication here (one exposes
@@ -287,6 +285,11 @@ async fn watch_loop(
     }
     // Break out of the TUI.
     drop(ui);
+    eprintln!("Got shutdown signal, terminating jobs and waiting");
+    test_manager
+        .cancel_running()
+        .await
+        .context("cancelling tests")?;
     eprintln!("Shutting down - waiting for jobs to terminate");
     // Ensure jobs are shut down before we delort stuff etc.
     test_manager.settled().await;
