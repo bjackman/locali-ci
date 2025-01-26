@@ -134,7 +134,7 @@ impl<W: Worktree, O: Write> StatusViewer<W, O> {
                 // the line we print below). Something causes the cursor to
                 // bounce around and leave two empty lines at the bottom. Don't
                 // care, it's too boring to figure this stuff out, lmao.
-                .take(term_size.rows - 3)
+                .take(term_size.rows.saturating_sub(3))
                 .map(|l| l.truncate_graphemes(term_size.cols)),
         );
         write!(&mut self.output, "{}", truncated.ansi())?;
