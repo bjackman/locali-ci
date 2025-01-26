@@ -418,7 +418,7 @@ async fn shouldnt_leak_jobs() {
     let test_pid_path = temp_dir.path().join("test_pid");
     wait_for(|| Ok(test_pid_path.exists()), Duration::from_secs(5))
         .await
-        .expect("worktree not found after 5s");
+        .expect("test not started after 5s");
     let pid: pid_t = pid_t::from_str(fs::read_to_string(test_pid_path).unwrap().trim()).unwrap();
 
     limmat.terminate().await.unwrap();
