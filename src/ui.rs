@@ -411,11 +411,11 @@ impl OutputBuffer {
             TestStatus::Finished(Err(TestInconclusive::Error(msg))) => {
                 Span::new(msg).with_class(Class::Error)
             }
-            TestStatus::Finished(Ok(db_entry)) => {
-                if db_entry.exit_code() == 0 {
+            TestStatus::Finished(Ok(result)) => {
+                if result.exit_code == 0 {
                     Span::new("success").with_class(Class::Success)
                 } else {
-                    Span::new(format!("failed (status {})", db_entry.exit_code()))
+                    Span::new(format!("failed (status {})", result.exit_code))
                         .with_class(Class::Failure)
                 }
             }
@@ -461,7 +461,6 @@ mod tests {
     use googletest::{expect_that, prelude::eq};
 
     use crate::{
-        database::DatabaseEntry,
         git::{
             test_utils::{TempRepo, WorktreeExt},
             Commit,
@@ -498,9 +497,7 @@ mod tests {
     }
 
     async fn fake_completion(exit_code: ExitCode) -> TestStatus {
-        TestStatus::Finished(Ok(Arc::new(
-            DatabaseEntry::fake(TestResult { exit_code }).await,
-        )))
+        TestStatus::Finished(Ok(TestResult { exit_code }))
     }
 
     #[googletest::test]

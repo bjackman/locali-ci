@@ -180,20 +180,6 @@ impl DatabaseEntry {
     pub fn artifacts_dir(&self) -> PathBuf {
         self.base_path.join("artifacts")
     }
-
-    #[cfg(test)]
-    pub async fn fake(result: TestResult) -> Self {
-        let tempfile = NamedTempFile::new().unwrap();
-        Self {
-            base_path: "".into(),
-            result: TestResultEntry {
-                config_hash: "FAKE CONFIG HASH".into(),
-                result,
-            },
-            _json_flock: SharedFlock::new(tempfile.reopen().unwrap()).await.unwrap(),
-            _tempfile: Some(tempfile),
-        }
-    }
 }
 
 // Output for an individual test job, which may or may not be stored into the

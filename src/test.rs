@@ -433,7 +433,9 @@ impl TestStatusNotifier {
     // got that wrong the results would be confusing to debug, so that's why
     // sending the message consumes the JobDebNotifier.
     fn notify_completion(self, outcome: TestOutcome) {
-        self.notify(&TestStatus::Finished(outcome.clone()));
+        self.notify(&TestStatus::Finished(
+            outcome.clone().map(|db_entry| db_entry.result().clone()),
+        ));
         // Inner failure means nobody is listening. This is fine and normal.
         let _ = self.completion_tx.send(outcome);
     }
@@ -931,11 +933,14 @@ impl GraphNode for TestCase {
 
 pub type ExitCode = i32;
 
+// Welcome to Sleazy Breezy's Magical Menagerie of test result types!
+
+// Temporal status of a test.
 #[derive(Debug, Clone)]
 pub enum TestStatus {
     Enqueued,
     Started,
-    Finished(TestOutcome),
+    Finished(TestMemory),
 }
 
 impl Display for TestStatus {
@@ -944,14 +949,24 @@ impl Display for TestStatus {
             Self::Enqueued => write!(f, "Enqueued"),
             Self::Started => write!(f, "Started"),
             Self::Finished(Err(inconclusive)) => write!(f, "{}", inconclusive),
-            Self::Finished(Ok(db_entry)) => write!(f, "{}", db_entry.result()),
+            Self::Finished(Ok(result)) => write!(f, "{}", result),
         }
     }
 }
 
-// Final result of an attempt to run a test.
-pub type TestOutcome = Result<Arc<DatabaseEntry>, TestInconclusive>;
+// Final result of an attempt to run a test. This includes a reference to a
+// database entry (which means holding a lock) so it's probably a mistake to use
+// this unless you really don't want that entry to disappear.
+type TestOutcome = Result<Arc<DatabaseEntry>, TestInconclusive>;
 
+// Official sountrack of this type:
+// https://www.youtube.com/watch?v=ifWOSnoCS0M
+// A misty watercolour memory of a test, with no reference to the database entry.
+// That means the artifacts etc might be deleted while you hold this thing.
+// Embrace the wabi-sabi.
+pub type TestMemory = Result<TestResult, TestInconclusive>;
+
+// A reason why we don't have a TestResult after attemting a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestInconclusive {
     Canceled,
@@ -1374,8 +1389,8 @@ mod tests {
             match (self, actual) {
                 (Self::Enqueued, TestStatus::Enqueued) => MatcherResult::Match,
                 (Self::Started, TestStatus::Started) => MatcherResult::Match,
-                (Self::Completed(exit_code), TestStatus::Finished(Ok(db_entry))) => {
-                    if db_entry.exit_code() == *exit_code {
+                (Self::Completed(exit_code), TestStatus::Finished(Ok(result))) => {
+                    if result.exit_code == *exit_code {
                         MatcherResult::Match
                     } else {
                         MatcherResult::NoMatch
