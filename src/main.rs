@@ -235,6 +235,15 @@ async fn watch_loop(
 
     loop {
         select! {
+            // We can sometimes get spammed with huge numbers of notifications; ensure that
+            // ctrl-C is processed first.
+            biased;
+
+            _ =  cancellation_token.cancelled() => {
+                info!("Got shutdown signal, terminating jobs and waiting");
+                test_manager.cancel_running().await.context("cancelling tests")?;
+                break;
+            }
             // TODO: It's dumb that we have two different types of communication here (one exposes
             // the channel, one implements Stream).
             revs = revs_stream.next() => {
@@ -274,11 +283,6 @@ async fn watch_loop(
             _ = resizes.next() => {
                 ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
-            _ =  cancellation_token.cancelled() => {
-                info!("Got shutdown signal, terminating jobs and waiting");
-                test_manager.cancel_running().await.context("cancelling tests")?;
-                break;
-            }
         }
     }
     // Break out of the TUI.
