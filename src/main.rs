@@ -8,7 +8,7 @@ use futures::future::join_all;
 use futures::StreamExt;
 use git::{Commit, PersistentWorktree, TempWorktree};
 use http::Ui;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use nix::sys::utsname::uname;
 use resource::Pools;
 use resource::{Resource, ResourceKey};
@@ -239,11 +239,21 @@ async fn watch_loop(
             // the channel, one implements Stream).
             revs = revs_stream.next() => {
                 // TODO: figure out if/how this can actually fail.
-                let revs = revs.expect("revset stream terminated")?;
+                let mut revs = revs.expect("revset stream terminated")?;
+                // When we accidentally get run on a massive range,
+                // set_revisions can take a long time, which with this
+                // simplistic loop approach can block the UI which is annoying.
+                // Since the user isn't gonna get anything useful out of Limmat
+                // in that situation anyway, just discard revisions that might
+                // cause this problem.
+                if revs.len() > 1024 {
+                    warn!("Got %d revisions in range. Will only test 1024");
+                }
+                revs.truncate(1024);
                 // Paying for a pointless clone here so we can do set_revisions
                 // (mostly just kicks off background stuff) before awaiting the
                 // UI reset (does synchronhous work).
-                test_manager.set_revisions(revs.clone()).await.context("setting revisions to test")?;
+                test_manager.set_revisions(revs).await.context("setting revisions to test")?;
                 ui.set_range(&range_spec).await.context("resetting status viewer")?;
                 ui.repaint(&size_watcher.size()).context("error painting status to stdout")?;
             },
