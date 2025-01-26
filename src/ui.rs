@@ -18,41 +18,28 @@ use crate::{
     util::{Rect, ResultExt as _},
 };
 
-struct RenderedTestCase {
+struct TrackedTestCase {
     test_case: TestCase,
-    spans: Vec<Span<'static>>,
+    status: TestStatus,
 }
 
-// We don't want to hold on to TestStatus objects because they involve a lock.
-// Instead of having another intermediate type to represent a test result
-// without the lock we just lazily pre-render them and store those. Also we
-// lazily just go Clone-crazy and store those spans as owned strings, because I
-// suck at porgarming.
-//
 // Inner string key is test name. Here we awkwardly store this as a
 // two-level map instead of a flat one by TestCaseId, because that
 // conveniently lets us grab all the TestCases for a given commit when
 // rendering the output.
-type RenderedCases = HashMap<CommitHash, HashMap<TestName, RenderedTestCase>>;
+type TrackedCases = HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>;
 
 // Updates the awkward nested hashmap to reflect a new notification coming in.
 // Standalone function for convenient use in tests.
-fn update_rendered_cases(
-    rendered_cases: &mut RenderedCases,
-    notif: Arc<Notification>,
-    result_url_base: &str,
-) {
-    let commit_statuses = rendered_cases
+fn update_tracked_cases(tracked_cases: &mut TrackedCases, notif: Arc<Notification>) {
+    let commit_statuses = tracked_cases
         .entry(notif.test_case.commit_hash.clone())
         .or_default();
     commit_statuses.insert(
         notif.test_case.test.name.clone(),
-        RenderedTestCase {
+        TrackedTestCase {
             test_case: notif.test_case.clone(),
-            spans: OutputBuffer::render_case(&notif.test_case, &notif.status, result_url_base)
-                .into_iter()
-                .map(|span| span.into_owned())
-                .collect(),
+            status: notif.status.clone(),
         },
     );
 }
@@ -61,7 +48,7 @@ fn update_rendered_cases(
 // stream.
 pub struct StatusViewer<W: Worktree, O: Write> {
     repo: Arc<W>,
-    rendered_cases: RenderedCases,
+    tracked_cases: TrackedCases,
     output_buf: OutputBuffer,
     output: O,
     web_ui: Arc<UiState>,
@@ -88,7 +75,7 @@ impl<W: Worktree, O: Write> StatusViewer<W, O> {
     ) -> Self {
         Self {
             repo,
-            rendered_cases: HashMap::new(),
+            tracked_cases: HashMap::new(),
             output_buf: OutputBuffer::empty(),
             output,
             web_ui,
@@ -109,13 +96,15 @@ impl<W: Worktree, O: Write> StatusViewer<W, O> {
 
     // Absorb a notification.
     pub fn update(&mut self, notif: Arc<Notification>) {
-        update_rendered_cases(&mut self.rendered_cases, notif, &self.result_url_base);
+        update_tracked_cases(&mut self.tracked_cases, notif);
     }
 
     // Update the UI by writing it to the output with fancy terminal escape
     // codes to overwrite what was previously written.
     pub fn repaint(&mut self, term_size: &Rect) -> anyhow::Result<()> {
-        let render = self.output_buf.render(&self.rendered_cases);
+        let render = self
+            .output_buf
+            .render(&self.tracked_cases, &self.result_url_base);
 
         self.web_ui.set_log_buf(render.html_pre());
 
@@ -388,7 +377,11 @@ impl OutputBuffer {
         })
     }
 
-    fn render<'a>(&'a self, rendered_cases: &'a RenderedCases) -> Text<'a> {
+    fn render<'a>(
+        &'a self,
+        statuses: &'a HashMap<CommitHash, HashMap<TestName, TrackedTestCase>>,
+        result_url_base: &str,
+    ) -> Text<'a> {
         if self.lines.is_empty() {
             return "[range empty]".into();
         }
@@ -398,12 +391,8 @@ impl OutputBuffer {
             .map(|(i, log_line)| -> Line {
                 let mut spans = vec![Span::from(log_line)];
                 if let Some(hash) = self.status_commits.get(&i) {
-                    if let Some(rendered_cases) = rendered_cases.get(hash) {
-                        let mut rendered_cases: Vec<_> = rendered_cases.values().collect();
-                        rendered_cases.sort_by_key(|rc| &rc.test_case.test.name);
-                        for rc in rendered_cases {
-                            spans.extend(rc.spans.clone());
-                        }
+                    if let Some(tracked_cases) = statuses.get(hash) {
+                        spans.extend(self.render_cases(tracked_cases.values(), result_url_base));
                     }
                 }
                 Line::from_iter(spans)
@@ -443,6 +432,24 @@ impl OutputBuffer {
             status_part,
             Span::new(" "),
         ]
+    }
+
+    fn render_cases<'a>(
+        &self,
+        tracked_cases: impl IntoIterator<Item = &'a TrackedTestCase>,
+        result_url_base: &str,
+    ) -> Vec<Span<'a>> {
+        let mut tracked_cases: Vec<_> = tracked_cases.into_iter().collect();
+        tracked_cases.sort_by_key(|tc| &tc.test_case.test.name);
+        let mut spans = Vec::new();
+        for tracked_case in tracked_cases {
+            spans.extend(Self::render_case(
+                &tracked_case.test_case,
+                &tracked_case.status,
+                result_url_base,
+            ));
+        }
+        spans
     }
 }
 
@@ -509,7 +516,7 @@ mod tests {
         let ob = OutputBuffer::new(&repo, format!("{}^..HEAD", commit2.hash), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
-        let mut rendered_cases = HashMap::new();
+        let mut tracked_cases = HashMap::new();
         for notif in [
             fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
             fake_notif(&commit3.hash, &test2, fake_completion(0).await),
@@ -520,10 +527,10 @@ mod tests {
             ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
-            update_rendered_cases(&mut rendered_cases, Arc::new(notif), "myhost");
+            update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let buf = format!("{}", ob.render(&rendered_cases).ansi());
+        let buf = format!("{}", ob.render(&tracked_cases, "myhost").ansi());
         expect_that!(
             // The colored crate does not have any useful way to disable it from
             // this test code, only globally. This clashes with parallel testing.
@@ -569,7 +576,7 @@ mod tests {
             .await
             .expect("failed to build OutputBuffer");
 
-        let mut rendered_cases = HashMap::new();
+        let mut tracked_cases = HashMap::new();
         for notif in [
             fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
             fake_notif(&commit3.hash, &test2, fake_completion(0).await),
@@ -580,10 +587,10 @@ mod tests {
             ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
-            update_rendered_cases(&mut rendered_cases, Arc::new(notif), "myhost");
+            update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let buf = format!("{}", ob.render(&rendered_cases).ansi());
+        let buf = format!("{}", ob.render(&tracked_cases, "myhost").ansi());
 
         // Note this is a kinda weird log. We excluded the common ancestor of all the commits.
         // Also note it's a kinda weird input because we haven't provided any
@@ -631,7 +638,7 @@ mod tests {
         let ob = OutputBuffer::new(&repo, format!("{0}..{0}", base_commit.hash), "%h %s")
             .await
             .expect("failed to build OutputBuffer");
-        let mut rendered_cases = HashMap::new();
+        let mut tracked_cases = HashMap::new();
         for notif in [
             fake_notif(&commit3.hash, &test1, TestStatus::Enqueued),
             fake_notif(&commit3.hash, &test1, fake_completion(0).await),
@@ -642,10 +649,10 @@ mod tests {
             ),
             fake_notif(&commit2.hash, &test2, TestStatus::Started),
         ] {
-            update_rendered_cases(&mut rendered_cases, Arc::new(notif), "myhost");
+            update_tracked_cases(&mut tracked_cases, Arc::new(notif));
         }
 
-        let buf = format!("{}", ob.render(&rendered_cases).ansi());
+        let buf = format!("{}", ob.render(&tracked_cases, "myhost").ansi());
         expect_that!(
             *strip_ansi_escapes::strip_str(str::from_utf8(buf.as_bytes()).unwrap()),
             eq("[range empty]\n".to_owned())
