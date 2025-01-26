@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/bjackman/limmat/compare/v0.2.4...v0.2.5) - 2025-01-26
+
+### Fixed
+
+- Make shutdown a bit more responsive
+- Don't send database references over the global notif channel
+- Bias event-loop towards user action
+- Discard revisions if more than 1024
+- Fix integer underflow
+- Fix terminal flickering with dumb hack
+- Don't panic on dropped notifications
+- Throttle the number of concurrent test jobs
+- Throttle the number of git commands run in parallel
+
+### Other
+
+- Revert "fix: Don't hold database locks from UI code"
+- Fixup failure message
+- Comment on semaphore
+- More verbose logging for Git output mysteries
+- Fix GitHub release link
+- Update stale comment
+- Make Worktree::git a private method
+- Turn Worktree::git into an async method
+- Remove unused impl params
+
 ## [0.2.4](https://github.com/bjackman/limmat/compare/v0.2.3...v0.2.4) - 2025-01-12
 
 ### Added
