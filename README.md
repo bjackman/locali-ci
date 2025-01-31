@@ -60,6 +60,10 @@ and point to the repository with `--repo`.
 
 ## Configuration
 
+> [!TIP]
+> For Linux kernel development, I have published an example config
+. [here](https://github.com/bjackman/limmat-kernel) that you can start from.
+
 Configuration is in [TOML](https://toml.io/en/). Let's start with an example,
 here's how you might configure a Rust project (it's a reduced version of [this
 repository's own config](limmat.toml)):
